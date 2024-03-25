@@ -43,15 +43,14 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 #### Using Wrangler
 
 1. Configure your `wrangler.toml` with your Cloudflare account details.
-2. Ensure you have the KV namespace created and bind it to the `relayDb` variable in your worker script.
-3. Publish the worker:
+2. Publish the worker:
 
 ```
 wrangler publish
 ```
-4. Add a custom domain or route (this will be the desired relay URL).
-5. Create a KV namespace to store events. You can call it whatever you want.
-6. Bind the `relayDb` variable to the KV namespace to the Worker in the Settings > Variables tab.
+3. Add a custom domain or route (this will be the desired relay URL).
+4. Create a KV namespace to store events. You can call it whatever you want.
+5. Bind the `relayDb` variable to the KV namespace to the Worker in the Settings > Variables tab.
 
 #### Using Cloudflare Dashboard
 
