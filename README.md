@@ -18,7 +18,7 @@ This relay is designed to be easy to deploy, scalable, and cost-effective, lever
 
 ### Dependencies
 
-This project requires the `@noble/curves` package for cryptographic operations:
+This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations:
 
 ```
 npm install @noble/curves
@@ -54,10 +54,11 @@ wrangler publish
 
 1. Log in to your Cloudflare dashboard.
 2. Go to the Workers section and create a new worker. You can call it whatever you'd like.
-3. Copy the contents of `dist/worker.js` into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
+3. Copy the contents of `dist/worker.js` and paste into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
 4. Save and deploy the worker.
-5. Bind the `relayDb` variable to your KV namespace in the Settings > Variables tab.
-6. Add a route (this will be the desired relay URL)
+5. Add a route (this will be the desired relay URL).
+6. Create a KV namespace to store events.
+7. Bind the `relayDb` variable to the KV namespace to the Worker in the Settings > Variables tab.
 
 ### Expired Event Handling
 
