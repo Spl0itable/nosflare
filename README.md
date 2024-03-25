@@ -73,7 +73,7 @@ To process expired events, add a cron trigger to the worker:
 
 Nosflare acts as a Nostr relay. Users can connect using any standard Nostr client by pointing to the deployed Cloudflare Worker URL. The relay adheres to the Nostr protocol, handling events according to the specified NIPs.
 
-You can either use the Cloudflare Worker's default "workers.dev" endpoint URL or a defined route to add the relay to any Nostr client using the secure websocket protocol.
+You can either use the Cloudflare Worker's default "workers.dev" endpoint URL or a custom domain and/or route to add the relay to any Nostr client using the secure websocket protocol.
 
 Example:
 
