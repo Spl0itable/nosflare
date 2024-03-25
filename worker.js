@@ -28,7 +28,7 @@ async function handleRelayInfoRequest(request) {
     contact: "lucas@censorship.rip",
     supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "0.3.3"
+    version: "0.3.4"
   };
   return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
 }
@@ -99,21 +99,26 @@ async function handleWebSocket(request) {
           }, {});
           try {
             let events = [];
+            let expiredEvents = [];
             if (filters.ids && filters.ids.length > 0) {
               for (const id of filters.ids) {
                 const eventValue = await relayDb.get(`event:${id}`, 'json');
                 if (eventValue) {
-                  events.push(eventValue);
+                  if (eventValue.expirationTime && Date.now() > eventValue.expirationTime) {
+                    expiredEvents.push(id);
+                  } else {
+                    events.push(eventValue);
+                  }
                 }
               }
+              for (const expiredId of expiredEvents) {
+                await relayDb.delete(`event:${expiredId}`);
+              }
             }
-            for (const event of events) {
-              server.send(JSON.stringify(['EVENT', subscriptionId, event]));
-            }
-            server.send(JSON.stringify(['EOSE', subscriptionId]));
+            server.send(JSON.stringify(["EVENT", subscriptionId, ...events]));
           } catch (dbError) {
-            console.error('Error fetching events from KV:', dbError);
-            server.send(JSON.stringify(['ERROR', subscriptionId, 'Error fetching events from KV']));
+            console.error('Database error:', dbError);
+            server.send(JSON.stringify(["ERROR", subscriptionId, 'Database error']));
           }
           break;
         }
@@ -181,19 +186,6 @@ async function processDeletionEvent(deletionEvent, server) {
   } catch (error) {
     console.error("Error processing deletion event:", error);
     server.send(JSON.stringify(["OK", deletionEvent.id, false, `Error processing deletion event: ${error.message}`]));
-  }
-}
-// Checks for expired events
-addEventListener('scheduled', event => {
-  event.waitUntil(handleScheduledEvent(event.scheduledTime));
-});
-async function handleScheduledEvent(scheduledTime) {
-  const keys = await relayDb.list();
-  for (const key of keys.keys) {
-    const eventData = await relayDb.get(key.name, 'json');
-    if (eventData && eventData.expirationTime && scheduledTime >= eventData.expirationTime) {
-      await relayDb.delete(key.name);
-    }
   }
 }
 // Verify event sig 

@@ -62,13 +62,6 @@ wrangler publish
 6. Create a KV namespace to store events. You can call it whatever you want.
 7. Bind the `relayDb` variable to the KV namespace to the Worker in the Settings > Variables tab.
 
-### Expired Event Handling
-
-To process expired events, add a cron trigger to the worker:
-
-- Navigate to the "Triggers" tab of your worker in the Cloudflare dashboard.
-- Set up a cron trigger according to your desired schedule for event cleanup.
-
 ## Usage
 
 Nosflare acts as a Nostr relay. Users can connect using any standard Nostr client by pointing to the deployed Cloudflare Worker URL. The relay adheres to the Nostr protocol, handling events according to the specified NIPs.
