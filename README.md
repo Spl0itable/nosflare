@@ -79,6 +79,16 @@ Example:
 
 - `wss://nostr-relay.example.workers.dev/`
 
+## Roadmap
+
+The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. However, the following is a non-exhaustive list of planned features:
+
+- Allowlisting and Blocklisting of event kinds and pubkeys
+- "Pay-to-relay" (charging sats for access)
+- Client authorization (NIP-42)
+- File storage through Cloudflare R2 bucket (NIP-96)
+- Encrypted DMs (NIP-44)
+
 ## Contributing
 
 Contributions to Nosflare are welcome! Please submit issues, feature requests, or pull requests through the project's [GitHub repository](https://github.com/Spl0itable/nosflare).
