@@ -26,7 +26,7 @@ npm install @noble/curves
 
 ### Building
 
-Pull the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customiz the relay name, icon, etc.
+Pull the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
 
 We'll use `esbuild` to bundle the worker script:
 
