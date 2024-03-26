@@ -1,3 +1,9 @@
+## 1.3.5 - 2024-03-27
+
+- Added in-memory caching
+- Added maximum request limit to 50 events, with support for pagination
+- If no filter used, only return kind 1 events
+
 ## 1.3.4 - 2024-03-26
 
 - Significant codebase rewrite to support new filter logic and indexes for correctly fetching events to show in global, relay explorers, etc.

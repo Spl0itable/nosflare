@@ -2044,7 +2044,7 @@ addEventListener("fetch", (event) => {
       contact: "lucas@censorship.rip",
       supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "1.3.4"
+      version: "1.4.4"
     };
     return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
   }
@@ -2062,6 +2062,16 @@ addEventListener("fetch", (event) => {
     }
     return new Response(null, { status: 404 });
   }
+  // Use in-memory cache
+  const relayCache = {
+    _cache: {},
+    get(key) {
+      return this._cache[key];
+    },
+    set(key, value) {
+      this._cache[key] = value;
+    },
+  };
   // Handle event request (NIP-01, etc)
   async function handleWebSocket(request) {
     const { 0: client, 1: server } = new WebSocketPair();
@@ -2108,6 +2118,10 @@ addEventListener("fetch", (event) => {
             }, {});
             try {
               let eventIDs = new Set();
+              // If no filter is provided, return only kind 1 events
+              if (Object.keys(filters).length === 0) {
+                filters.kinds = [1];
+              }
               // If 'ids' filter is provided, add the specified IDs to eventIDs
               if (filters.ids) {
                 for (const id of filters.ids) {
@@ -2147,25 +2161,37 @@ addEventListener("fetch", (event) => {
                   }
                 }
               }
+              // Apply pagination
+              const page = filters.page || 1;
+              const limit = filters.limit || 50;
+              const startIndex = (page - 1) * limit;
+              const endIndex = startIndex + limit;
               // Fetch the full events by IDs and apply additional filters
               let events = [];
+              let fetchedCount = 0;
               for (const id of eventIDs) {
+                if (fetchedCount >= endIndex) break;
                 const event = await relayDb.get(`event:${id}`, 'json');
                 if (event) {
                   // Apply time-based filters
                   if (filters.since && event.created_at < filters.since) continue;
                   if (filters.until && event.created_at > filters.until) continue;
-                  events.push(event);
+                  if (fetchedCount >= startIndex) {
+                    events.push(event);
+                  }
+                  fetchedCount++;
                 }
               }
-              // Apply 'limit' filter by sorting events by created_at and slicing the array
-              if (filters.limit) {
-                events.sort((a, b) => b.created_at - a.created_at);
-                events = events.slice(0, filters.limit);
-              }
-              // Respond with the filtered events
+              // Respond with the paginated events
               for (const event of events) {
                 server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+              }
+              // Generate the next page token
+              const nextPage = page + 1;
+              const nextPageToken = `${subscriptionId}:${nextPage}`;
+              // Send the next page token if there are more events
+              if (fetchedCount > endIndex) {
+                server.send(JSON.stringify(["NOTICE", subscriptionId, `Next page token: ${nextPageToken}`]));
               }
               server.send(JSON.stringify(["EOSE", subscriptionId]));
             } catch (dbError) {
