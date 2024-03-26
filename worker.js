@@ -28,7 +28,7 @@ async function handleRelayInfoRequest(request) {
     contact: "lucas@censorship.rip",
     supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "0.3.4"
+    version: "1.3.4"
   };
   return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
 }
@@ -66,29 +66,22 @@ async function handleWebSocket(request) {
             }
             const isValidSignature = await verifyEventSignature(event);
             if (isValidSignature) {
-              // Find the expiration tag if it exists (NIP-40)
-              const expirationTag = event.tags.find(tag => tag[0] === 'expiration');
-              let expirationTime = null;
-              if (expirationTag) {
-                expirationTime = parseInt(expirationTag[1], 10);
+              await relayDb.put(`event:${event.id}`, JSON.stringify(event));
+              const mainEventKey = `event:${event.id}`;
+              await relayDb.put(`kind:${event.kind}:${event.id}`, mainEventKey);
+              await relayDb.put(`pubkey:${event.pubkey}:${event.id}`, mainEventKey);
+              for (const tag of event.tags) {
+                const tagKey = tag[0];
+                const tagValue = tag[1];
+                await relayDb.put(`tag:${tagKey}:${tagValue}:${event.id}`, mainEventKey);
               }
-              // Handle event deletion request (NIP-09)
-              if (event.kind === 5) {
-                await processDeletionEvent(event, server);
-              } else if (event.kind === 3) {
-                await processFollowListEvent(event, server);
-              } else {
-                // Store regular event or event with expiration time
-                const eventToStore = expirationTime ? { ...event, expirationTime } : event;
-                await relayDb.put(`event:${event.id}`, JSON.stringify(eventToStore));
-                server.send(JSON.stringify(["OK", event.id, true, ""]));
-              }
+              server.send(JSON.stringify(["OK", event.id, true, ""]));
             } else {
               server.send(JSON.stringify(["OK", event.id, false, "invalid: signature verification failed"]));
             }
-          } catch (verifyError) {
-            console.error("Error in EVENT processing:", verifyError);
-            server.send(JSON.stringify(["OK", event.id, false, "error: EVENT processing failed"]));
+          } catch (error) {
+            console.error("Error in EVENT processing:", error);
+            server.send(JSON.stringify(["OK", event.id, false, `error: EVENT processing failed - ${error.message}`]));
           }
           break;
         }
@@ -98,27 +91,70 @@ async function handleWebSocket(request) {
             return { ...acc, ...filter };
           }, {});
           try {
-            let events = [];
-            let expiredEvents = [];
-            if (filters.ids && filters.ids.length > 0) {
+            let eventIDs = new Set();
+            // If 'ids' filter is provided, add the specified IDs to eventIDs
+            if (filters.ids) {
               for (const id of filters.ids) {
-                const eventValue = await relayDb.get(`event:${id}`, 'json');
-                if (eventValue) {
-                  if (eventValue.expirationTime && Date.now() > eventValue.expirationTime) {
-                    expiredEvents.push(id);
-                  } else {
-                    events.push(eventValue);
+                eventIDs.add(id);
+              }
+            }
+            // If 'kinds' filter is provided, fetch kind index keys
+            if (filters.kinds) {
+              for (const kind of filters.kinds) {
+                const kindKeys = await relayDb.list({ prefix: `kind:${kind}:` });
+                for (const key of kindKeys.keys) {
+                  const eventID = key.name.split(':')[2];
+                  eventIDs.add(eventID);
+                }
+              }
+            }
+            // If 'authors' filter is provided, fetch author index keys
+            if (filters.authors) {
+              for (const author of filters.authors) {
+                const authorKeys = await relayDb.list({ prefix: `pubkey:${author}:` });
+                for (const key of authorKeys.keys) {
+                  const eventID = key.name.split(':')[2];
+                  eventIDs.add(eventID);
+                }
+              }
+            }
+            // If tag filters are provided, fetch tag index keys
+            for (const tagKey in filters) {
+              if (tagKey.startsWith("#")) {
+                const tag = tagKey.substring(1);
+                for (const tagValue of filters[tagKey]) {
+                  const tagKeys = await relayDb.list({ prefix: `tag:${tag}:${tagValue}:` });
+                  for (const key of tagKeys.keys) {
+                    const eventID = key.name.split(':')[3];
+                    eventIDs.add(eventID);
                   }
                 }
               }
-              for (const expiredId of expiredEvents) {
-                await relayDb.delete(`event:${expiredId}`);
+            }
+            // Fetch the full events by IDs and apply additional filters
+            let events = [];
+            for (const id of eventIDs) {
+              const event = await relayDb.get(`event:${id}`, 'json');
+              if (event) {
+                // Apply time-based filters
+                if (filters.since && event.created_at < filters.since) continue;
+                if (filters.until && event.created_at > filters.until) continue;
+                events.push(event);
               }
             }
-            server.send(JSON.stringify(["EVENT", subscriptionId, ...events]));
+            // Apply 'limit' filter by sorting events by created_at and slicing the array
+            if (filters.limit) {
+              events.sort((a, b) => b.created_at - a.created_at);
+              events = events.slice(0, filters.limit);
+            }
+            // Respond with the filtered events
+            for (const event of events) {
+              server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+            }
+            server.send(JSON.stringify(["EOSE", subscriptionId]));
           } catch (dbError) {
             console.error('Database error:', dbError);
-            server.send(JSON.stringify(["ERROR", subscriptionId, 'Database error']));
+            server.send(JSON.stringify(["NOTICE", subscriptionId, 'Database error']));
           }
           break;
         }
@@ -191,12 +227,12 @@ async function processDeletionEvent(deletionEvent, server) {
 // Verify event sig 
 async function verifyEventSignature(event) {
   try {
-    const signatureBytes = hexToBytes2(event.sig);
+    const signatureBytes = hexToBytes(event.sig);
     const serializedEventData = serializeEventForSigning(event);
-    const messageHash = await sha2562(serializedEventData);
-    const messageHashBytes = hexToBytes2(messageHash);
-    const publicKeyBytes = hexToBytes2(event.pubkey);
-    const signatureIsValid = schnorr.verify(signatureBytes, messageHashBytes, publicKeyBytes);
+    const messageHashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serializedEventData));
+    const messageHash = new Uint8Array(messageHashBuffer);
+    const publicKeyBytes = hexToBytes(event.pubkey);
+    const signatureIsValid = schnorr.verify(signatureBytes, messageHash, publicKeyBytes);
     return signatureIsValid;
   } catch (error) {
     console.error("Error verifying event signature:", error);
@@ -210,24 +246,15 @@ function serializeEventForSigning(event) {
     event.created_at,
     event.kind,
     event.tags,
-    event.content
+    event.content,
   ]);
   return serializedEvent;
 }
-function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0)
-    throw new Error("Invalid hex string");
-  const bytes2 = new Uint8Array(hexString.length / 2);
-  for (let i = 0; i < bytes2.length; i++) {
-    bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
+function hexToBytes(hexString) {
+  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
+  const bytes = new Uint8Array(hexString.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hexString.substr(i * 2, 2), 16);
   }
-  return bytes2;
+  return bytes;
 }
-async function sha2562(message) {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
-  return bufferToHex(hashBuffer);
-}
-function bufferToHex(buffer) {
-  return Array.from(new Uint8Array(buffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
-} 

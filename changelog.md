@@ -1,3 +1,7 @@
+## 1.3.4 - 2024-03-26
+
+- Significant codebase rewrite to support new filter logic and indexes for correctly fetching events to show in global, relay explorers, etc.
+
 ## 0.3.4 - 2024-03-26
 
 - Added support for KV TTL to self-expire events that have an expiration. Dropped the need for cron triggers.
