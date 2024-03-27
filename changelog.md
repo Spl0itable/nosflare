@@ -1,4 +1,4 @@
-## 1.3.5 - 2024-03-27
+## 1.4.4 - 2024-03-27
 
 - Added in-memory caching
 - Added maximum request limit to 50 events, with support for pagination
