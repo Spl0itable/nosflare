@@ -31,7 +31,7 @@ async function handleRelayInfoRequest(request) {
     contact: "lucas@censorship.rip",
     supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "1.4.5",
+    version: "1.4.6",
   };
   return new Response(JSON.stringify(relayInfo), {
     status: 200,
@@ -77,45 +77,27 @@ async function handleWebSocket(event, request) {
               const event = message[1];
               try {
                 // Check for duplicate event ID
-                const existingEvent = await relayDb.get(
-                  `event:${event.id}`,
-                  "json"
-                );
+                const existingEvent = await relayDb.get(`event:${event.id}`, "json");
                 if (existingEvent) {
-                  server.send(
-                    JSON.stringify([
-                      "OK",
-                      event.id,
-                      false,
-                      "Duplicate. Event dropped.",
-                    ])
-                  );
+                  server.send(JSON.stringify(["OK", event.id, false, "Duplicate. Event dropped."]));
                   break;
                 }
                 const isValidSignature = await verifyEventSignature(event);
                 if (isValidSignature) {
-                  await handleEventStorage(event);
+                  // Directly store the event in the KV store
+                  await relayDb.put(`event:${event.id}`, JSON.stringify(event));
+                  await relayDb.put(`kind:${event.kind}:${event.id}`, `event:${event.id}`);
+                  await relayDb.put(`pubkey:${event.pubkey}:${event.id}`, `event:${event.id}`);
+                  for (const tag of event.tags) {
+                    await relayDb.put(`tag:${tag[0]}:${tag[1]}:${event.id}`, `event:${event.id}`);
+                  }
                   server.send(JSON.stringify(["OK", event.id, true, ""]));
                 } else {
-                  server.send(
-                    JSON.stringify([
-                      "OK",
-                      event.id,
-                      false,
-                      "invalid: signature verification failed",
-                    ])
-                  );
+                  server.send(JSON.stringify(["OK", event.id, false, "invalid: signature verification failed"]));
                 }
               } catch (error) {
                 console.error("Error in EVENT processing:", error);
-                server.send(
-                  JSON.stringify([
-                    "OK",
-                    event.id,
-                    false,
-                    `error: EVENT processing failed - ${error.message}`,
-                  ])
-                );
+                server.send(JSON.stringify(["OK", event.id, false, `error: EVENT processing failed - ${error.message}`]));
               }
               break;
             }
@@ -124,102 +106,91 @@ async function handleWebSocket(event, request) {
               const filters = message.slice(2).reduce((acc, filter) => {
                 return { ...acc, ...filter };
               }, {});
+            
               try {
-                let eventIDs = new Set();
-                // If 'ids' filter is provided, add the specified IDs to eventIDs
-                if (filters.ids) {
-                  for (const id of filters.ids) {
-                    eventIDs.add(id);
-                  }
-                }
-                // If no filter is provided, return only kind 1 events
-                if (Object.keys(filters).length === 0) {
-                  filters.kinds = [1];
-                }
-                // If 'kinds' filter is provided, fetch kind index keys
-                if (filters.kinds) {
-                  for (const kind of filters.kinds) {
-                    const kindKeys = await relayDb.list({
-                      prefix: `kind:${kind}:`,
-                    });
-                    for (const key of kindKeys.keys) {
-                      const eventID = key.name.split(":")[2];
-                      eventIDs.add(eventID);
-                    }
-                  }
-                }
-                // If 'authors' filter is provided, fetch author index keys
-                if (filters.authors) {
-                  for (const author of filters.authors) {
-                    const authorKeys = await relayDb.list({
-                      prefix: `pubkey:${author}:`,
-                    });
-                    for (const key of authorKeys.keys) {
-                      const eventID = key.name.split(":")[2];
-                      eventIDs.add(eventID);
-                    }
-                  }
-                }
-                // If tag filters are provided, fetch tag index keys
-                for (const tagKey in filters) {
-                  if (tagKey.startsWith("#")) {
-                    const tag = tagKey.substring(1);
-                    for (const tagValue of filters[tagKey]) {
-                      const tagKeys = await relayDb.list({
-                        prefix: `tag:${tag}:${tagValue}:`,
-                      });
-                      for (const key of tagKeys.keys) {
-                        const eventID = key.name.split(":")[3];
-                        eventIDs.add(eventID);
-                      }
-                    }
-                  }
-                }
-                // Apply default limits
-                const DEFAULT_LIMIT = 50;
-                const MAX_LIMIT = 100;
-                const requestedLimit = filters.limit || DEFAULT_LIMIT;
-                // Enforce the maximum limit
-                const limit = Math.min(requestedLimit, MAX_LIMIT);
-                const page = filters.page || 1;
-                const startIndex = (page - 1) * limit;
-                const endIndex = startIndex + limit;
-                // Fetch events directly using the filtered event IDs
-                const eventIDsArray = Array.from(eventIDs);
-                const events = await Promise.all(
-                  eventIDsArray
-                    .slice(startIndex, endIndex)
-                    .map((id) => relayDb.get(`event:${id}`, "json"))
-                );
-                const filteredEvents = events.filter((event) => {
-                  if (!event) return false;
-                  if (filters.since && event.created_at < filters.since)
-                    return false;
-                  if (filters.until && event.created_at > filters.until)
-                    return false;
-                  return true;
-                });
-                // Respond with the paginated events
-                for (const event of filteredEvents) {
-                  server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-                }
-                const nextPage = page + 1;
-                const nextPageToken = `${subscriptionId}:${nextPage}`;
-                if (eventIDsArray.length > endIndex) {
-                  server.send(
-                    JSON.stringify([
-                      "NOTICE",
-                      subscriptionId,
-                      `Next page token: ${nextPageToken}`,
-                    ])
+                if (filters.ids && filters.ids.length > 0) {
+                  // Check the cache for the requested event IDs
+                  const cachedEvents = filters.ids.map((id) => relayCache.get(`event:${id}`));
+                  const nonCachedIds = filters.ids.filter((id, index) => !cachedEvents[index]);
+            
+                  // Fetch non-cached events from the KV store
+                  const nonCachedEvents = await Promise.all(
+                    nonCachedIds.map((id) => relayDb.get(`event:${id}`, "json"))
                   );
+            
+                  // Update the cache with the fetched events
+                  nonCachedEvents.forEach((event, index) => {
+                    if (event) relayCache.set(`event:${nonCachedIds[index]}`, event);
+                  });
+            
+                  // Combine cached and non-cached events
+                  const events = filters.ids.map((id, index) => cachedEvents[index] || nonCachedEvents[filters.ids.indexOf(id)]);
+            
+                  // Send each event if it exists
+                  events.forEach((event) => {
+                    if (event) server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+                  });
+                } else {
+                  // Apply other filters if 'ids' filter is not provided
+                  let eventIDs = new Set();
+                  let prefix = 'kind:1:';
+                  if (filters.kinds && filters.kinds.length === 1) {
+                    prefix = `kind:${filters.kinds[0]}:`;
+                  }
+                  let cursor = null;
+                  do {
+                    const listResponse = await relayDb.list({
+                      prefix: prefix,
+                      cursor: cursor,
+                      limit: 100
+                    });
+                    listResponse.keys.forEach((key) => {
+                      const eventID = key.name.split(":").pop();
+                      eventIDs.add(eventID);
+                    });
+                    cursor = listResponse.cursor;
+                  } while (cursor && eventIDs.size < 100);
+            
+                  // Check the cache for the retrieved event IDs
+                  const cachedEvents = Array.from(eventIDs).map((id) => relayCache.get(`event:${id}`));
+                  const nonCachedIds = Array.from(eventIDs).filter((id, index) => !cachedEvents[index]);
+            
+                  // Fetch non-cached events from the KV store
+                  const nonCachedEvents = await Promise.all(
+                    nonCachedIds.map((id) => relayDb.get(`event:${id}`, "json"))
+                  );
+            
+                  // Update the cache with the fetched events
+                  nonCachedEvents.forEach((event, index) => {
+                    if (event) relayCache.set(`event:${nonCachedIds[index]}`, event);
+                  });
+            
+                  // Combine cached and non-cached events
+                  const events = Array.from(eventIDs).map((id, index) => cachedEvents[index] || nonCachedEvents[nonCachedIds.indexOf(id)]);
+            
+                  // Filter events based on additional filters
+                  const filteredEvents = events.filter((event) => {
+                    if (!event) return false;
+                    if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
+                    if (filters.since && event.created_at < filters.since) return false;
+                    if (filters.until && event.created_at > filters.until) return false;
+                    return true;
+                  });
+            
+                  // Sort filtered events by created_at in descending order
+                  filteredEvents.sort((a, b) => b.created_at - a.created_at);
+            
+                  // Send filtered and sorted events
+                  filteredEvents.forEach((event) => {
+                    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+                  });
                 }
+            
+                // Signal end of event stream
                 server.send(JSON.stringify(["EOSE", subscriptionId]));
               } catch (dbError) {
                 console.error("Database error:", dbError);
-                server.send(
-                  JSON.stringify(["NOTICE", subscriptionId, "Database error"])
-                );
+                server.send(JSON.stringify(["NOTICE", subscriptionId, "Database error"]));
               }
               break;
             }
@@ -264,17 +235,6 @@ async function handleWebSocket(event, request) {
     status: 101,
     webSocket: client,
   });
-}
-// Handle event batching
-async function handleEventStorage(event) {
-  await Promise.all([
-    relayDb.put(`event:${event.id}`, JSON.stringify(event)),
-    relayDb.put(`kind:${event.kind}:${event.id}`, `event:${event.id}`),
-    relayDb.put(`pubkey:${event.pubkey}:${event.id}`, `event:${event.id}`),
-    ...event.tags.map((tag) =>
-      relayDb.put(`tag:${tag[0]}:${tag[1]}:${event.id}`, `event:${event.id}`)
-    ),
-  ]);
 }
 // Handle follow lists event (NIP-02)
 async function processFollowListEvent(event, server) {

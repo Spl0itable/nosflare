@@ -1,3 +1,7 @@
+## 1.4.6 - 2024-03-27
+
+- Hotfix #2 for event batching, which fixes `error: EVENT processing failed - Too many API requests by single worker invocation.`
+
 ## 1.4.5 - 2024-03-27
 
 - Hotfix for event batching, which should help mitigate `error: EVENT processing failed - Too many API requests by single worker invocation.`
