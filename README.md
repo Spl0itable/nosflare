@@ -6,7 +6,7 @@ This relay is designed to be easy to deploy, scalable, and cost-effective, lever
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, and 40.
+- Nosflare is optimized for [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. Supporting a small range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 9, and 11, for only handling events aka "notes" content.
 
 ## Getting Started
 
@@ -62,11 +62,15 @@ wrangler publish
 6. Create a KV namespace to store events. You can call it whatever you want.
 7. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
 
+#### Using NosflareDeploy script
+
+A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/nosflare/blob/main/README.md). 
+
 ## Usage
 
-Nosflare acts as a Nostr relay. Users can connect using any standard Nostr client by pointing to the deployed Cloudflare Worker URL. The relay adheres to the Nostr protocol, handling events according to the specified NIPs.
+Nosflare acts as a Nostr relay. Users can connect using any standard Nostr client by pointing to the deployed Cloudflare Worker URL or custom domain. The relay adheres to the basic tenets of the Nostr protocol, handling events according to the specified NIPs above.
 
-You can either use the Cloudflare Worker's default "workers.dev" endpoint URL or a custom domain and/or route to add the relay to any Nostr client using the secure websocket protocol.
+As mentioned, you can either use the Cloudflare Worker's default "workers.dev" endpoint URL or a custom domain, adding it to any Nostr client using the secure websocket protocol.
 
 Example:
 
@@ -74,13 +78,12 @@ Example:
 
 ## Roadmap
 
-The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. However, the following is a non-exhaustive list of planned features:
+The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures the content of events aka "notes" is stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
 - Allowlisting and Blocklisting of event kinds and pubkeys
 - "Pay-to-relay" (charging sats for access)
 - Client authorization (NIP-42)
 - File storage through Cloudflare R2 bucket (NIP-96)
-- Encrypted DMs (NIP-44)
 
 ## Contributing
 

@@ -1,3 +1,8 @@
+## 1.5.6 - 2024-03-28
+
+- Removal of various kinds, now with focus on kind 1 and 5
+- Improved in-memory caching
+
 ## 1.4.6 - 2024-03-27
 
 - Hotfix #2 for event batching, which fixes `error: EVENT processing failed - Too many API requests by single worker invocation.`
