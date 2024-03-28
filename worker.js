@@ -29,9 +29,9 @@ async function handleRelayInfoRequest(request) {
     description: "A serverless Nostr relay through Cloudflare Worker and KV store",
     pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
     contact: "lucas@censorship.rip",
-    supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
+    supported_nips: [1, 9, 11],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "1.4.6",
+    version: "1.5.6",
   };
   return new Response(JSON.stringify(relayInfo), {
     status: 200,
