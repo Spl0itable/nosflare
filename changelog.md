@@ -1,3 +1,11 @@
+## 1.7.6 - 2024-03-30
+
+- Added rate-limiting
+- Added support for blocklisting pubkeys and kinds
+- Added back support for all kinds unless blocked
+- Improved in-memory caching
+- Other general optimizations
+
 ## 1.5.6 - 2024-03-28
 
 - Removal of various kinds, now with focus on kind 1 and 5
