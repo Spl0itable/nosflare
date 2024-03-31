@@ -108,4 +108,4 @@ For inquiries related to Nosflare, you can reach out on Nostr at `npub16jdfqgazr
 - The awesome Nostr community for the protocol development.
 - Cloudflare Workers for an easy-to-use serverless execution environment.
 - The noble library for providing Schnorr signatures over secp256k1.
-- PastaGringo for making the NosflareDeploy script.
+- [PastaGringo](https://github.com/PastaGringo) for making the NosflareDeploy script.
