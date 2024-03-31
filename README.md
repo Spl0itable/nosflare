@@ -30,7 +30,7 @@ npm install @noble/curves
 
 Pull the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
  
-*Optionally, edit the `blockedPubkeys` and `blockedEventKinds` to blocklist pubkeys and event kinds.*
+*Optionally, edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds.*
 
 We'll use `esbuild` to bundle the worker script:
 
