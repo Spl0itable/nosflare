@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.7.6",
+  version: "1.8.6",
 };
 
 // Relay favicon
@@ -21,14 +21,32 @@ const blockedPubkeys = [
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
   "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18"
 ];
-function isPubkeyBlocked(pubkey) {
-  return blockedPubkeys.includes(pubkey);
+// Allowed pubkeys
+// Add pubkeys in hex format as strings to allow write access
+const allowedPubkeys = [
+  // ... pubkeys that are explicitly allowed
+];
+function isPubkeyAllowed(pubkey) {
+  if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
+    return false;
+  }
+  return !blockedPubkeys.includes(pubkey);
 }
 
 // Blocked event kinds
-// Add comma separated kinds Ex: 1064, 4, 22242
-const blockedEventKinds = new Set([1064]);
+// Add comma-separated kinds Ex: 1064, 4, 22242
+const blockedEventKinds = new Set([
+  1064
+]);
+// Allowed event kinds
+// Add comma-separated kinds Ex: 1, 2, 3
+const allowedEventKinds = new Set([
+  // ... kinds that are explicitly allowed
+]);
 function isEventKindAllowed(kind) {
+  if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
+    return false;
+  }
   return !blockedEventKinds.has(kind);
 }
 
@@ -84,7 +102,6 @@ const relayCache = {
     delete this._cache[key];
   },
 };
-
 // Check if the cached events have expired
 function isExpired(timestamp) {
   const expirationTime = 60 * 60 * 1000; // 1 hour in milliseconds
@@ -99,7 +116,6 @@ class RateLimiter {
     this.capacity = capacity;
     this.fillRate = rate; // tokens per millisecond
   }
-
   removeToken() {
     this.refill();
     if (this.tokens < 1) {
@@ -108,7 +124,6 @@ class RateLimiter {
     this.tokens -= 1;
     return true;
   }
-
   refill() {
     const now = Date.now();
     const tokensToAdd = ((now - this.lastRefillTime) * this.fillRate);
@@ -117,6 +132,27 @@ class RateLimiter {
   }
 }
 const messageRateLimiter = new RateLimiter(100 / 1000, 200);
+
+// Rate-limit cache
+const kvCacheRateLimiter = new RateLimiter(1 / 1.1, 200);
+async function getEventFromCacheOrKV(eventId) {
+  if (!kvCacheRateLimiter.removeToken()) {
+    throw new Error('Rate limit exceeded for KV store access');
+  }
+  // Check the in-memory cache first
+  const cacheKey = `event:${eventId}`;
+  let event = relayCache.get(cacheKey);
+  if (event) {
+    return event;
+  }
+  // If not in cache, get from the KV store
+  event = await relayDb.get(cacheKey, { type: 'json' });
+  if (event) {
+    // Store in the in-memory cache
+    relayCache.set(cacheKey, event);
+  }
+  return event;
+}
 
 // Handle event requests (NIP-01)
 async function handleWebSocket(event, request) {
@@ -130,7 +166,6 @@ async function handleWebSocket(event, request) {
             sendError(server, "Rate limit exceeded. Please try again later.");
             return;
           }
-
           const message = JSON.parse(messageEvent.data);
           const messageType = message[0];
           switch (messageType) {
@@ -164,47 +199,44 @@ async function handleWebSocket(event, request) {
 // Handles EVENT messages
 async function processEvent(event, server) {
   try {
-    if (isPubkeyBlocked(event.pubkey)) {
-      sendOK(server, event.id, false, "This pubkey is blocked.");
+    // Check if the pubkey is allowed
+    if (!isPubkeyAllowed(event.pubkey)) {
+      sendOK(server, event.id, false, "This pubkey is not allowed.");
       return;
     }
-    // Special handling for event kind 5 (deletion events)
+    // Check if the event kind is allowed
+    if (!isEventKindAllowed(event.kind)) {
+      sendOK(server, event.id, false, `Event kind ${event.kind} is not allowed.`);
+      return;
+    }
+    // Special handling for deletion events (kind 5)
     if (event.kind === 5) {
       await processDeletionEvent(event, server);
       return;
     }
-
-    // Check if the event kind is allowed
-    if (isEventKindAllowed(event.kind)) {
-      const cacheKey = `event:${event.id}`;
-      const cachedEvent = relayCache.get(cacheKey);
-
-      if (cachedEvent) {
-        // Event found in cache, skip KV store request
-        sendOK(server, event.id, false, "Duplicate. Event dropped.");
-        return;
-      }
-
-      // Event not found in cache, retrieve from KV store
-      const existingEvent = await relayDb.get(cacheKey, "json");
-      if (existingEvent) {
-        // Event already exists, update cache and return
-        relayCache.set(cacheKey, existingEvent);
-        sendOK(server, event.id, false, "Duplicate. Event dropped.");
-        return;
-      }
-
-      const isValidSignature = await verifyEventSignature(event);
-      if (isValidSignature) {
-        // Store the event in KV store and cache
-        await relayDb.put(cacheKey, JSON.stringify(event));
-        relayCache.set(cacheKey, event);
-        sendOK(server, event.id, true, "");
-      } else {
-        sendOK(server, event.id, false, "Invalid: signature verification failed.");
-      }
+    const cacheKey = `event:${event.id}`;
+    const cachedEvent = relayCache.get(cacheKey);
+    if (cachedEvent) {
+      // Event found in cache, skip KV store request
+      sendOK(server, event.id, false, "Duplicate. Event dropped.");
+      return;
+    }
+    // Event not found in cache, retrieve from KV store
+    const existingEvent = await relayDb.get(cacheKey, "json");
+    if (existingEvent) {
+      // Event already exists, update cache and return
+      relayCache.set(cacheKey, existingEvent);
+      sendOK(server, event.id, false, "Duplicate. Event dropped.");
+      return;
+    }
+    const isValidSignature = await verifyEventSignature(event);
+    if (isValidSignature) {
+      // Store the event in KV store and cache
+      await relayDb.put(cacheKey, JSON.stringify(event));
+      relayCache.set(cacheKey, event);
+      sendOK(server, event.id, true, "");
     } else {
-      sendOK(server, event.id, false, `Event kind ${event.kind} is not allowed.`);
+      sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }
   } catch (error) {
     console.error("Error in EVENT processing:", error);
@@ -212,42 +244,15 @@ async function processEvent(event, server) {
   }
 }
 
-// Cache rate-limiting
-const kvCacheRateLimiter = new RateLimiter(1 / 1.1, 200);
-
-async function getEventFromCacheOrKV(eventId) {
-  if (!kvCacheRateLimiter.removeToken()) {
-    throw new Error('Rate limit exceeded for KV store access');
-  }
-
-  // Check the in-memory cache first
-  const cacheKey = `event:${eventId}`;
-  let event = relayCache.get(cacheKey);
-  if (event) {
-    return event;
-  }
-
-  // If not in cache, get from the KV store
-  event = await relayDb.get(cacheKey, { type: 'json' });
-  if (event) {
-    // Store in the in-memory cache
-    relayCache.set(cacheKey, event);
-  }
-  return event;
-}
-
 // Handles REQ messages
 async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
-
   let events = [];
-
   // Retrieve specific events by ID
   if (filters.ids && filters.ids.length > 0) {
     const maxEventIds = 50; // Limit of 50 events
     const limitedIds = filters.ids.slice(0, maxEventIds);
-
     for (const id of limitedIds) {
       try {
         const event = await getEventFromCacheOrKV(id);
@@ -262,7 +267,6 @@ async function processReq(message, server) {
         throw error;
       }
     }
-
     if (filters.ids.length > maxEventIds) {
       server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
     }
@@ -319,10 +323,8 @@ async function processDeletionEvent(deletionEvent, server) {
       const deletedEventIds = deletionEvent.tags
         .filter((tag) => tag[0] === "e")
         .map((tag) => tag[1]);
-
       const maxDeletedEvents = 50;
       const limitedDeletedEventIds = deletedEventIds.slice(0, maxDeletedEvents);
-
       const deletePromises = limitedDeletedEventIds.map(async (eventId) => {
         const eventKey = `event:${eventId}`;
         const event = await relayDb.get(eventKey, "json");
@@ -333,14 +335,11 @@ async function processDeletionEvent(deletionEvent, server) {
         }
         return false;
       });
-
       const deleteResults = await Promise.all(deletePromises);
       const deletedCount = deleteResults.filter((result) => result).length;
-
       if (deletedEventIds.length > maxDeletedEvents) {
         server.send(JSON.stringify(["NOTICE", `Only the first ${maxDeletedEvents} deleted events were processed.`]));
       }
-
       sendOK(server, deletionEvent.id, true, `Processed deletion request. Events deleted: ${deletedCount}`);
     } else {
       sendOK(server, deletionEvent.id, false, "Invalid deletion event.");
@@ -354,7 +353,6 @@ async function processDeletionEvent(deletionEvent, server) {
 function sendOK(server, eventId, status, message) {
   server.send(JSON.stringify(["OK", eventId, status, message]));
 }
-
 function sendError(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
 }
@@ -377,7 +375,6 @@ async function verifyEventSignature(event) {
     return false;
   }
 }
-
 function serializeEventForSigning(event) {
   const serializedEvent = JSON.stringify([
     0,
@@ -389,7 +386,6 @@ function serializeEventForSigning(event) {
   ]);
   return serializedEvent;
 }
-
 function hexToBytes(hexString) {
   if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes = new Uint8Array(hexString.length / 2);

@@ -1,3 +1,7 @@
+## 1.8.6 - 2024-03-31
+
+- More granular control over allowlisted and blocklisted pubkeys and event kinds
+
 ## 1.7.6 - 2024-03-30
 
 - Added rate-limiting

@@ -4,7 +4,7 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
-Most applicable NIPs are supported along with support for blocklisting pubkeys and event kinds.
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds.
 
 ## Supported NIPs
 
