@@ -70,7 +70,7 @@ wrangler publish
 
 #### Using NosflareDeploy script
 
-A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/nosflare/blob/main/README.md). 
+A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
 
 ## Usage
 
