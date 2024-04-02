@@ -1,3 +1,7 @@
+## 1.8.7 - 2024-03-31
+
+- Improved in-memory cache handling for event listing
+
 ## 1.8.6 - 2024-03-31
 
 - More granular control over allowlisted and blocklisted pubkeys and event kinds

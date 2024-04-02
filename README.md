@@ -20,10 +20,11 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 ### Dependencies
 
-This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations:
+This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and esbuild:
 
 ```
 npm install @noble/curves
+npm install -g esbuild
 ```
 
 ### Building
@@ -44,9 +45,9 @@ The command assumes you're in the same directory as the `worker.js` file.
 
 ### Deployment
 
-You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard:
+You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script:
 
-#### Using Wrangler
+#### Using Wrangler CLI
 
 1. Configure your `wrangler.toml` with your Cloudflare account details.
 2. Publish the worker:

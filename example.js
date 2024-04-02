@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len;) {
+    for (let pos = 0; pos < len; ) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function (bytes2) {
+  const bits2int = CURVE.bits2int || function(bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.8.6"
+  version: "1.8.7"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var blockedPubkeys = [
@@ -2100,6 +2100,7 @@ var relayCache = {
     delete this._cache[key];
   }
 };
+var recentEventsCache = "recent_events_cache";
 var RateLimiter = class {
   constructor(rate, capacity) {
     this.tokens = capacity;
@@ -2208,6 +2209,14 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       await relayDb.put(cacheKey, JSON.stringify(event));
       relayCache.set(cacheKey, event);
+      if (event.kind === 1) {
+        const recentEvents = relayCache.get(recentEventsCache) || [];
+        recentEvents.unshift(event);
+        if (recentEvents.length > 50) {
+          recentEvents.pop();
+        }
+        relayCache.set(recentEventsCache, recentEvents);
+      }
       sendOK(server, event.id, true, "");
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
@@ -2242,29 +2251,35 @@ async function processReq(message, server) {
       server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
     }
   } else {
-    try {
-      const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
-      const eventPromises = latestEventsKeys.keys.map(async (key) => {
-        try {
-          const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
-          if (event && event.kind === 1) {
-            return event;
-          }
-          return null;
-        } catch (error) {
-          if (error.message === "Rate limit exceeded for KV store access") {
-            console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+    const cachedRecentEvents = relayCache.get(recentEventsCache);
+    if (cachedRecentEvents) {
+      events = cachedRecentEvents;
+    } else {
+      try {
+        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
+        const eventPromises = latestEventsKeys.keys.map(async (key) => {
+          try {
+            const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
+            if (event && event.kind === 1) {
+              return event;
+            }
+            return null;
+          } catch (error) {
+            if (error.message === "Rate limit exceeded for KV store access") {
+              console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+              return null;
+            }
+            console.error(`Error retrieving event ${key.name}:`, error);
             return null;
           }
-          console.error(`Error retrieving event ${key.name}:`, error);
-          return null;
-        }
-      });
-      events = (await Promise.all(eventPromises)).filter((event) => event !== null);
-    } catch (error) {
-      console.error("Error listing latest events:", error);
-      server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
-      return;
+        });
+        events = (await Promise.all(eventPromises)).filter((event) => event !== null);
+        relayCache.set(recentEventsCache, events);
+      } catch (error) {
+        console.error("Error listing latest events:", error);
+        server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
+        return;
+      }
     }
   }
   for (const event of events) {
