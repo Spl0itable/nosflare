@@ -2091,16 +2091,24 @@ async function serveFavicon() {
 var relayCache = {
   _cache: {},
   get(key) {
-    return this._cache[key];
+    const entry = this._cache[key];
+    if (entry && !isExpired(entry.timestamp)) {
+      return entry.value;
+    }
+    return null;
   },
   set(key, value) {
-    this._cache[key] = value;
+    this._cache[key] = { value, timestamp: Date.now() };
   },
   delete(key) {
     delete this._cache[key];
   }
 };
 var recentEventsCache = "recent_events_cache";
+function isExpired(timestamp) {
+  const expirationTime = 60 * 60 * 1e3;
+  return Date.now() - timestamp > expirationTime;
+}
 var RateLimiter = class {
   constructor(rate, capacity) {
     this.tokens = capacity;
@@ -2253,8 +2261,14 @@ async function processReq(message, server) {
   } else {
     const cachedRecentEvents = relayCache.get(recentEventsCache);
     if (cachedRecentEvents) {
-      events = cachedRecentEvents;
-    } else {
+      events = cachedRecentEvents.filter((event) => !isExpired(event.timestamp));
+      if (events.length > 0) {
+        relayCache.set(recentEventsCache, events);
+      } else {
+        relayCache.delete(recentEventsCache);
+      }
+    }
+    if (events.length === 0) {
       try {
         const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
         const eventPromises = latestEventsKeys.keys.map(async (key) => {
@@ -2274,7 +2288,7 @@ async function processReq(message, server) {
           }
         });
         events = (await Promise.all(eventPromises)).filter((event) => event !== null);
-        relayCache.set(recentEventsCache, events);
+        relayCache.set(recentEventsCache, events.map((event) => ({ ...event, timestamp: Date.now() })));
       } catch (error) {
         console.error("Error listing latest events:", error);
         server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));

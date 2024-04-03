@@ -93,10 +93,14 @@ async function serveFavicon() {
 const relayCache = {
   _cache: {},
   get(key) {
-    return this._cache[key];
+    const entry = this._cache[key];
+    if (entry && !isExpired(entry.timestamp)) {
+      return entry.value;
+    }
+    return null;
   },
   set(key, value) {
-    this._cache[key] = value;
+    this._cache[key] = { value, timestamp: Date.now() };
   },
   delete(key) {
     delete this._cache[key];
@@ -218,7 +222,7 @@ async function processEvent(event, server) {
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
-      // Event found in cache, skip KV store request
+      // Event found in cache and not expired, skip KV store request
       sendOK(server, event.id, false, "Duplicate. Event dropped.");
       return;
     }
@@ -284,9 +288,15 @@ async function processReq(message, server) {
     // Check the cache for the list of recent events
     const cachedRecentEvents = relayCache.get(recentEventsCache);
     if (cachedRecentEvents) {
-      events = cachedRecentEvents;
-    } else {
-      // No cached events, retrieve from the KV store
+      events = cachedRecentEvents.filter(event => !isExpired(event.timestamp));
+      if (events.length > 0) {
+        relayCache.set(recentEventsCache, events);
+      } else {
+        relayCache.delete(recentEventsCache);
+      }
+    }
+    if (events.length === 0) {
+      // No cached events or all events have expired, retrieve from the KV store
       try {
         const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
         const eventPromises = latestEventsKeys.keys.map(async (key) => {
@@ -306,8 +316,8 @@ async function processReq(message, server) {
           }
         });
         events = (await Promise.all(eventPromises)).filter(event => event !== null);
-        // Store the retrieved events in the cache
-        relayCache.set(recentEventsCache, events);
+        // Store the retrieved events in the cache with their timestamps
+        relayCache.set(recentEventsCache, events.map(event => ({ ...event, timestamp: Date.now() })));
       } catch (error) {
         console.error("Error listing latest events:", error);
         server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
@@ -315,7 +325,6 @@ async function processReq(message, server) {
       }
     }
   }
-
   // Send events to the client
   for (const event of events) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
