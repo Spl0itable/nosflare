@@ -1,3 +1,9 @@
+## 1.9.7 - 2024-04-03
+
+- Improved in-memory cache handling for event listing
+- Added listener for stale cache deletion (please add cron trigger)
+- Fixed broken filtering
+
 ## 1.8.7 - 2024-03-31
 
 - Improved in-memory cache handling for event listing

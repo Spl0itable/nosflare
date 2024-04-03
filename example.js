@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len; ) {
+    for (let pos = 0; pos < len;) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function(bytes2) {
+  const bits2int = CURVE.bits2int || function (bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.8.7"
+  version: "1.9.7"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var blockedPubkeys = [
@@ -2052,19 +2052,26 @@ function isEventKindAllowed(kind) {
   }
   return !blockedEventKinds.has(kind);
 }
+addEventListener("scheduled", (event) => {
+  event.waitUntil(cleanUpExpiredCacheEntries());
+});
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
-  if (url.pathname === "/favicon.ico") {
+  if (url.pathname === "/") {
+    if (request.headers.get("Upgrade") === "websocket") {
+      event.respondWith(handleWebSocket(request));
+    } else if (request.headers.get("Accept") === "application/nostr+json") {
+      event.respondWith(handleRelayInfoRequest());
+    } else {
+      event.respondWith(
+        new Response("Connect using a Nostr client", { status: 200 })
+      );
+    }
+  } else if (url.pathname === "/favicon.ico") {
     event.respondWith(serveFavicon(event));
-  } else if (request.headers.get("Upgrade") === "websocket") {
-    event.respondWith(handleWebSocket(request));
-  } else if (request.headers.get("Accept") === "application/nostr+json") {
-    event.respondWith(handleRelayInfoRequest());
   } else {
-    event.respondWith(
-      new Response("Connect using a Nostr client", { status: 400 })
-    );
+    event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
 async function handleRelayInfoRequest() {
@@ -2107,7 +2114,33 @@ var relayCache = {
 var recentEventsCache = "recent_events_cache";
 function isExpired(timestamp) {
   const expirationTime = 60 * 60 * 1e3;
-  return Date.now() - timestamp > expirationTime;
+  const currentTime = Date.now();
+  return currentTime - timestamp > expirationTime;
+}
+function cleanUpExpiredCacheEntries() {
+  const keys = Object.keys(relayCache._cache);
+  for (const key of keys) {
+    const entry = relayCache._cache[key];
+    if (entry && isExpired(entry.timestamp)) {
+      relayCache.delete(key);
+    }
+  }
+}
+function generateSubscriptionCacheKey(filters) {
+  const filterKeys = Object.keys(filters).sort();
+  const cacheKey = filterKeys.map((key) => {
+    let value = filters[key];
+    if (Array.isArray(value)) {
+      if (key === "kinds" || key === "authors" || key === "#e" || key === "#p" || key === "ids") {
+        value = value.sort().join(",");
+      } else {
+        value = value.sort();
+      }
+    }
+    value = Array.isArray(value) ? value.join(",") : String(value);
+    return `${key}:${value}`;
+  }).join("|");
+  return `subscription:${cacheKey}`;
 }
 var RateLimiter = class {
   constructor(rate, capacity) {
@@ -2217,14 +2250,12 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       await relayDb.put(cacheKey, JSON.stringify(event));
       relayCache.set(cacheKey, event);
-      if (event.kind === 1) {
-        const recentEvents = relayCache.get(recentEventsCache) || [];
-        recentEvents.unshift(event);
-        if (recentEvents.length > 50) {
-          recentEvents.pop();
-        }
-        relayCache.set(recentEventsCache, recentEvents);
+      const recentEvents = relayCache.get(recentEventsCache) || [];
+      recentEvents.unshift(event);
+      if (recentEvents.length > 5e3) {
+        recentEvents.pop();
       }
+      relayCache.set(recentEventsCache, recentEvents);
       sendOK(server, event.id, true, "");
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
@@ -2237,69 +2268,100 @@ async function processEvent(event, server) {
 async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
+  const cacheKey = generateSubscriptionCacheKey(filters);
   let events = [];
-  if (filters.ids && filters.ids.length > 0) {
-    const maxEventIds = 50;
-    const limitedIds = filters.ids.slice(0, maxEventIds);
-    for (const id of limitedIds) {
-      try {
-        const event = await getEventFromCacheOrKV(id);
-        if (event) {
-          events.push(event);
-        }
-      } catch (error) {
-        if (error.message === "Rate limit exceeded for KV store access") {
-          server.send(JSON.stringify(["NOTICE", subscriptionId, "Rate limit exceeded for KV store access. Try again later."]));
-          return;
-        }
-        throw error;
-      }
-    }
-    if (filters.ids.length > maxEventIds) {
-      server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
-    }
+  const cachedEvents = relayCache.get(cacheKey);
+  if (cachedEvents) {
+    events = cachedEvents;
   } else {
-    const cachedRecentEvents = relayCache.get(recentEventsCache);
-    if (cachedRecentEvents) {
-      events = cachedRecentEvents.filter((event) => !isExpired(event.timestamp));
-      if (events.length > 0) {
-        relayCache.set(recentEventsCache, events);
-      } else {
-        relayCache.delete(recentEventsCache);
+    if (filters.ids && filters.ids.length > 0) {
+      const maxEventIds = 50;
+      const limitedIds = filters.ids.slice(0, maxEventIds);
+      for (const id of limitedIds) {
+        try {
+          const event = await getEventFromCacheOrKV(id);
+          if (event) {
+            events.push(event);
+          }
+        } catch (error) {
+          if (error.message === "Rate limit exceeded for KV store access") {
+            server.send(JSON.stringify(["NOTICE", subscriptionId, "Rate limit exceeded for KV store access. Try again later."]));
+            return;
+          }
+          throw error;
+        }
       }
-    }
-    if (events.length === 0) {
-      try {
-        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
-        const eventPromises = latestEventsKeys.keys.map(async (key) => {
-          try {
-            const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
-            if (event && event.kind === 1) {
-              return event;
-            }
-            return null;
-          } catch (error) {
-            if (error.message === "Rate limit exceeded for KV store access") {
-              console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+      if (filters.ids.length > maxEventIds) {
+        server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
+      }
+    } else {
+      const cachedRecentEvents = relayCache.get(recentEventsCache);
+      if (cachedRecentEvents) {
+        events = cachedRecentEvents.filter((event) => !isExpired(event.timestamp));
+        if (events.length > 0) {
+          relayCache.set(recentEventsCache, events);
+        } else {
+          relayCache.delete(recentEventsCache);
+        }
+      }
+      if (events.length === 0) {
+        try {
+          const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
+          const eventPromises = latestEventsKeys.keys.map(async (key) => {
+            try {
+              const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
+              if (event && applyFilters(event, filters)) {
+                return event;
+              }
+              return null;
+            } catch (error) {
+              if (error.message === "Rate limit exceeded for KV store access") {
+                console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+                return null;
+              }
+              console.error(`Error retrieving event ${key.name}:`, error);
               return null;
             }
-            console.error(`Error retrieving event ${key.name}:`, error);
-            return null;
-          }
-        });
-        events = (await Promise.all(eventPromises)).filter((event) => event !== null);
-        relayCache.set(recentEventsCache, events.map((event) => ({ ...event, timestamp: Date.now() })));
-      } catch (error) {
-        console.error("Error listing latest events:", error);
-        server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
-        return;
+          });
+          events = (await Promise.all(eventPromises)).filter((event) => event !== null);
+          relayCache.set(recentEventsCache, events.map((event) => ({ ...event, timestamp: Date.now() })));
+        } catch (error) {
+          console.error("Error listing latest events:", error);
+          server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
+          return;
+        }
       }
     }
+    relayCache.set(cacheKey, events);
+  }
+  if (filters.limit && events.length > filters.limit) {
+    events = events.slice(0, filters.limit);
   }
   for (const event of events) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
+}
+function applyFilters(event, filters) {
+  if (filters.kinds && !filters.kinds.includes(event.kind)) {
+    return false;
+  }
+  if (filters.authors && !filters.authors.includes(event.pubkey)) {
+    return false;
+  }
+  if (filters["#e"] && !event.tags.some((tag) => tag[0] === "e" && filters["#e"].includes(tag[1]))) {
+    return false;
+  }
+  if (filters["#p"] && !event.tags.some((tag) => tag[0] === "p" && filters["#p"].includes(tag[1]))) {
+    return false;
+  }
+  if (filters.since && event.created_at < filters.since) {
+    return false;
+  }
+  if (filters.until && event.created_at > filters.until) {
+    return false;
+  }
+  return true;
 }
 async function closeSubscription(subscriptionId, server) {
   try {

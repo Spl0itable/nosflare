@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.8.7",
+  version: "1.9.7",
 };
 
 // Relay favicon
@@ -50,22 +50,28 @@ function isEventKindAllowed(kind) {
   return !blockedEventKinds.has(kind);
 }
 
+addEventListener('scheduled', event => {
+  event.waitUntil(cleanUpExpiredCacheEntries());
+});
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
-  if (url.pathname === "/favicon.ico") {
+  if (url.pathname === "/") {
+    if (request.headers.get("Upgrade") === "websocket") {
+      event.respondWith(handleWebSocket(request));
+    } else if (request.headers.get("Accept") === "application/nostr+json") {
+      event.respondWith(handleRelayInfoRequest());
+    } else {
+      event.respondWith(
+        new Response("Connect using a Nostr client", { status: 200 })
+      );
+    }
+  } else if (url.pathname === "/favicon.ico") {
     event.respondWith(serveFavicon(event));
-  } else if (request.headers.get("Upgrade") === "websocket") {
-    event.respondWith(handleWebSocket(request));
-  } else if (request.headers.get("Accept") === "application/nostr+json") {
-    event.respondWith(handleRelayInfoRequest());
   } else {
-    event.respondWith(
-      new Response("Connect using a Nostr client", { status: 400 })
-    );
+    event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
-
 async function handleRelayInfoRequest() {
   const headers = new Headers({
     "Content-Type": "application/nostr+json",
@@ -75,7 +81,6 @@ async function handleRelayInfoRequest() {
   });
   return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
 }
-
 async function serveFavicon() {
   const response = await fetch(relayIcon);
   if (response.ok) {
@@ -97,6 +102,7 @@ const relayCache = {
     if (entry && !isExpired(entry.timestamp)) {
       return entry.value;
     }
+    // The entry is either not found or expired, return null
     return null;
   },
   set(key, value) {
@@ -110,7 +116,33 @@ const recentEventsCache = 'recent_events_cache';
 // Check if the cached events have expired
 function isExpired(timestamp) {
   const expirationTime = 60 * 60 * 1000; // 1 hour in milliseconds
-  return Date.now() - timestamp > expirationTime;
+  const currentTime = Date.now();
+  return currentTime - timestamp > expirationTime;
+}
+function cleanUpExpiredCacheEntries() {
+  const keys = Object.keys(relayCache._cache);
+  for (const key of keys) {
+    const entry = relayCache._cache[key];
+    if (entry && isExpired(entry.timestamp)) {
+      relayCache.delete(key);
+    }
+  }
+}
+function generateSubscriptionCacheKey(filters) {
+  const filterKeys = Object.keys(filters).sort();
+  const cacheKey = filterKeys.map(key => {
+    let value = filters[key];
+    if (Array.isArray(value)) {
+      if (key === 'kinds' || key === 'authors' || key === '#e' || key === '#p' || key === 'ids') {
+        value = value.sort().join(',');
+      } else {
+        value = value.sort();
+      }
+    }
+    value = Array.isArray(value) ? value.join(',') : String(value);
+    return `${key}:${value}`;
+  }).join('|');
+  return `subscription:${cacheKey}`;
 }
 
 // Rate-limit messages
@@ -239,15 +271,13 @@ async function processEvent(event, server) {
       // Store the event in KV store and cache
       await relayDb.put(cacheKey, JSON.stringify(event));
       relayCache.set(cacheKey, event);
-      // Update the recent events cache if the event is of kind 1
-      if (event.kind === 1) {
-        const recentEvents = relayCache.get(recentEventsCache) || [];
-        recentEvents.unshift(event);
-        if (recentEvents.length > 50) {
-          recentEvents.pop();
-        }
-        relayCache.set(recentEventsCache, recentEvents);
+      // Update the recent events cache
+      const recentEvents = relayCache.get(recentEventsCache) || [];
+      recentEvents.unshift(event);
+      if (recentEvents.length > 5000) {
+        recentEvents.pop();
       }
+      relayCache.set(recentEventsCache, recentEvents);
       sendOK(server, event.id, true, "");
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
@@ -262,74 +292,109 @@ async function processEvent(event, server) {
 async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
+  const cacheKey = generateSubscriptionCacheKey(filters);
   let events = [];
-  // Retrieve specific events by ID
-  if (filters.ids && filters.ids.length > 0) {
-    const maxEventIds = 50; // Limit of 50 events
-    const limitedIds = filters.ids.slice(0, maxEventIds);
-    for (const id of limitedIds) {
-      try {
-        const event = await getEventFromCacheOrKV(id);
-        if (event) {
-          events.push(event);
-        }
-      } catch (error) {
-        if (error.message === 'Rate limit exceeded for KV store access') {
-          server.send(JSON.stringify(["NOTICE", subscriptionId, "Rate limit exceeded for KV store access. Try again later."]));
-          return;
-        }
-        throw error;
-      }
-    }
-    if (filters.ids.length > maxEventIds) {
-      server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
-    }
+  // Check if the events are already in the cache for this subscription
+  const cachedEvents = relayCache.get(cacheKey);
+  if (cachedEvents) {
+    events = cachedEvents;
   } else {
-    // Check the cache for the list of recent events
-    const cachedRecentEvents = relayCache.get(recentEventsCache);
-    if (cachedRecentEvents) {
-      events = cachedRecentEvents.filter(event => !isExpired(event.timestamp));
-      if (events.length > 0) {
-        relayCache.set(recentEventsCache, events);
-      } else {
-        relayCache.delete(recentEventsCache);
+    // Retrieve specific events by ID
+    if (filters.ids && filters.ids.length > 0) {
+      const maxEventIds = 50;
+      const limitedIds = filters.ids.slice(0, maxEventIds);
+      for (const id of limitedIds) {
+        try {
+          const event = await getEventFromCacheOrKV(id);
+          if (event) {
+            events.push(event);
+          }
+        } catch (error) {
+          if (error.message === 'Rate limit exceeded for KV store access') {
+            server.send(JSON.stringify(["NOTICE", subscriptionId, "Rate limit exceeded for KV store access. Try again later."]));
+            return;
+          }
+          throw error;
+        }
       }
-    }
-    if (events.length === 0) {
-      // No cached events or all events have expired, retrieve from the KV store
-      try {
-        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
-        const eventPromises = latestEventsKeys.keys.map(async (key) => {
-          try {
-            const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
-            if (event && event.kind === 1) {
-              return event;
-            }
-            return null;
-          } catch (error) {
-            if (error.message === 'Rate limit exceeded for KV store access') {
-              console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+      if (filters.ids.length > maxEventIds) {
+        server.send(JSON.stringify(["NOTICE", subscriptionId, `Only the first ${maxEventIds} event IDs were processed.`]));
+      }
+    } else {
+      // Check the cache for the list of recent events
+      const cachedRecentEvents = relayCache.get(recentEventsCache);
+      if (cachedRecentEvents) {
+        events = cachedRecentEvents.filter(event => !isExpired(event.timestamp));
+        if (events.length > 0) {
+          relayCache.set(recentEventsCache, events);
+        } else {
+          relayCache.delete(recentEventsCache);
+        }
+      }
+      if (events.length === 0) {
+        // No cached events or all events have expired, retrieve from the KV store
+        try {
+          const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
+          const eventPromises = latestEventsKeys.keys.map(async (key) => {
+            try {
+              const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
+              if (event && applyFilters(event, filters)) {
+                return event;
+              }
+              return null;
+            } catch (error) {
+              if (error.message === 'Rate limit exceeded for KV store access') {
+                console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
+                return null;
+              }
+              console.error(`Error retrieving event ${key.name}:`, error);
               return null;
             }
-            console.error(`Error retrieving event ${key.name}:`, error);
-            return null;
-          }
-        });
-        events = (await Promise.all(eventPromises)).filter(event => event !== null);
-        // Store the retrieved events in the cache with their timestamps
-        relayCache.set(recentEventsCache, events.map(event => ({ ...event, timestamp: Date.now() })));
-      } catch (error) {
-        console.error("Error listing latest events:", error);
-        server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
-        return;
+          });
+          events = (await Promise.all(eventPromises)).filter(event => event !== null);
+          // Store the retrieved events in the cache with their timestamps
+          relayCache.set(recentEventsCache, events.map(event => ({ ...event, timestamp: Date.now() })));
+        } catch (error) {
+          console.error("Error listing latest events:", error);
+          server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
+          return;
+        }
       }
     }
+    relayCache.set(cacheKey, events);
+  }
+  // Apply limit filter
+  if (filters.limit && events.length > filters.limit) {
+    events = events.slice(0, filters.limit);
   }
   // Send events to the client
   for (const event of events) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
+}
+
+// Handles REQ filters
+function applyFilters(event, filters) {
+  if (filters.kinds && !filters.kinds.includes(event.kind)) {
+    return false;
+  }
+  if (filters.authors && !filters.authors.includes(event.pubkey)) {
+    return false;
+  }
+  if (filters['#e'] && !event.tags.some(tag => tag[0] === 'e' && filters['#e'].includes(tag[1]))) {
+    return false;
+  }
+  if (filters['#p'] && !event.tags.some(tag => tag[0] === 'p' && filters['#p'].includes(tag[1]))) {
+    return false;
+  }
+  if (filters.since && event.created_at < filters.since) {
+    return false;
+  }
+  if (filters.until && event.created_at > filters.until) {
+    return false;
+  }
+  return true;
 }
 
 // Handles CLOSE messages
@@ -376,7 +441,6 @@ async function processDeletionEvent(deletionEvent, server) {
     sendOK(server, deletionEvent.id, false, `Error processing deletion event: ${error.message}`);
   }
 }
-
 function sendOK(server, eventId, status, message) {
   server.send(JSON.stringify(["OK", eventId, status, message]));
 }
