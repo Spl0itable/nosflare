@@ -2,10 +2,10 @@ import { schnorr } from "@noble/curves/secp256k1";
 
 // Relay info (NIP-11)
 const relayInfo = {
-  name: "Nosflare",
-  description: "A serverless Nostr relay through Cloudflare Worker and KV store",
-  pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-  contact: "lucas@censorship.rip",
+  name: process.env.RELAYINFO_NAME || "Nosflare",
+  description: process.env.RELAYINFO_DESC || "A serverless Nostr relay through Cloudflare Worker and KV store",
+  pubkey: process.env.RELAYINFO_PUBKEY || "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+  contact: process.env.RELAYINFO_CONTACT || "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
   version: "1.9.7",
@@ -17,6 +17,7 @@ const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 // Blocked pubkeys
 // Add pubkeys in hex format as strings to block write access
 const blockedPubkeys = [
+  ...(process.env.BLOCKEDPUBKEYS || '').split(','),
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
   "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18"
@@ -25,6 +26,7 @@ const blockedPubkeys = [
 // Add pubkeys in hex format as strings to allow write access
 const allowedPubkeys = [
   // ... pubkeys that are explicitly allowed
+  ...(process.env.ALLOWEDPUBKEYS || '').split(','),
 ];
 function isPubkeyAllowed(pubkey) {
   if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
