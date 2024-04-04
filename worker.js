@@ -2,10 +2,10 @@ import { schnorr } from "@noble/curves/secp256k1";
 
 // Relay info (NIP-11)
 const relayInfo = {
-  name: process.env.RELAYINFO_NAME || "Nosflare",
-  description: process.env.RELAYINFO_DESC || "A serverless Nostr relay through Cloudflare Worker and KV store",
-  pubkey: process.env.RELAYINFO_PUBKEY || "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-  contact: process.env.RELAYINFO_CONTACT || "lucas@censorship.rip",
+  name: self['RELAYINFO_NAME'] || "Nosflare",
+  description: self['RELAYINFO_DESC'] || "A serverless Nostr relay through Cloudflare Worker and KV store",
+  pubkey: self['RELAYINFO_PUBKEY'] || "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+  contact: self['RELAYINFO_CONTACT'] || "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
   version: "1.9.7",
@@ -17,7 +17,7 @@ const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 // Blocked pubkeys
 // Add pubkeys in hex format as strings to block write access
 const blockedPubkeys = [
-  ...(process.env.BLOCKEDPUBKEYS || '').split(','),
+  ...(self['BLOCKEDPUBKEYS'] || '').split(','),
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
   "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18"
@@ -26,7 +26,7 @@ const blockedPubkeys = [
 // Add pubkeys in hex format as strings to allow write access
 const allowedPubkeys = [
   // ... pubkeys that are explicitly allowed
-  ...(process.env.ALLOWEDPUBKEYS || '').split(','),
+  ...(self['ALLOWEDPUBKEYS'] || '').split(','),
 ];
 function isPubkeyAllowed(pubkey) {
   if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
@@ -50,6 +50,36 @@ function isEventKindAllowed(kind) {
     return false;
   }
   return !blockedEventKinds.has(kind);
+}
+
+// D1
+const D1 = {
+  put: async (k, v) => {
+    if (!k || !v) return;
+
+    if (typeof v !== 'string') v = JSON.stringify(v);
+
+    let { success } = await relayD1.prepare("INSERT INTO relaydb (key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=?;").bind(k, v, v);
+
+    return success;
+  },
+  get: async (k) => {
+    if (typeof k !== 'string') return;
+
+    let { results } = await relayD1.prepare("SELECT * FROM relaydb WHERE key = ?").bind(k).all();
+    let v = results[0]?.value;
+
+    if (!v) return v;
+
+    try {
+      if (!v.includes('{') && !v.includes('[') && !v.includes('"')) return v;
+
+      v = JSON.parse(v);
+      return v;
+    } catch {
+      return v;
+    }
+  }
 }
 
 addEventListener('scheduled', event => {
@@ -272,6 +302,8 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       // Store the event in KV store and cache
       await relayDb.put(cacheKey, JSON.stringify(event));
+      await D1.put(cacheKey, JSON.stringify(event));
+
       relayCache.set(cacheKey, event);
       // Update the recent events cache
       const recentEvents = relayCache.get(recentEventsCache) || [];
