@@ -1,3 +1,25 @@
+## 1.9.7 - 2024-04-03
+
+- Improved in-memory cache handling for event listing
+- Added listener for stale cache deletion (please add cron trigger)
+- Fixed broken filtering
+
+## 1.8.7 - 2024-03-31
+
+- Improved in-memory cache handling for event listing
+
+## 1.8.6 - 2024-03-31
+
+- More granular control over allowlisted and blocklisted pubkeys and event kinds
+
+## 1.7.6 - 2024-03-30
+
+- Added rate-limiting
+- Added support for blocklisting pubkeys and kinds
+- Added back support for all kinds unless blocked
+- Improved in-memory caching
+- Other general optimizations
+
 ## 1.5.6 - 2024-03-28
 
 - Removal of various kinds, now with focus on kind 1 and 5

@@ -4,9 +4,11 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds.
+
 ## Supported NIPs
 
-- Nosflare is optimized for [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. Supporting a small range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 9, and 11, for only handling events aka "notes" content.
+- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, and 40.
 
 ## Getting Started
 
@@ -18,15 +20,20 @@ This relay is designed to be easy to deploy, scalable, and cost-effective, lever
 
 ### Dependencies
 
-This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations:
+This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and esbuild:
 
 ```
 npm install @noble/curves
+npm install -g esbuild
 ```
 
 ### Building
 
-Pull the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+Clone the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+ 
+*Optionally, edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds.*
+
+> How blocklisting and allowlisting works: If pubkey(s) or event kind(s) is in blocklist, only that pubkey(s) or event kind(s) will be blocked and all others allowed. Conversely, if pubkey(s) or event kind(s) is in allowlist, only that pubkey(s) and event kind(s) will be allowed and all others blocked.
 
 We'll use `esbuild` to bundle the worker script:
 
@@ -38,9 +45,9 @@ The command assumes you're in the same directory as the `worker.js` file.
 
 ### Deployment
 
-You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard:
+You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script:
 
-#### Using Wrangler
+#### Using Wrangler CLI
 
 1. Configure your `wrangler.toml` with your Cloudflare account details.
 2. Publish the worker:
@@ -51,6 +58,7 @@ wrangler publish
 3. Add a custom domain or route (this will be the desired relay URL).
 4. Create a KV namespace to store events. You can call it whatever you want.
 5. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
+6. Add 5 minute cron trigger in Settings > Triggers > Cron Triggers
 
 #### Using Cloudflare Dashboard
 
@@ -61,10 +69,11 @@ wrangler publish
 5. Add a custom domain or route (this will be the desired relay URL).
 6. Create a KV namespace to store events. You can call it whatever you want.
 7. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
+8. Add 5 minute cron trigger in Settings > Triggers > Cron Triggers
 
 #### Using NosflareDeploy script
 
-A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/nosflare/blob/main/README.md). 
+A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
 
 ## Usage
 
@@ -78,12 +87,12 @@ Example:
 
 ## Roadmap
 
-The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures the content of events aka "notes" is stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
+The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
-- Allowlisting and Blocklisting of event kinds and pubkeys
 - "Pay-to-relay" (charging sats for access)
 - Client authorization (NIP-42)
 - File storage through Cloudflare R2 bucket (NIP-96)
+- Encrypted DMs (NIP-44)
 
 ## Contributing
 
@@ -102,3 +111,4 @@ For inquiries related to Nosflare, you can reach out on Nostr at `npub16jdfqgazr
 - The awesome Nostr community for the protocol development.
 - Cloudflare Workers for an easy-to-use serverless execution environment.
 - The noble library for providing Schnorr signatures over secp256k1.
+- [PastaGringo](https://github.com/PastaGringo) for making the NosflareDeploy script.
