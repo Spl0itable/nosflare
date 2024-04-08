@@ -58,7 +58,6 @@ wrangler publish
 3. Add a custom domain or route (this will be the desired relay URL).
 4. Create a KV namespace to store events. You can call it whatever you want.
 5. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
-6. Add 5 minute cron trigger in Settings > Triggers > Cron Triggers
 
 #### Using Cloudflare Dashboard
 
@@ -69,7 +68,6 @@ wrangler publish
 5. Add a custom domain or route (this will be the desired relay URL).
 6. Create a KV namespace to store events. You can call it whatever you want.
 7. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
-8. Add 5 minute cron trigger in Settings > Triggers > Cron Triggers
 
 #### Using NosflareDeploy script
 
