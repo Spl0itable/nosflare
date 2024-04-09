@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.10.7"
+  version: "1.10.8"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var blockedPubkeys = [

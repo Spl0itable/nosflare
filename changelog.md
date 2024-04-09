@@ -1,3 +1,7 @@
+## 1.10.8 - 2024-04-09
+
+- Hotfix for cache storage
+
 ## 1.10.7 - 2024-04-08
 
 - Improved in-memory cache

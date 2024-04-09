@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.10.7",
+  version: "1.10.8",
 };
 
 // Relay favicon
@@ -249,7 +249,10 @@ async function processEvent(event, server) {
       relayCache.set(cacheKey, event);
       // Update the recent events cache
       let recentEvents = relayCache.get(recentEventsCache) || [];
-      recentEvents.push(event);
+      recentEvents.unshift(event);
+      if (recentEvents.length > 100) {
+        recentEvents = recentEvents.slice(0, 100);
+      }
       relayCache.set(recentEventsCache, recentEvents);
       sendOK(server, event.id, true, "");
     } else {
@@ -270,42 +273,32 @@ async function processReq(message, server) {
   // Check the cache for filtered events
   let cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents) {
-    events = cachedEvents.filter(event => applyFilters(event, filters));
+    events = cachedEvents;
   } else {
-    // Check the cache for the list of recent events
-    let cachedRecentEvents = relayCache.get(recentEventsCache) || [];
-    cachedRecentEvents = cachedRecentEvents.filter(event => applyFilters(event, filters));
-    // If no cached events match the filters, retrieve from the KV store
-    if (cachedRecentEvents.length === 0) {
+    // Check the recent events cache
+    let recentEvents = relayCache.get(recentEventsCache) || [];
+    events = recentEvents.filter(event => applyFilters(event, filters));
+
+    if (events.length === 0) {
+      // If no matching events found in the recent events cache, retrieve from the KV store
       try {
-        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 50, reverse: true });
+        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
         const eventPromises = latestEventsKeys.keys.map(async (key) => {
           try {
             const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
-            if (event && applyFilters(event, filters)) {
-              return event;
-            }
-            return null;
+            return event;
           } catch (error) {
-            if (error.message === 'Rate limit exceeded for KV store access') {
-              console.error(`Rate limit exceeded while retrieving event ${key.name}:`, error);
-              return null;
-            }
             console.error(`Error retrieving event ${key.name}:`, error);
             return null;
           }
         });
         const latestEvents = (await Promise.all(eventPromises)).filter(event => event !== null);
         events = latestEvents.filter(event => applyFilters(event, filters));
-        // Update the recentEventsCache with the latest events
-        relayCache.set(recentEventsCache, latestEvents);
       } catch (error) {
         console.error("Error listing latest events:", error);
         server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
         return;
       }
-    } else {
-      events = cachedRecentEvents;
     }
     // Store the filtered events in the subscription cache
     relayCache.set(cacheKey, events);
