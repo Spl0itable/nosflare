@@ -316,7 +316,7 @@ async function processReq(message, server) {
             }
           });
           return Promise.all(eventPromises);
-        } else {
+        } else if (filterKey === 'kinds' || filterKey === 'authors' || filterKey === '#e' || filterKey === '#p' || filterKey === 'since' || filterKey === 'until') {
           try {
             if (!kvCacheRateLimiter.removeToken()) {
               throw new Error('Rate limit exceeded for KV store access');
@@ -332,27 +332,23 @@ async function processReq(message, server) {
               }
             });
             const fetchedEvents = (await Promise.all(eventPromises)).filter(event => event !== null);
-            if (Object.keys(filters).length === 0) {
-              return fetchedEvents;
-            } else {
-              return fetchedEvents.filter(event => {
-                if (filterKey === 'kinds') {
-                  return filterValue.includes(event.kind);
-                } else if (filterKey === 'authors') {
-                  return filterValue.includes(event.pubkey);
-                } else if (filterKey === '#e') {
-                  return event.tags.some(tag => tag[0] === 'e' && filterValue.includes(tag[1]));
-                } else if (filterKey === '#p') {
-                  return event.tags.some(tag => tag[0] === 'p' && filterValue.includes(tag[1]));
-                } else if (filterKey === 'since') {
-                  return event.created_at >= filterValue;
-                } else if (filterKey === 'until') {
-                  return event.created_at <= filterValue;
-                }
-              });
-            }
+            return fetchedEvents.filter(event => {
+              if (filterKey === 'kinds') {
+                return filterValue.includes(event.kind);
+              } else if (filterKey === 'authors') {
+                return filterValue.includes(event.pubkey);
+              } else if (filterKey === '#e') {
+                return event.tags.some(tag => tag[0] === 'e' && filterValue.includes(tag[1]));
+              } else if (filterKey === '#p') {
+                return event.tags.some(tag => tag[0] === 'p' && filterValue.includes(tag[1]));
+              } else if (filterKey === 'since') {
+                return event.created_at >= filterValue;
+              } else if (filterKey === 'until') {
+                return event.created_at <= filterValue;
+              }
+            });
           } catch (error) {
-            console.error(`Error retrieving events:`, error);
+            console.error(`Error retrieving events for ${filterKey}:`, error);
             return [];
           }
         }
