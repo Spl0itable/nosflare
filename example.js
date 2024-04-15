@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.11.8"
+  version: "1.11.9"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var blockedPubkeys = [
@@ -2286,6 +2286,9 @@ async function processReq(message, server) {
         if (filterKey === "ids") {
           const eventPromises = filterValue.map(async (eventId) => {
             try {
+              if (!kvCacheRateLimiter.removeToken()) {
+                throw new Error("Rate limit exceeded for KV store access");
+              }
               const cacheKey2 = `event:${eventId}`;
               let event = relayCache.get(cacheKey2);
               if (!event) {
@@ -2305,6 +2308,9 @@ async function processReq(message, server) {
         } else if (filterKey === "kinds" || filterKey === "authors" || filterKey === "#e" || filterKey === "#p") {
           const eventPromises = filterValue.map(async (value) => {
             try {
+              if (!kvCacheRateLimiter.removeToken()) {
+                throw new Error("Rate limit exceeded for KV store access");
+              }
               const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
               const eventPromises2 = latestEventsKeys.keys.map(async (key) => {
                 try {
@@ -2335,6 +2341,9 @@ async function processReq(message, server) {
           return Promise.all(eventPromises).then((results) => results.flat());
         } else if (filterKey === "since" || filterKey === "until") {
           try {
+            if (!kvCacheRateLimiter.removeToken()) {
+              throw new Error("Rate limit exceeded for KV store access");
+            }
             const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
             const eventPromises = latestEventsKeys.keys.map(async (key) => {
               try {
