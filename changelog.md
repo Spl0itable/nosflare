@@ -1,3 +1,7 @@
+## v1.11.8 - 2024-04-15
+
+- Improved event filter handling and simplified logic
+
 ## v1.10.8 - 2024-04-09
 
 - Hotfix for cache storage

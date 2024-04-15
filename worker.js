@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.10.8",
+  version: "1.11.8",
 };
 
 // Relay favicon
@@ -275,32 +275,112 @@ async function processReq(message, server) {
   if (cachedEvents) {
     events = cachedEvents;
   } else {
-    // Check the recent events cache
     let recentEvents = relayCache.get(recentEventsCache) || [];
-    events = recentEvents.filter(event => applyFilters(event, filters));
-
-    if (events.length === 0) {
-      // If no matching events found in the recent events cache, retrieve from the KV store
-      try {
-        const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
-        const eventPromises = latestEventsKeys.keys.map(async (key) => {
-          try {
-            const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
-            return event;
-          } catch (error) {
-            console.error(`Error retrieving event ${key.name}:`, error);
-            return null;
-          }
-        });
-        const latestEvents = (await Promise.all(eventPromises)).filter(event => event !== null);
-        events = latestEvents.filter(event => applyFilters(event, filters));
-      } catch (error) {
-        console.error("Error listing latest events:", error);
-        server.send(JSON.stringify(["NOTICE", subscriptionId, "Error listing latest events"]));
-        return;
+    events = recentEvents.filter(event => {
+      if (filters.ids && !filters.ids.includes(event.id)) {
+        return false;
       }
+      if (filters.kinds && !filters.kinds.includes(event.kind)) {
+        return false;
+      }
+      if (filters.authors && !filters.authors.includes(event.pubkey)) {
+        return false;
+      }
+      if (filters['#e'] && !event.tags.some(tag => tag[0] === 'e' && filters['#e'].includes(tag[1]))) {
+        return false;
+      }
+      if (filters['#p'] && !event.tags.some(tag => tag[0] === 'p' && filters['#p'].includes(tag[1]))) {
+        return false;
+      }
+      if (filters.since && event.created_at < filters.since) {
+        return false;
+      }
+      if (filters.until && event.created_at > filters.until) {
+        return false;
+      }
+      return true;
+    });
+    if (events.length === 0) {
+      const filterPromises = Object.entries(filters).map(async ([filterKey, filterValue]) => {
+        if (filterKey === 'ids') {
+          const eventPromises = filterValue.map(async (eventId) => {
+            try {
+              const cacheKey = `event:${eventId}`;
+              let event = relayCache.get(cacheKey);
+              if (!event) {
+                const eventKey = `event:${eventId}`;
+                event = await relayDb.get(eventKey, { type: 'json' });
+                if (event) {
+                  relayCache.set(cacheKey, event);
+                }
+              }
+              return event;
+            } catch (error) {
+              console.error(`Error retrieving event ${eventId}:`, error);
+              return null;
+            }
+          });
+          return Promise.all(eventPromises);
+        } else if (filterKey === 'kinds' || filterKey === 'authors' || filterKey === '#e' || filterKey === '#p') {
+          const eventPromises = filterValue.map(async (value) => {
+            try {
+              const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
+              const eventPromises = latestEventsKeys.keys.map(async (key) => {
+                try {
+                  const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
+                  return event;
+                } catch (error) {
+                  console.error(`Error retrieving event ${key.name}:`, error);
+                  return null;
+                }
+              });
+              const latestEvents = (await Promise.all(eventPromises)).filter(event => event !== null);
+              return latestEvents.filter(event => {
+                if (filterKey === 'kinds') {
+                  return event.kind === value;
+                } else if (filterKey === 'authors') {
+                  return event.pubkey === value;
+                } else if (filterKey === '#e') {
+                  return event.tags.some(tag => tag[0] === 'e' && tag[1] === value);
+                } else if (filterKey === '#p') {
+                  return event.tags.some(tag => tag[0] === 'p' && tag[1] === value);
+                }
+              });
+            } catch (error) {
+              console.error(`Error retrieving events for ${filterKey}:`, error);
+              return [];
+            }
+          });
+          return Promise.all(eventPromises).then(results => results.flat());
+        } else if (filterKey === 'since' || filterKey === 'until') {
+          try {
+            const latestEventsKeys = await relayDb.list({ prefix: "event:", limit: 100, reverse: true });
+            const eventPromises = latestEventsKeys.keys.map(async (key) => {
+              try {
+                const event = await getEventFromCacheOrKV(key.name.replace('event:', ''));
+                return event;
+              } catch (error) {
+                console.error(`Error retrieving event ${key.name}:`, error);
+                return null;
+              }
+            });
+            const latestEvents = (await Promise.all(eventPromises)).filter(event => event !== null);
+            return latestEvents.filter(event => {
+              if (filterKey === 'since') {
+                return event.created_at >= filterValue;
+              } else if (filterKey === 'until') {
+                return event.created_at <= filterValue;
+              }
+            });
+          } catch (error) {
+            console.error(`Error retrieving events for ${filterKey}:`, error);
+            return [];
+          }
+        }
+      });
+      const filterResults = await Promise.all(filterPromises);
+      events = filterResults.flat().filter(event => event !== null);
     }
-    // Store the filtered events in the subscription cache
     relayCache.set(cacheKey, events);
   }
   if (filters.limit && events.length > filters.limit) {
@@ -310,32 +390,6 @@ async function processReq(message, server) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
-}
-
-// Handles REQ filters
-function applyFilters(event, filters) {
-  if (filters.ids && !filters.ids.includes(event.id)) {
-    return false;
-  }
-  if (filters.kinds && !filters.kinds.includes(event.kind)) {
-    return false;
-  }
-  if (filters.authors && !filters.authors.includes(event.pubkey)) {
-    return false;
-  }
-  if (filters['#e'] && !event.tags.some(tag => tag[0] === 'e' && filters['#e'].includes(tag[1]))) {
-    return false;
-  }
-  if (filters['#p'] && !event.tags.some(tag => tag[0] === 'p' && filters['#p'].includes(tag[1]))) {
-    return false;
-  }
-  if (filters.since && event.created_at < filters.since) {
-    return false;
-  }
-  if (filters.until && event.created_at > filters.until) {
-    return false;
-  }
-  return true;
 }
 
 // Handles CLOSE messages
