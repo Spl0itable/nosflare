@@ -4,7 +4,7 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
-Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds.
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds, throttle number of events from a single pubkey through rate-limiting, and block specific words or phrases.
 
 ## Supported NIPs
 
@@ -31,7 +31,10 @@ npm install -g esbuild
 
 Clone the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
  
-*Optionally, edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds.*
+*Optional:*
+- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds
+- Edit `blockedContent` to block specific words and/or phrases
+- Edit `pubkeyRateLimiter` within processEvent function to specify throttled event kinds and event count per minute.
 
 > How blocklisting and allowlisting works: If pubkey(s) or event kind(s) is in blocklist, only that pubkey(s) or event kind(s) will be blocked and all others allowed. Conversely, if pubkey(s) or event kind(s) is in allowlist, only that pubkey(s) and event kind(s) will be allowed and all others blocked.
 

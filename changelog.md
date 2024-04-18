@@ -1,3 +1,8 @@
+## v1.12.9 - 2024-04-18
+
+- Added: rate-limiting per kind - default kinds 1, 3, 4, 5 at 10 events per minute
+- Added: ability to block words or phrases
+
 ## v1.11.9 - 2024-04-15
 
 - Hotfix for rate-limiting KV store in REQ

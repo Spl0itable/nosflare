@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.11.9",
+  version: "1.12.9",
 };
 
 // Relay favicon
@@ -19,7 +19,9 @@ const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 const blockedPubkeys = [
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
-  "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18"
+  "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18",
+  "05aee96dd41429a3ae97a9dac4dfc6867fdfacebca3f3bdc051e5004b0751f01",
+  "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362"
 ];
 // Allowed pubkeys
 // Add pubkeys in hex format as strings to allow write access
@@ -48,6 +50,26 @@ function isEventKindAllowed(kind) {
     return false;
   }
   return !blockedEventKinds.has(kind);
+}
+
+// Blocked words or phrases (case-insensitive)
+const blockedContent = new Set([
+  "nigger",
+  "~~ hello world! ~~",
+  // Add more blocked content here
+]);
+function containsBlockedContent(event) {
+  const lowercaseContent = (event.content || "").toLowerCase();
+  const lowercaseTags = event.tags.map(tag => tag.join("").toLowerCase());
+  for (const blocked of blockedContent) {
+    if (
+      lowercaseContent.includes(blocked) ||
+      lowercaseTags.some(tag => tag.includes(blocked))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 addEventListener("fetch", (event) => {
@@ -140,13 +162,12 @@ class rateLimiter {
   }
   refill() {
     const now = Date.now();
-    const tokensToAdd = ((now - this.lastRefillTime) * this.fillRate);
+    const elapsedTime = now - this.lastRefillTime;
+    const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
     this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
     this.lastRefillTime = now;
   }
 }
-const messageRateLimiter = new rateLimiter(100 / 1000, 200);
-const kvCacheRateLimiter = new rateLimiter(1 / 1.1, 200);
 async function getEventFromCacheOrKV(eventId) {
   if (!kvCacheRateLimiter.removeToken()) {
     throw new Error('Rate limit exceeded for KV store access');
@@ -162,6 +183,9 @@ async function getEventFromCacheOrKV(eventId) {
   }
   return event;
 }
+const pubkeyRateLimiters = new Map();
+const messageRateLimiter = new rateLimiter(100 / 1000, 200);
+const kvCacheRateLimiter = new rateLimiter(1 / 1.1, 200);
 
 // Handle event requests (NIP-01)
 async function handleWebSocket(event, request) {
@@ -217,6 +241,23 @@ async function processEvent(event, server) {
     if (!isEventKindAllowed(event.kind)) {
       sendOK(server, event.id, false, `Event kind ${event.kind} is not allowed.`);
       return;
+    }
+    // Check for blocked content
+    if (containsBlockedContent(event)) {
+      sendOK(server, event.id, false, "This event contains blocked content.");
+      return;
+    }
+    // Apply pubkey rate limiter for specific event kinds
+    if ([1, 3, 4, 5].includes(event.kind)) {
+      let pubkeyRateLimiter = pubkeyRateLimiters.get(event.pubkey);
+      if (!pubkeyRateLimiter) {
+        pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 events per minute
+        pubkeyRateLimiters.set(event.pubkey, pubkeyRateLimiter);
+      }
+      if (!pubkeyRateLimiter.removeToken()) {
+        sendOK(server, event.id, false, "Event rate limit exceeded. Please try again later.");
+        return;
+      }
     }
     // Special handling for deletion events (kind 5)
     if (event.kind === 5) {
