@@ -6,13 +6,19 @@ const relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and KV store",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.12.9",
+  version: "1.13.9",
 };
 
 // Relay favicon
 const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
+
+// Nostr address NIP-05 verified users
+const nip05Users = {
+  "lucas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+  // ... more NIP-05 verified users
+};
 
 // Blocked pubkeys
 // Add pubkeys in hex format as strings to block write access
@@ -56,7 +62,7 @@ function isEventKindAllowed(kind) {
 const blockedContent = new Set([
   "nigger",
   "~~ hello world! ~~",
-  // Add more blocked content here
+  // ... more blocked content
 ]);
 function containsBlockedContent(event) {
   const lowercaseContent = (event.content || "").toLowerCase();
@@ -85,6 +91,8 @@ addEventListener("fetch", (event) => {
         new Response("Connect using a Nostr client", { status: 200 })
       );
     }
+  } else if (url.pathname === "/.well-known/nostr.json") {
+    event.respondWith(handleNIP05Request(url));
   } else if (url.pathname === "/favicon.ico") {
     event.respondWith(serveFavicon(event));
   } else {
@@ -111,6 +119,39 @@ async function serveFavicon() {
     });
   }
   return new Response(null, { status: 404 });
+}
+async function handleNIP05Request(url) {
+  const name = url.searchParams.get("name");
+  if (!name) {
+    return new Response(JSON.stringify({ error: "Missing 'name' parameter" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const pubkey = nip05Users[name.toLowerCase()];
+  if (!pubkey) {
+    return new Response(JSON.stringify({ error: "User not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const response = {
+    names: {
+      [name]: pubkey,
+    },
+    relays: {
+      [pubkey]: [
+        // Add relay URLs for NIP-05 users
+      ],
+    },
+  };
+  return new Response(JSON.stringify(response), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
 }
 
 // Use in-memory cache

@@ -1,3 +1,7 @@
+## v1.13.9 - 2024-04-19
+
+- Added: support for Nostr address NIP-05 verified users
+
 ## v1.12.9 - 2024-04-18
 
 - Added: rate-limiting per kind - default kinds 1, 3, 4, 5 at 10 events per minute

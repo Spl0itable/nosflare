@@ -4,11 +4,11 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
-Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds, throttle number of events from a single pubkey through rate-limiting, and block specific words or phrases.
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds, throttle number of events from a single pubkey through rate-limiting, block specific words or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for @your-domain.com verified Nostr address.
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 9, 11, 12, 15, 16, 20, 22, 33, and 40.
+- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, and 40.
 
 ## Getting Started
 
@@ -32,8 +32,9 @@ npm install -g esbuild
 Clone the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
  
 *Optional:*
-- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds
-- Edit `blockedContent` to block specific words and/or phrases
+- Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address.
+- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds.
+- Edit `blockedContent` to block specific words and/or phrases.
 - Edit `pubkeyRateLimiter` within processEvent function to specify throttled event kinds and event count per minute.
 
 > How blocklisting and allowlisting works: If pubkey(s) or event kind(s) is in blocklist, only that pubkey(s) or event kind(s) will be blocked and all others allowed. Conversely, if pubkey(s) or event kind(s) is in allowlist, only that pubkey(s) and event kind(s) will be allowed and all others blocked.
