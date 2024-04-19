@@ -39,6 +39,7 @@ Clone the `worker.js` file to your machine. Edit the contents of `relayInfo` and
 
 > How blocklisting and allowlisting works: If pubkey(s) or event kind(s) is in blocklist, only that pubkey(s) or event kind(s) will be blocked and all others allowed. Conversely, if pubkey(s) or event kind(s) is in allowlist, only that pubkey(s) and event kind(s) will be allowed and all others blocked.
 
+
 We'll use `esbuild` to bundle the worker script:
 
 ```
