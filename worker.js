@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.13.9",
+  version: "1.14.9",
 };
 
 // Relay favicon
@@ -83,7 +83,7 @@ addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.pathname === "/") {
     if (request.headers.get("Upgrade") === "websocket") {
-      event.respondWith(handleWebSocket(request));
+      event.respondWith(handleWebSocket(event, request));
     } else if (request.headers.get("Accept") === "application/nostr+json") {
       event.respondWith(handleRelayInfoRequest());
     } else {
@@ -98,7 +98,11 @@ addEventListener("fetch", (event) => {
   } else {
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
+  setInterval(async () => {
+    await flushEventBuffer();
+  }, flushInterval);
 });
+
 async function handleRelayInfoRequest() {
   const headers = new Headers({
     "Content-Type": "application/nostr+json",
@@ -108,6 +112,7 @@ async function handleRelayInfoRequest() {
   });
   return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
 }
+
 async function serveFavicon() {
   const response = await fetch(relayIcon);
   if (response.ok) {
@@ -120,6 +125,7 @@ async function serveFavicon() {
   }
   return new Response(null, { status: 404 });
 }
+
 async function handleNIP05Request(url) {
   const name = url.searchParams.get("name");
   if (!name) {
@@ -168,6 +174,9 @@ const relayCache = {
   },
 };
 const recentEventsCache = 'recent_events_cache';
+const eventBuffer = [];
+const bufferSize = 20;
+const flushInterval = 5000; // save cached events to KV store every 5 sec
 function generateSubscriptionCacheKey(filters) {
   const filterKeys = Object.keys(filters).sort();
   const cacheKey = filterKeys.map(key => {
@@ -183,6 +192,23 @@ function generateSubscriptionCacheKey(filters) {
     return `${key}:${value}`;
   }).join('|');
   return `subscription:${cacheKey}`;
+}
+let lastFlushTime = Date.now();
+async function flushEventBuffer() {
+  if (eventBuffer.length === 0) return;
+  const events = eventBuffer.splice(0, eventBuffer.length);
+  try {
+    const promises = events.map((event) => {
+      const cacheKey = `event:${event.id}`;
+      return relayDb.put(cacheKey, JSON.stringify(event));
+    });
+    await Promise.all(promises);
+    lastFlushTime = Date.now();
+  } catch (error) {
+    console.error("Error flushing event buffer:", error);
+    eventBuffer.unshift(...events);
+    lastFlushTime = 0;
+  }
 }
 
 // Rate-limit messages and cache
@@ -232,6 +258,22 @@ const kvCacheRateLimiter = new rateLimiter(1 / 1.1, 200);
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
+  let flushTimer;
+  const startFlushTimer = () => {
+    flushTimer = setTimeout(async () => {
+      const currentTime = Date.now();
+      const shouldFlushBuffer =
+        eventBuffer.length >= bufferSize ||
+        (currentTime - lastFlushTime >= flushInterval);
+  
+      if (shouldFlushBuffer) {
+        await flushEventBuffer();
+        lastFlushTime = currentTime;
+      }
+      startFlushTimer();
+    }, flushInterval);
+  };
+
   server.addEventListener("message", async (messageEvent) => {
     event.waitUntil(
       (async () => {
@@ -261,9 +303,12 @@ async function handleWebSocket(event, request) {
       })()
     );
   });
+
   server.addEventListener("close", (event) => {
     console.log("WebSocket closed", event.code, event.reason);
+    clearTimeout(flushTimer);
   });
+
   return new Response(null, {
     status: 101,
     webSocket: client,
@@ -289,7 +334,7 @@ async function processEvent(event, server) {
       return;
     }
     // Apply pubkey rate limiter for specific event kinds
-    if ([1, 3, 4, 5].includes(event.kind)) {
+    if ([1, 3, 4, 5, 7].includes(event.kind)) {
       let pubkeyRateLimiter = pubkeyRateLimiters.get(event.pubkey);
       if (!pubkeyRateLimiter) {
         pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 events per minute
@@ -308,34 +353,20 @@ async function processEvent(event, server) {
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
-      // Event found in cache, skip KV store request
       sendOK(server, event.id, false, "Duplicate. Event dropped.");
       return;
     }
-    // Event not found in cache, retrieve from KV store
-    const existingEvent = await relayDb.get(cacheKey, "json");
-    if (existingEvent) {
-      // Event already exists, update cache and recent events cache
-      relayCache.set(cacheKey, existingEvent);
-      // Update the recent events cache
-      let recentEvents = relayCache.get(recentEventsCache) || [];
-      recentEvents.push(existingEvent);
-      relayCache.set(recentEventsCache, recentEvents);
-      sendOK(server, event.id, false, "Duplicate. Event dropped.");
-      return;
-    }
+
     const isValidSignature = await verifyEventSignature(event);
     if (isValidSignature) {
-      // Store the event in KV store and cache
-      await relayDb.put(cacheKey, JSON.stringify(event));
+      const cacheKey = `event:${event.id}`;
+
+      // Store the event in the in-memory cache
       relayCache.set(cacheKey, event);
-      // Update the recent events cache
-      let recentEvents = relayCache.get(recentEventsCache) || [];
-      recentEvents.unshift(event);
-      if (recentEvents.length > 100) {
-        recentEvents = recentEvents.slice(0, 100);
-      }
-      relayCache.set(recentEventsCache, recentEvents);
+
+      // Add the event to the buffer
+      eventBuffer.push(event);
+
       sendOK(server, event.id, true, "");
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");

@@ -1,3 +1,7 @@
+## v1.14.9 - 2024-04-20
+
+- Added: in-memory cache buffering for event handling
+
 ## v1.13.9 - 2024-04-19
 
 - Added: support for Nostr address NIP-05 verified users
