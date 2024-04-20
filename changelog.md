@@ -1,7 +1,3 @@
-## v1.14.10 - 2024-04-20
-
-- Hotfix: in-memory cache buffering causing duplicate event check to be unstable
-
 ## v1.14.9 - 2024-04-20
 
 - Added: in-memory cache buffering for event handling

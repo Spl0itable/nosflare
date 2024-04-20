@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.14.10"
+  version: "1.14.9"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2035,8 +2035,7 @@ var blockedPubkeys = [
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
   "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18",
   "05aee96dd41429a3ae97a9dac4dfc6867fdfacebca3f3bdc051e5004b0751f01",
-  "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362",
-  "496d38f69865530028c7d212314d3ce6d605f3528a6c4020a067c9b5bc49fb13"
+  "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362"
 ];
 var allowedPubkeys = [
   // ... pubkeys that are explicitly allowed
@@ -2231,11 +2230,12 @@ async function getEventFromCacheOrKV(eventId) {
   }
   const cacheKey = `event:${eventId}`;
   let event = relayCache.get(cacheKey);
-  if (!event) {
-    event = await relayDb.get(cacheKey, { type: "json" });
-    if (event) {
-      relayCache.set(cacheKey, event);
-    }
+  if (event) {
+    return event;
+  }
+  event = await relayDb.get(cacheKey, { type: "json" });
+  if (event) {
+    relayCache.set(cacheKey, event);
   }
   return event;
 }
@@ -2324,14 +2324,15 @@ async function processEvent(event, server) {
       return;
     }
     const cacheKey = `event:${event.id}`;
-    const cachedEvent = await getEventFromCacheOrKV(event.id);
+    const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
       sendOK(server, event.id, false, "Duplicate. Event dropped.");
       return;
     }
     const isValidSignature = await verifyEventSignature(event);
     if (isValidSignature) {
-      relayCache.set(cacheKey, event);
+      const cacheKey2 = `event:${event.id}`;
+      relayCache.set(cacheKey2, event);
       eventBuffer.push(event);
       sendOK(server, event.id, true, "");
     } else {
