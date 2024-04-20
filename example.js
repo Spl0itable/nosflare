@@ -2375,7 +2375,7 @@ async function processReq(message, server) {
             if (!kvCacheRateLimiter.removeToken()) {
               throw new Error("Rate limit exceeded for KV store access");
             }
-            const eventKeys = await relayDb.list({ prefix: "event:", limit: 1e3 });
+            const eventKeys = await relayDb.list({ prefix: "event:", limit: 100 });
             const eventPromises = eventKeys.keys.map(async (key) => {
               try {
                 const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
