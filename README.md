@@ -60,7 +60,7 @@ You can deploy Nosflare using either the Wrangler CLI, directly through the Clou
 ```
 wrangler publish
 ```
-3. Add a custom domain or route (this will be the desired relay URL).
+3. Add a custom domain (this will be the desired relay URL).
 4. Create a KV namespace to store events. You can call it whatever you want.
 5. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
 
@@ -70,7 +70,7 @@ wrangler publish
 2. Go to the Workers section and create a new worker. You can call it whatever you'd like.
 3. Copy the contents of `dist/worker.js` and paste into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
 4. Save and deploy the worker.
-5. Add a custom domain or route (this will be the desired relay URL).
+5. Add a custom domain (this will be the desired relay URL).
 6. Create a KV namespace to store events. You can call it whatever you want.
 7. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
 
