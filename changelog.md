@@ -1,3 +1,8 @@
+## v1.15.9 - 2024-04-21
+
+- Added: relay blasting to send events to other relays
+- Tweaked: rate limits all kinds unless excluded
+
 ## v1.14.9 - 2024-04-20
 
 - Added: in-memory cache buffering for event handling

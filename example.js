@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len; ) {
+    for (let pos = 0; pos < len;) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function(bytes2) {
+  const bits2int = CURVE.bits2int || function (bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.14.9"
+  version: "1.15.9"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2073,6 +2073,11 @@ function containsBlockedContent(event) {
   }
   return false;
 }
+var blastRelays = [
+  "wss://nostr.mutinywallet.com",
+  "wss://bostr.online"
+  // ... add more relays
+];
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -2139,7 +2144,7 @@ async function handleNIP05Request(url) {
     },
     relays: {
       [pubkey]: [
-        // Add relay URLs for NIP-05 users
+        // ... add relays for NIP-05 users
       ]
     }
   };
@@ -2242,6 +2247,7 @@ async function getEventFromCacheOrKV(eventId) {
 var pubkeyRateLimiters = /* @__PURE__ */ new Map();
 var messageRateLimiter = new rateLimiter(100 / 1e3, 200);
 var kvCacheRateLimiter = new rateLimiter(1 / 1.1, 200);
+var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -2308,7 +2314,7 @@ async function processEvent(event, server) {
       sendOK(server, event.id, false, "This event contains blocked content.");
       return;
     }
-    if ([1, 3, 4, 5, 7].includes(event.kind)) {
+    if (!excludedRateLimitKinds.includes(event.kind)) {
       let pubkeyRateLimiter = pubkeyRateLimiters.get(event.pubkey);
       if (!pubkeyRateLimiter) {
         pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
@@ -2334,6 +2340,7 @@ async function processEvent(event, server) {
       const cacheKey2 = `event:${event.id}`;
       relayCache.set(cacheKey2, event);
       eventBuffer.push(event);
+      await blastEventToRelays(event);
       sendOK(server, event.id, true, "");
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
@@ -2449,6 +2456,23 @@ async function closeSubscription(subscriptionId, server) {
   } catch (error) {
     console.error("Error closing subscription:", error);
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
+  }
+}
+async function blastEventToRelays(event) {
+  for (const relayUrl of blastRelays) {
+    try {
+      const socket = new WebSocket(relayUrl);
+      socket.addEventListener("open", () => {
+        const eventMessage = JSON.stringify(["EVENT", event]);
+        socket.send(eventMessage);
+        socket.close();
+      });
+      socket.addEventListener("error", (error) => {
+        console.error(`Error blasting event to relay ${relayUrl}:`, error);
+      });
+    } catch (error) {
+      console.error(`Error blasting event to relay ${relayUrl}:`, error);
+    }
   }
 }
 async function processDeletionEvent(deletionEvent, server) {
