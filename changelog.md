@@ -1,3 +1,7 @@
+## v2.15.9 - 2024-04-24
+
+- Added: consecutive ordering of events through new KV storage indexation
+
 ## v1.15.9 - 2024-04-21
 
 - Added: relay blasting to send events to other relays

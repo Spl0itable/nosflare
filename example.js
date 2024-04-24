@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len;) {
+    for (let pos = 0; pos < len; ) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function (bytes2) {
+  const bits2int = CURVE.bits2int || function(bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "1.15.9"
+  version: "2.15.9"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2059,7 +2059,6 @@ function isEventKindAllowed(kind) {
   return !blockedEventKinds.has(kind);
 }
 var blockedContent = /* @__PURE__ */ new Set([
-  "nigger",
   "~~ hello world! ~~"
   // ... more blocked content
 ]);
@@ -2098,9 +2097,6 @@ addEventListener("fetch", (event) => {
   } else {
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
-  setInterval(async () => {
-    await flushEventBuffer();
-  }, flushInterval);
 });
 async function handleRelayInfoRequest() {
   const headers = new Headers({
@@ -2159,19 +2155,22 @@ async function handleNIP05Request(url) {
 var relayCache = {
   _cache: {},
   get(key) {
-    return this._cache[key]?.value || null;
+    const item = this._cache[key];
+    if (item && item.expires > Date.now()) {
+      return item.value;
+    }
+    return null;
   },
-  set(key, value) {
-    this._cache[key] = { value, timestamp: Date.now() };
+  set(key, value, ttl = 6e4) {
+    this._cache[key] = {
+      value,
+      expires: Date.now() + ttl
+    };
   },
   delete(key) {
     delete this._cache[key];
   }
 };
-var recentEventsCache = "recent_events_cache";
-var eventBuffer = [];
-var bufferSize = 20;
-var flushInterval = 5e3;
 function generateSubscriptionCacheKey(filters) {
   const filterKeys = Object.keys(filters).sort();
   const cacheKey = filterKeys.map((key) => {
@@ -2187,24 +2186,6 @@ function generateSubscriptionCacheKey(filters) {
     return `${key}:${value}`;
   }).join("|");
   return `subscription:${cacheKey}`;
-}
-var lastFlushTime = Date.now();
-async function flushEventBuffer() {
-  if (eventBuffer.length === 0)
-    return;
-  const events = eventBuffer.splice(0, eventBuffer.length);
-  try {
-    const promises = events.map((event) => {
-      const cacheKey = `event:${event.id}`;
-      return relayDb.put(cacheKey, JSON.stringify(event));
-    });
-    await Promise.all(promises);
-    lastFlushTime = Date.now();
-  } catch (error) {
-    console.error("Error flushing event buffer:", error);
-    eventBuffer.unshift(...events);
-    lastFlushTime = 0;
-  }
 }
 var rateLimiter = class {
   constructor(rate, capacity) {
@@ -2229,40 +2210,13 @@ var rateLimiter = class {
     this.lastRefillTime = now;
   }
 };
-async function getEventFromCacheOrKV(eventId) {
-  if (!kvCacheRateLimiter.removeToken()) {
-    throw new Error("Rate limit exceeded for KV store access");
-  }
-  const cacheKey = `event:${eventId}`;
-  let event = relayCache.get(cacheKey);
-  if (event) {
-    return event;
-  }
-  event = await relayDb.get(cacheKey, { type: "json" });
-  if (event) {
-    relayCache.set(cacheKey, event);
-  }
-  return event;
-}
 var pubkeyRateLimiters = /* @__PURE__ */ new Map();
 var messageRateLimiter = new rateLimiter(100 / 1e3, 200);
-var kvCacheRateLimiter = new rateLimiter(1 / 1.1, 200);
+var reqRateLimiter = new rateLimiter(1 / 1.1, 200);
 var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
-  let flushTimer;
-  const startFlushTimer = () => {
-    flushTimer = setTimeout(async () => {
-      const currentTime = Date.now();
-      const shouldFlushBuffer = eventBuffer.length >= bufferSize || currentTime - lastFlushTime >= flushInterval;
-      if (shouldFlushBuffer) {
-        await flushEventBuffer();
-        lastFlushTime = currentTime;
-      }
-      startFlushTimer();
-    }, flushInterval);
-  };
   server.addEventListener("message", async (messageEvent) => {
     event.waitUntil(
       (async () => {
@@ -2293,7 +2247,6 @@ async function handleWebSocket(event, request) {
   });
   server.addEventListener("close", (event2) => {
     console.log("WebSocket closed", event2.code, event2.reason);
-    clearTimeout(flushTimer);
   });
   return new Response(null, {
     status: 101,
@@ -2303,15 +2256,15 @@ async function handleWebSocket(event, request) {
 async function processEvent(event, server) {
   try {
     if (!isPubkeyAllowed(event.pubkey)) {
-      sendOK(server, event.id, false, "This pubkey is not allowed.");
+      sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
       return;
     }
     if (!isEventKindAllowed(event.kind)) {
-      sendOK(server, event.id, false, `Event kind ${event.kind} is not allowed.`);
+      sendOK(server, event.id, false, `Denied. Event kind ${event.kind} is not allowed.`);
       return;
     }
     if (containsBlockedContent(event)) {
-      sendOK(server, event.id, false, "This event contains blocked content.");
+      sendOK(server, event.id, false, "Denied. The event contains blocked content.");
       return;
     }
     if (!excludedRateLimitKinds.includes(event.kind)) {
@@ -2321,7 +2274,7 @@ async function processEvent(event, server) {
         pubkeyRateLimiters.set(event.pubkey, pubkeyRateLimiter);
       }
       if (!pubkeyRateLimiter.removeToken()) {
-        sendOK(server, event.id, false, "Event rate limit exceeded. Please try again later.");
+        sendOK(server, event.id, false, "Rate limit exceeded. Please try again later.");
         return;
       }
     }
@@ -2337,11 +2290,9 @@ async function processEvent(event, server) {
     }
     const isValidSignature = await verifyEventSignature(event);
     if (isValidSignature) {
-      const cacheKey2 = `event:${event.id}`;
-      relayCache.set(cacheKey2, event);
-      eventBuffer.push(event);
-      await blastEventToRelays(event);
-      sendOK(server, event.id, true, "");
+      relayCache.set(cacheKey, event);
+      sendOK(server, event.id, true, "Event received successfully.");
+      event.waitUntil(saveEventToKV(event));
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }
@@ -2351,104 +2302,141 @@ async function processEvent(event, server) {
   }
 }
 async function processReq(message, server) {
+  if (!reqRateLimiter.removeToken()) {
+    sendError(server, "Rate limit exceeded. Please try again later.");
+    return;
+  }
   const subscriptionId = message[1];
   const filters = message[2] || {};
+  const pagination = filters.pagination || { page: 1, limit: 20 };
+  const maxPages = 10;
+  pagination.page = Math.min(pagination.page, maxPages);
   const cacheKey = generateSubscriptionCacheKey(filters);
   let events = [];
   let cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents) {
     events = cachedEvents;
   } else {
-    let recentEvents = relayCache.get(recentEventsCache) || [];
-    events = recentEvents.filter((event) => {
-      if (filters.ids && !filters.ids.includes(event.id)) {
-        return false;
+    try {
+      const eventPromises = [];
+      if (filters.ids) {
+        const cachedEvents2 = filters.ids.map((id) => relayCache.get(`event:${id}`)).filter((event) => event !== null);
+        events = cachedEvents2;
+        const missingIds = filters.ids.filter((id) => !events.some((event) => event.id === id));
+        for (const id of missingIds) {
+          const idKey = `event:${id}`;
+          eventPromises.push(relayDb.get(idKey, { type: "json" }));
+        }
       }
-      if (filters.kinds && !filters.kinds.includes(event.kind)) {
-        return false;
-      }
-      if (filters.authors && !filters.authors.includes(event.pubkey)) {
-        return false;
-      }
-      if (filters["#e"] && !event.tags.some((tag) => tag[0] === "e" && filters["#e"].includes(tag[1]))) {
-        return false;
-      }
-      if (filters["#p"] && !event.tags.some((tag) => tag[0] === "p" && filters["#p"].includes(tag[1]))) {
-        return false;
-      }
-      if (filters.since && event.created_at < filters.since) {
-        return false;
-      }
-      if (filters.until && event.created_at > filters.until) {
-        return false;
-      }
-      return true;
-    });
-    if (events.length === 0) {
-      const filterPromises = Object.entries(filters).map(async ([filterKey, filterValue]) => {
-        if (filterKey === "ids") {
-          const eventPromises = filterValue.map(async (eventId) => {
-            try {
-              if (!kvCacheRateLimiter.removeToken()) {
-                throw new Error("Rate limit exceeded for KV store access");
-              }
-              const event = await getEventFromCacheOrKV(eventId);
-              return event;
-            } catch (error) {
-              console.error(`Error retrieving event ${eventId}:`, error);
-              return null;
+      if (filters.kinds) {
+        const cachedKindEvents = [];
+        for (const kind of filters.kinds) {
+          const kindCacheKey = `kind-${kind}`;
+          const cachedEvents2 = relayCache.get(kindCacheKey);
+          if (cachedEvents2) {
+            cachedKindEvents.push(...cachedEvents2);
+          } else {
+            const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${kind}`;
+            const kindCount = parseInt(await relayDb.get(kindCountKey, "text") || "0", 10);
+            const startIndex = (pagination.page - 1) * pagination.limit;
+            const endIndex = startIndex + pagination.limit - 1;
+            const startCount = Math.max(0, kindCount - endIndex);
+            const endCount = Math.max(0, kindCount - startIndex);
+            for (let i = endCount; i >= startCount; i--) {
+              const kindKey = `kind-${kind}:${i}`;
+              eventPromises.push(relayDb.get(kindKey, { type: "json" }));
             }
-          });
-          return Promise.all(eventPromises);
-        } else if (filterKey === "kinds" || filterKey === "authors" || filterKey === "#e" || filterKey === "#p" || filterKey === "since" || filterKey === "until") {
-          try {
-            if (!kvCacheRateLimiter.removeToken()) {
-              throw new Error("Rate limit exceeded for KV store access");
-            }
-            const eventKeys = await relayDb.list({ prefix: "event:", limit: 100 });
-            const eventPromises = eventKeys.keys.map(async (key) => {
-              try {
-                const event = await getEventFromCacheOrKV(key.name.replace("event:", ""));
-                return event;
-              } catch (error) {
-                console.error(`Error retrieving event ${key.name}:`, error);
-                return null;
-              }
-            });
-            const fetchedEvents = (await Promise.all(eventPromises)).filter((event) => event !== null);
-            return fetchedEvents.filter((event) => {
-              if (filterKey === "kinds") {
-                return filterValue.includes(event.kind);
-              } else if (filterKey === "authors") {
-                return filterValue.includes(event.pubkey);
-              } else if (filterKey === "#e") {
-                return event.tags.some((tag) => tag[0] === "e" && filterValue.includes(tag[1]));
-              } else if (filterKey === "#p") {
-                return event.tags.some((tag) => tag[0] === "p" && filterValue.includes(tag[1]));
-              } else if (filterKey === "since") {
-                return event.created_at >= filterValue;
-              } else if (filterKey === "until") {
-                return event.created_at <= filterValue;
-              }
-            });
-          } catch (error) {
-            console.error(`Error retrieving events for ${filterKey}:`, error);
-            return [];
           }
         }
+        events = cachedKindEvents;
+      }
+      if (filters.authors) {
+        const cachedAuthorEvents = [];
+        for (const author of filters.authors) {
+          const authorCacheKey = `pubkey-${author}`;
+          const cachedEvents2 = relayCache.get(authorCacheKey);
+          if (cachedEvents2) {
+            cachedAuthorEvents.push(...cachedEvents2);
+          } else {
+            const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${author}`;
+            const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, "text") || "0", 10);
+            const startIndex = (pagination.page - 1) * pagination.limit;
+            const endIndex = startIndex + pagination.limit - 1;
+            const startCount = Math.max(0, pubkeyCount - endIndex);
+            const endCount = Math.max(0, pubkeyCount - startIndex);
+            for (let i = endCount; i >= startCount; i--) {
+              const pubkeyKey = `pubkey-${author}:${i}`;
+              eventPromises.push(relayDb.get(pubkeyKey, { type: "json" }));
+            }
+          }
+        }
+        events = cachedAuthorEvents;
+      }
+      if (filters["#e"]) {
+        const cachedETagEvents = [];
+        for (const eTag of filters["#e"]) {
+          const eTagCacheKey = `e-${eTag}`;
+          const cachedEvents2 = relayCache.get(eTagCacheKey);
+          if (cachedEvents2) {
+            cachedETagEvents.push(...cachedEvents2);
+          } else {
+            const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${eTag}`;
+            const eTagCount = parseInt(await relayDb.get(eTagCountKey, "text") || "0", 10);
+            const startIndex = (pagination.page - 1) * pagination.limit;
+            const endIndex = startIndex + pagination.limit - 1;
+            const startCount = Math.max(0, eTagCount - endIndex);
+            const endCount = Math.max(0, eTagCount - startIndex);
+            for (let i = endCount; i >= startCount; i--) {
+              const eTagKey = `e-${eTag}:${i}`;
+              eventPromises.push(relayDb.get(eTagKey, { type: "json" }));
+            }
+          }
+        }
+        events = cachedETagEvents;
+      }
+      if (filters["#p"]) {
+        const cachedPTagEvents = [];
+        for (const pTag of filters["#p"]) {
+          const pTagCacheKey = `p-${pTag}`;
+          const cachedEvents2 = relayCache.get(pTagCacheKey);
+          if (cachedEvents2) {
+            cachedPTagEvents.push(...cachedEvents2);
+          } else {
+            const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${pTag}`;
+            const pTagCount = parseInt(await relayDb.get(pTagCountKey, "text") || "0", 10);
+            const startIndex = (pagination.page - 1) * pagination.limit;
+            const endIndex = startIndex + pagination.limit - 1;
+            const startCount = Math.max(0, pTagCount - endIndex);
+            const endCount = Math.max(0, pTagCount - startIndex);
+            for (let i = endCount; i >= startCount; i--) {
+              const pTagKey = `p-${pTag}:${i}`;
+              eventPromises.push(relayDb.get(pTagKey, { type: "json" }));
+            }
+          }
+        }
+        events = cachedPTagEvents;
+      }
+      const fetchedEvents = await Promise.all(eventPromises);
+      events = [...events, ...fetchedEvents.filter((event) => event !== null)];
+      events = events.filter((event) => {
+        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters["#e"] || event.tags.some((tag) => tag[0] === "e" && filters["#e"].includes(tag[1]))) && (!filters["#p"] || event.tags.some((tag) => tag[0] === "p" && filters["#p"].includes(tag[1]))) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
+        return includeEvent;
       });
-      const filterResults = await Promise.all(filterPromises);
-      events = filterResults.flat().filter((event) => event !== null);
+      relayCache.set(cacheKey, events);
+    } catch (error) {
+      console.error(`Error retrieving events:`, error);
+      events = [];
     }
-    relayCache.set(cacheKey, events);
   }
-  if (filters.limit && events.length > filters.limit) {
-    events = events.slice(0, filters.limit);
-  }
-  for (const event of events) {
+  const totalEvents = events.length;
+  const totalPages = Math.min(Math.ceil(totalEvents / pagination.limit), maxPages);
+  const paginatedEvents = events.slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit);
+  for (const event of paginatedEvents) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
   }
-  server.send(JSON.stringify(["EOSE", subscriptionId]));
+  if (pagination.page >= totalPages) {
+    server.send(JSON.stringify(["EOSE", subscriptionId]));
+  }
 }
 async function closeSubscription(subscriptionId, server) {
   try {
@@ -2457,6 +2445,46 @@ async function closeSubscription(subscriptionId, server) {
     console.error("Error closing subscription:", error);
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
   }
+}
+var KIND_COUNT_KEY_PREFIX = "kind_count_";
+var PUBKEY_COUNT_KEY_PREFIX = "pubkey_count_";
+var ETAG_COUNT_KEY_PREFIX = "etag_count_";
+var PTAG_COUNT_KEY_PREFIX = "ptag_count_";
+async function saveEventToKV(event) {
+  const eventKey = `event:${event.id}`;
+  const storedEvent = await relayDb.get(eventKey, "json");
+  if (storedEvent) {
+    console.log(`Duplicate event: ${event.id}. Event dropped.`);
+    return;
+  }
+  const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
+  const kindCount = parseInt(await relayDb.get(kindCountKey, "text") || "0", 10);
+  const kindKey = `kind-${event.kind}:${kindCount + 1}`;
+  const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
+  const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, "text") || "0", 10);
+  const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+  const eventWithCountRef = { ...event, kindKey, pubkeyKey };
+  await relayDb.put(kindKey, JSON.stringify(event));
+  await relayDb.put(pubkeyKey, JSON.stringify(event));
+  await relayDb.put(eventKey, JSON.stringify(eventWithCountRef));
+  await relayDb.put(kindCountKey, (kindCount + 1).toString());
+  await relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString());
+  for (const tag of event.tags) {
+    if (tag[0] === "e") {
+      const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
+      const eTagCount = parseInt(await relayDb.get(eTagCountKey, "text") || "0", 10);
+      const eTagKey = `e-${tag[1]}:${eTagCount + 1}`;
+      await relayDb.put(eTagKey, JSON.stringify(event));
+      await relayDb.put(eTagCountKey, (eTagCount + 1).toString());
+    } else if (tag[0] === "p") {
+      const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
+      const pTagCount = parseInt(await relayDb.get(pTagCountKey, "text") || "0", 10);
+      const pTagKey = `p-${tag[1]}:${pTagCount + 1}`;
+      await relayDb.put(pTagKey, JSON.stringify(event));
+      await relayDb.put(pTagCountKey, (pTagCount + 1).toString());
+    }
+  }
+  await blastEventToRelays(event);
 }
 async function blastEventToRelays(event) {
   for (const relayUrl of blastRelays) {
@@ -2479,23 +2507,34 @@ async function processDeletionEvent(deletionEvent, server) {
   try {
     if (deletionEvent.kind === 5 && deletionEvent.pubkey) {
       const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
-      const maxDeletedEvents = 50;
-      const limitedDeletedEventIds = deletedEventIds.slice(0, maxDeletedEvents);
-      const deletePromises = limitedDeletedEventIds.map(async (eventId) => {
-        const eventKey = `event:${eventId}`;
-        const event = await relayDb.get(eventKey, "json");
+      const deletePromises = deletedEventIds.map(async (eventId) => {
+        const idKey = `event:${eventId}`;
+        const event = await relayDb.get(idKey, "json");
         if (event && event.pubkey === deletionEvent.pubkey) {
-          await relayDb.delete(eventKey);
-          relayCache.delete(eventId);
+          await relayDb.delete(idKey);
+          if (event.kindKey) {
+            await relayDb.delete(event.kindKey);
+          }
+          if (event.pubkeyKey) {
+            await relayDb.delete(event.pubkeyKey);
+          }
+          for (const tag of event.tags) {
+            if (tag[0] === "e") {
+              const eTagKey = `e-${tag[1]}:${event.created_at}`;
+              await relayDb.delete(eTagKey);
+            } else if (tag[0] === "p") {
+              const pTagKey = `p-${tag[1]}:${event.created_at}`;
+              await relayDb.delete(pTagKey);
+            }
+          }
+          const cacheKey = `event:${eventId}`;
+          relayCache.delete(cacheKey);
           return true;
         }
         return false;
       });
       const deleteResults = await Promise.all(deletePromises);
       const deletedCount = deleteResults.filter((result) => result).length;
-      if (deletedEventIds.length > maxDeletedEvents) {
-        server.send(JSON.stringify(["NOTICE", `Only the first ${maxDeletedEvents} deleted events were processed.`]));
-      }
       sendOK(server, deletionEvent.id, true, `Processed deletion request. Events deleted: ${deletedCount}`);
     } else {
       sendOK(server, deletionEvent.id, false, "Invalid deletion event.");
@@ -2504,12 +2543,6 @@ async function processDeletionEvent(deletionEvent, server) {
     console.error("Error processing deletion event:", error);
     sendOK(server, deletionEvent.id, false, `Error processing deletion event: ${error.message}`);
   }
-}
-function sendOK(server, eventId, status, message) {
-  server.send(JSON.stringify(["OK", eventId, status, message]));
-}
-function sendError(server, message) {
-  server.send(JSON.stringify(["NOTICE", message]));
 }
 async function verifyEventSignature(event) {
   try {
@@ -2547,6 +2580,12 @@ function hexToBytes2(hexString) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
   }
   return bytes2;
+}
+function sendOK(server, eventId, status, message) {
+  server.send(JSON.stringify(["OK", eventId, status, message]));
+}
+function sendError(server, message) {
+  server.send(JSON.stringify(["NOTICE", message]));
 }
 /*! Bundled license information:
 
