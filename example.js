@@ -2021,7 +2021,7 @@ var relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and KV store",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
   version: "2.15.10"
 };

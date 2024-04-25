@@ -8,7 +8,7 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, and 40.
+- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, and 40.
 
 ## Getting Started
 
