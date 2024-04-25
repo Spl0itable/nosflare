@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len; ) {
+    for (let pos = 0; pos < len;) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function(bytes2) {
+  const bits2int = CURVE.bits2int || function (bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.15.9"
+  version: "2.15.10"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2248,6 +2248,9 @@ async function handleWebSocket(event, request) {
   server.addEventListener("close", (event2) => {
     console.log("WebSocket closed", event2.code, event2.reason);
   });
+  server.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
+  });
   return new Response(null, {
     status: 101,
     webSocket: client
@@ -2292,7 +2295,9 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
       sendOK(server, event.id, true, "Event received successfully.");
-      event.waitUntil(saveEventToKV(event));
+      saveEventToKV(event).catch((error) => {
+        console.error("Error saving event to KV:", error);
+      });
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }

@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.15.9",
+  version: "2.15.10",
 };
 
 // Relay favicon
@@ -263,6 +263,9 @@ async function handleWebSocket(event, request) {
   server.addEventListener("close", (event) => {
     console.log("WebSocket closed", event.code, event.reason);
   });
+  server.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
+  });
   return new Response(null, {
     status: 101,
     webSocket: client,
@@ -315,7 +318,9 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
       sendOK(server, event.id, true, "Event received successfully.");
-      event.waitUntil(saveEventToKV(event));
+      saveEventToKV(event).catch((error) => {
+        console.error("Error saving event to KV:", error);
+      });
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }

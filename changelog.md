@@ -1,3 +1,7 @@
+## v2.15.10 - 2024-04-25
+
+- Hotfix: corrected websocket graceful error handling and call to KV store
+
 ## v2.15.9 - 2024-04-24
 
 - Added: consecutive ordering of events through new KV storage indexation
