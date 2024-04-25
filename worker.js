@@ -224,7 +224,7 @@ class rateLimiter {
 }
 const pubkeyRateLimiters = new Map();
 const messageRateLimiter = new rateLimiter(100 / 1000, 200);
-const reqRateLimiter = new rateLimiter(1 / 1.1, 200);
+const reqRateLimiter = new rateLimiter(1000 / 60000, 1000);
 const excludedRateLimitKinds = []; // kinds to exclude from rate limiting Ex: 1, 2, 3
 
 // Handles websocket messages
@@ -339,30 +339,35 @@ async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
   const pagination = filters.pagination || { page: 1, limit: 20 };
-  // Limit the maximum number of pages to 10
-  const maxPages = 10;
+  const maxPages = 10; // limit max number of pages
   pagination.page = Math.min(pagination.page, maxPages);
   const cacheKey = generateSubscriptionCacheKey(filters);
   let events = [];
-  // Check the cache for filtered events
+  // Check cache for filtered events
   let cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents) {
     events = cachedEvents;
   } else {
     try {
       const eventPromises = [];
+      let readCount = 0;
+      const maxReadCount = 1000; // max read count limit per min
       if (filters.ids) {
-        // Check the cache for events matching the ids filter
+        // Check cache for events matching the ids filter
         const cachedEvents = filters.ids.map(id => relayCache.get(`event:${id}`)).filter(event => event !== null);
         events = cachedEvents;
         const missingIds = filters.ids.filter(id => !events.some(event => event.id === id));
         for (const id of missingIds) {
           const idKey = `event:${id}`;
           eventPromises.push(relayDb.get(idKey, { type: 'json' }));
+          readCount++;
+          if (readCount > maxReadCount) {
+            throw new Error("Read limit exceeded");
+          }
         }
       }
       if (filters.kinds) {
-        // Check the cache for events matching the kinds filter
+        // Check cache for events matching the kinds filter
         const cachedKindEvents = [];
         for (const kind of filters.kinds) {
           const kindCacheKey = `kind-${kind}`;
@@ -379,13 +384,17 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const kindKey = `kind-${kind}:${i}`;
               eventPromises.push(relayDb.get(kindKey, { type: 'json' }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
         events = cachedKindEvents;
       }
       if (filters.authors) {
-        // Check the cache for events matching the authors filter
+        // Check cache for events matching the authors filter
         const cachedAuthorEvents = [];
         for (const author of filters.authors) {
           const authorCacheKey = `pubkey-${author}`;
@@ -402,13 +411,17 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const pubkeyKey = `pubkey-${author}:${i}`;
               eventPromises.push(relayDb.get(pubkeyKey, { type: 'json' }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
         events = cachedAuthorEvents;
       }
       if (filters['#e']) {
-        // Check the cache for events matching the 'e' filter
+        // Check cache for events matching the 'e' filter
         const cachedETagEvents = [];
         for (const eTag of filters['#e']) {
           const eTagCacheKey = `e-${eTag}`;
@@ -425,13 +438,17 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const eTagKey = `e-${eTag}:${i}`;
               eventPromises.push(relayDb.get(eTagKey, { type: 'json' }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
         events = cachedETagEvents;
       }
       if (filters['#p']) {
-        // Check the cache for events matching the 'p' filter
+        // Check cache for events matching the 'p' filter
         const cachedPTagEvents = [];
         for (const pTag of filters['#p']) {
           const pTagCacheKey = `p-${pTag}`;
@@ -448,6 +465,10 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const pTagKey = `p-${pTag}:${i}`;
               eventPromises.push(relayDb.get(pTagKey, { type: 'json' }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
@@ -455,7 +476,7 @@ async function processReq(message, server) {
       }
       const fetchedEvents = await Promise.all(eventPromises);
       events = [...events, ...fetchedEvents.filter((event) => event !== null)];
-      // Check if the events should be included based on the filters
+      // Check if events should be included based on filters
       events = events.filter((event) => {
         const includeEvent =
           (!filters.ids || filters.ids.includes(event.id)) &&
@@ -470,7 +491,11 @@ async function processReq(message, server) {
       relayCache.set(cacheKey, events);
     } catch (error) {
       console.error(`Error retrieving events:`, error);
-      events = [];
+      if (error.message === "Read limit exceeded") {
+        sendError(server, "Rate limit exceeded. Please try again later.");
+      } else {
+        events = [];
+      }
     }
   }
   const totalEvents = events.length;

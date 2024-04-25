@@ -2212,7 +2212,7 @@ var rateLimiter = class {
 };
 var pubkeyRateLimiters = /* @__PURE__ */ new Map();
 var messageRateLimiter = new rateLimiter(100 / 1e3, 200);
-var reqRateLimiter = new rateLimiter(1 / 1.1, 200);
+var reqRateLimiter = new rateLimiter(1e3 / 6e4, 1e3);
 var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
@@ -2324,6 +2324,8 @@ async function processReq(message, server) {
   } else {
     try {
       const eventPromises = [];
+      let readCount = 0;
+      const maxReadCount = 1e3;
       if (filters.ids) {
         const cachedEvents2 = filters.ids.map((id) => relayCache.get(`event:${id}`)).filter((event) => event !== null);
         events = cachedEvents2;
@@ -2331,6 +2333,10 @@ async function processReq(message, server) {
         for (const id of missingIds) {
           const idKey = `event:${id}`;
           eventPromises.push(relayDb.get(idKey, { type: "json" }));
+          readCount++;
+          if (readCount > maxReadCount) {
+            throw new Error("Read limit exceeded");
+          }
         }
       }
       if (filters.kinds) {
@@ -2350,6 +2356,10 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const kindKey = `kind-${kind}:${i}`;
               eventPromises.push(relayDb.get(kindKey, { type: "json" }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
@@ -2372,6 +2382,10 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const pubkeyKey = `pubkey-${author}:${i}`;
               eventPromises.push(relayDb.get(pubkeyKey, { type: "json" }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
@@ -2394,6 +2408,10 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const eTagKey = `e-${eTag}:${i}`;
               eventPromises.push(relayDb.get(eTagKey, { type: "json" }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
@@ -2416,6 +2434,10 @@ async function processReq(message, server) {
             for (let i = endCount; i >= startCount; i--) {
               const pTagKey = `p-${pTag}:${i}`;
               eventPromises.push(relayDb.get(pTagKey, { type: "json" }));
+              readCount++;
+              if (readCount > maxReadCount) {
+                throw new Error("Read limit exceeded");
+              }
             }
           }
         }
@@ -2430,7 +2452,11 @@ async function processReq(message, server) {
       relayCache.set(cacheKey, events);
     } catch (error) {
       console.error(`Error retrieving events:`, error);
-      events = [];
+      if (error.message === "Read limit exceeded") {
+        sendError(server, "Rate limit exceeded. Please try again later.");
+      } else {
+        events = [];
+      }
     }
   }
   const totalEvents = events.length;

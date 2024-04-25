@@ -1,3 +1,7 @@
+## v2.16.10 - 2024-04-25
+
+- Tweaked: more strict rate limiting on read requests to KV store 
+
 ## v2.15.10 - 2024-04-25
 
 - Hotfix: corrected websocket graceful error handling and call to KV store
