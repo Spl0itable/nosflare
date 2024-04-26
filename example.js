@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.16.11"
+  version: "2.17.11"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2213,6 +2213,7 @@ var rateLimiter = class {
 var messageRateLimiter = new rateLimiter(100 / 6e4, 100);
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
 var reqRateLimiter = new rateLimiter(100 / 6e4, 100);
+var duplicateCheckRateLimiter = new rateLimiter(100 / 6e4, 100);
 var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
@@ -2476,41 +2477,57 @@ var KIND_COUNT_KEY_PREFIX = "kind_count_";
 var PUBKEY_COUNT_KEY_PREFIX = "pubkey_count_";
 var ETAG_COUNT_KEY_PREFIX = "etag_count_";
 var PTAG_COUNT_KEY_PREFIX = "ptag_count_";
-async function saveEventToKV(event) {
+async function saveEventToKV(event, retryCount = 0, maxRetries = 3) {
   const eventKey = `event:${event.id}`;
+  if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
+    console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
+    return;
+  }
   const storedEvent = await relayDb.get(eventKey, "json");
   if (storedEvent) {
     console.log(`Duplicate event: ${event.id}. Event dropped.`);
     return;
   }
-  const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
-  const kindCount = parseInt(await relayDb.get(kindCountKey, "text") || "0", 10);
-  const kindKey = `kind-${event.kind}:${kindCount + 1}`;
-  const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
-  const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, "text") || "0", 10);
-  const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
-  const eventWithCountRef = { ...event, kindKey, pubkeyKey };
-  await relayDb.put(kindKey, JSON.stringify(event));
-  await relayDb.put(pubkeyKey, JSON.stringify(event));
-  await relayDb.put(eventKey, JSON.stringify(eventWithCountRef));
-  await relayDb.put(kindCountKey, (kindCount + 1).toString());
-  await relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString());
-  for (const tag of event.tags) {
-    if (tag[0] === "e") {
-      const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
-      const eTagCount = parseInt(await relayDb.get(eTagCountKey, "text") || "0", 10);
-      const eTagKey = `e-${tag[1]}:${eTagCount + 1}`;
-      await relayDb.put(eTagKey, JSON.stringify(event));
-      await relayDb.put(eTagCountKey, (eTagCount + 1).toString());
-    } else if (tag[0] === "p") {
-      const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
-      const pTagCount = parseInt(await relayDb.get(pTagCountKey, "text") || "0", 10);
-      const pTagKey = `p-${tag[1]}:${pTagCount + 1}`;
-      await relayDb.put(pTagKey, JSON.stringify(event));
-      await relayDb.put(pTagCountKey, (pTagCount + 1).toString());
+  try {
+    const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
+    const kindCount = parseInt(await relayDb.get(kindCountKey, "text") || "0", 10);
+    const kindKey = `kind-${event.kind}:${kindCount + 1}`;
+    const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
+    const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, "text") || "0", 10);
+    const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+    const eventWithCountRef = { ...event, kindKey, pubkeyKey };
+    const tagPromises = event.tags.map(async (tag) => {
+      if (tag[0] === "e") {
+        const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
+        const eTagCount = parseInt(await relayDb.get(eTagCountKey, "text") || "0", 10);
+        const eTagKey = `e-${tag[1]}:${eTagCount + 1}`;
+        return relayDb.put(eTagKey, JSON.stringify(event)).then(() => relayDb.put(eTagCountKey, (eTagCount + 1).toString()));
+      } else if (tag[0] === "p") {
+        const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
+        const pTagCount = parseInt(await relayDb.get(pTagCountKey, "text") || "0", 10);
+        const pTagKey = `p-${tag[1]}:${pTagCount + 1}`;
+        return relayDb.put(pTagKey, JSON.stringify(event)).then(() => relayDb.put(pTagCountKey, (pTagCount + 1).toString()));
+      }
+    });
+    await Promise.all([
+      relayDb.put(kindKey, JSON.stringify(event)),
+      relayDb.put(pubkeyKey, JSON.stringify(event)),
+      relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
+      relayDb.put(kindCountKey, (kindCount + 1).toString()),
+      relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
+      ...tagPromises
+    ]);
+    await blastEventToRelays(event);
+  } catch (error) {
+    console.error(`Error saving event to KV: ${error.message}`);
+    if (retryCount < maxRetries) {
+      const delay = Math.pow(2, retryCount) * 1e3;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      await saveEventToKV(event, retryCount + 1, maxRetries);
+    } else {
+      console.error(`Max retries reached. Event ${event.id} failed to save.`);
     }
   }
-  await blastEventToRelays(event);
 }
 async function blastEventToRelays(event) {
   for (const relayUrl of blastRelays) {

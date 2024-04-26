@@ -1,3 +1,9 @@
+## v2.17.11 - 2024-04-26
+
+- Added: rate limiting to duplicate event check
+- Added: retry event save to KV after initial failure
+- Improved: concurrently save event data to KV store 
+
 ## v2.16.11 - 2024-04-26
 
 - Hotfix: improved allowed pubkey validator and rate limiter
