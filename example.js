@@ -127,7 +127,7 @@ var HashMD = class extends Hash {
     const { view, buffer, blockLen } = this;
     data = toBytes(data);
     const len = data.length;
-    for (let pos = 0; pos < len;) {
+    for (let pos = 0; pos < len; ) {
       const take = Math.min(blockLen - this.pos, len - pos);
       if (take === blockLen) {
         const dataView = createView(data);
@@ -1640,12 +1640,12 @@ function weierstrass(curveDef) {
     const b = Point2.fromHex(publicB);
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
-  const bits2int = CURVE.bits2int || function (bytes2) {
+  const bits2int = CURVE.bits2int || function(bytes2) {
     const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
     return delta > 0 ? num >> BigInt(delta) : num;
   };
-  const bits2int_modN = CURVE.bits2int_modN || function (bytes2) {
+  const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.15.10"
+  version: "2.16.11"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2210,9 +2210,9 @@ var rateLimiter = class {
     this.lastRefillTime = now;
   }
 };
-var pubkeyRateLimiters = /* @__PURE__ */ new Map();
-var messageRateLimiter = new rateLimiter(100 / 1e3, 200);
-var reqRateLimiter = new rateLimiter(1e3 / 6e4, 1e3);
+var messageRateLimiter = new rateLimiter(100 / 6e4, 100);
+var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
+var reqRateLimiter = new rateLimiter(100 / 6e4, 100);
 var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
@@ -2271,11 +2271,6 @@ async function processEvent(event, server) {
       return;
     }
     if (!excludedRateLimitKinds.includes(event.kind)) {
-      let pubkeyRateLimiter = pubkeyRateLimiters.get(event.pubkey);
-      if (!pubkeyRateLimiter) {
-        pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
-        pubkeyRateLimiters.set(event.pubkey, pubkeyRateLimiter);
-      }
       if (!pubkeyRateLimiter.removeToken()) {
         sendOK(server, event.id, false, "Rate limit exceeded. Please try again later.");
         return;
@@ -2325,7 +2320,7 @@ async function processReq(message, server) {
     try {
       const eventPromises = [];
       let readCount = 0;
-      const maxReadCount = 1e3;
+      const maxReadCount = 100;
       if (filters.ids) {
         const cachedEvents2 = filters.ids.map((id) => relayCache.get(`event:${id}`)).filter((event) => event !== null);
         events = cachedEvents2;

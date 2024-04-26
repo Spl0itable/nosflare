@@ -1,3 +1,7 @@
+## v2.16.11 - 2024-04-26
+
+- Hotfix: improved allowed pubkey validator and rate limiter
+
 ## v2.16.10 - 2024-04-25
 
 - Tweaked: more strict rate limiting on read requests to KV store 
