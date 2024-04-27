@@ -1,3 +1,7 @@
+## v2.17.13 - 2024-04-27
+
+- Hotfix: corrected deletion (kind 5) logic for indexation
+
 ## v2.17.12 - 2024-04-27
 
 - Deprecated: retry event save to KV after initial failure

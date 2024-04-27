@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.17.12",
+  version: "2.17.13",
 };
 
 // Relay favicon
@@ -592,39 +592,36 @@ async function blastEventToRelays(event) {
 async function processDeletionEvent(deletionEvent, server) {
   try {
     if (deletionEvent.kind === 5 && deletionEvent.pubkey) {
+      sendOK(server, deletionEvent.id, true, "Deletion request received successfully.");
       const deletedEventIds = deletionEvent.tags
         .filter((tag) => tag[0] === "e")
         .map((tag) => tag[1]);
-      const deletePromises = deletedEventIds.map(async (eventId) => {
+      deletedEventIds.forEach(async (eventId) => {
         const idKey = `event:${eventId}`;
         const event = await relayDb.get(idKey, "json");
         if (event && event.pubkey === deletionEvent.pubkey) {
-          await relayDb.delete(idKey);
-          if (event.kindKey) {
-            await relayDb.delete(event.kindKey);
-          }
-          if (event.pubkeyKey) {
-            await relayDb.delete(event.pubkeyKey);
-          }
-          for (const tag of event.tags) {
-            if (tag[0] === 'e') {
-              const eTagKey = `e-${tag[1]}:${event.created_at}`;
-              await relayDb.delete(eTagKey);
-            } else if (tag[0] === 'p') {
-              const pTagKey = `p-${tag[1]}:${event.created_at}`;
-              await relayDb.delete(pTagKey);
+          const relatedDataKeys = [
+            event.kindKey,
+            event.pubkeyKey,
+            ...event.tags
+              .filter((tag) => tag[0] === 'e' || tag[0] === 'p')
+              .map((tag) => `${tag[0]}-${tag[1]}:${event.created_at}`),
+          ];
+          const relatedDataPromises = relatedDataKeys.map((key) => relayDb.get(key, "json"));
+          const relatedData = await Promise.all(relatedDataPromises);
+          const deletePromises = relatedDataKeys.map((key, index) => {
+            if (relatedData[index] && relatedData[index].pubkey === deletionEvent.pubkey) {
+              return relayDb.delete(key);
             }
-          }
+            return Promise.resolve();
+          });
+          await Promise.all(deletePromises);
+          await relayDb.delete(idKey);
           // Delete event from the cache
           const cacheKey = `event:${eventId}`;
           relayCache.delete(cacheKey);
-          return true;
         }
-        return false;
       });
-      const deleteResults = await Promise.all(deletePromises);
-      const deletedCount = deleteResults.filter((result) => result).length;
-      sendOK(server, deletionEvent.id, true, `Processed deletion request. Events deleted: ${deletedCount}`);
     } else {
       sendOK(server, deletionEvent.id, false, "Invalid deletion event.");
     }
