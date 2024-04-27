@@ -1,3 +1,7 @@
+## v2.17.12 - 2024-04-27
+
+- Deprecated: retry event save to KV after initial failure
+
 ## v2.17.11 - 2024-04-26
 
 - Added: rate limiting to duplicate event check

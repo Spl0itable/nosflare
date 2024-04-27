@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.17.11",
+  version: "2.17.12",
 };
 
 // Relay favicon
@@ -520,7 +520,7 @@ const KIND_COUNT_KEY_PREFIX = 'kind_count_';
 const PUBKEY_COUNT_KEY_PREFIX = 'pubkey_count_';
 const ETAG_COUNT_KEY_PREFIX = 'etag_count_';
 const PTAG_COUNT_KEY_PREFIX = 'ptag_count_';
-async function saveEventToKV(event, retryCount = 0, maxRetries = 3) {
+async function saveEventToKV(event) {
   const eventKey = `event:${event.id}`;
   // Rate limit duplicate event checks
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
@@ -566,13 +566,6 @@ async function saveEventToKV(event, retryCount = 0, maxRetries = 3) {
     await blastEventToRelays(event);
   } catch (error) {
     console.error(`Error saving event to KV: ${error.message}`);
-    if (retryCount < maxRetries) {
-      const delay = Math.pow(2, retryCount) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      await saveEventToKV(event, retryCount + 1, maxRetries);
-    } else {
-      console.error(`Max retries reached. Event ${event.id} failed to save.`);
-    }
   }
 }
 

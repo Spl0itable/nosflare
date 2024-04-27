@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.17.11"
+  version: "2.17.12"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2477,7 +2477,7 @@ var KIND_COUNT_KEY_PREFIX = "kind_count_";
 var PUBKEY_COUNT_KEY_PREFIX = "pubkey_count_";
 var ETAG_COUNT_KEY_PREFIX = "etag_count_";
 var PTAG_COUNT_KEY_PREFIX = "ptag_count_";
-async function saveEventToKV(event, retryCount = 0, maxRetries = 3) {
+async function saveEventToKV(event) {
   const eventKey = `event:${event.id}`;
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
     console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
@@ -2520,13 +2520,6 @@ async function saveEventToKV(event, retryCount = 0, maxRetries = 3) {
     await blastEventToRelays(event);
   } catch (error) {
     console.error(`Error saving event to KV: ${error.message}`);
-    if (retryCount < maxRetries) {
-      const delay = Math.pow(2, retryCount) * 1e3;
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      await saveEventToKV(event, retryCount + 1, maxRetries);
-    } else {
-      console.error(`Max retries reached. Event ${event.id} failed to save.`);
-    }
   }
 }
 async function blastEventToRelays(event) {
