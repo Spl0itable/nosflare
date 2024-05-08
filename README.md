@@ -1,6 +1,6 @@
 # Nosflare
 
-Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and the [Cloudflare KV](https://www.cloudflare.com/products/workers-kv/) store. 
+Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket. 
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
@@ -20,7 +20,7 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 ### Dependencies
 
-This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and esbuild:
+This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler:
 
 ```
 npm install @noble/curves
@@ -29,7 +29,7 @@ npm install -g esbuild
 
 ### Building
 
-Clone the `worker.js` file to your machine. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+Clone the repo to your machine and open `worker.js` in a file editor. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
  
 *Optional:*
 - Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address.
@@ -52,7 +52,27 @@ The command assumes you're in the same directory as the `worker.js` file.
 
 You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script:
 
-#### Using Wrangler CLI
+#### Cloudflare Dashboard
+
+1. Log in to your Cloudflare dashboard.
+2. Go to the Workers section and create a new worker. You can call it whatever you'd like.
+3. Copy the contents of `dist/worker.js` and paste into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
+4. Save and deploy the worker.
+5. Add a custom domain in Worker's settings (this will be the desired relay URL).
+6. Create a R2 bucket to store events. You can call it whatever you want.
+7. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
+8. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
+9. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
+
+Examples:
+
+![R2 Bucket Subdomain](images/custom-domain.jpeg)
+
+![Environment Variables](images/env-vars.jpeg)
+
+![R2 Bucket Binding](images/r2-binding.jpeg)
+
+#### Wrangler CLI
 
 1. Configure your `wrangler.toml` with your Cloudflare account details.
 2. Publish the worker:
@@ -60,21 +80,13 @@ You can deploy Nosflare using either the Wrangler CLI, directly through the Clou
 ```
 wrangler publish
 ```
-3. Add a custom domain (this will be the desired relay URL).
-4. Create a KV namespace to store events. You can call it whatever you want.
-5. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
+3. Add a custom domain in Worker's settings (this will be the desired relay URL).
+4. Create a R2 bucket to store events. You can call it whatever you want.
+5. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
+6. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
+7. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 
-#### Using Cloudflare Dashboard
-
-1. Log in to your Cloudflare dashboard.
-2. Go to the Workers section and create a new worker. You can call it whatever you'd like.
-3. Copy the contents of `dist/worker.js` and paste into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
-4. Save and deploy the worker.
-5. Add a custom domain (this will be the desired relay URL).
-6. Create a KV namespace to store events. You can call it whatever you want.
-7. Bind the `relayDb` variable to the KV namespace for the Worker in the Settings > Variables tab under the "KV Namespace Bindings" section.
-
-#### Using NosflareDeploy script
+#### NosflareDeploy Script
 
 A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
 
@@ -92,10 +104,21 @@ Example:
 
 The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
+- Event streaming
 - "Pay-to-relay" (charging sats for access)
 - Client authorization (NIP-42)
 - File storage through Cloudflare R2 bucket (NIP-96)
 - Encrypted DMs (NIP-44)
+
+## Recommended Cloudflare Settings
+
+Ensure optimal performance of the relay by enforcing a high cache rate and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
+
+Examples:
+
+![Cache Rule](images/cache-setting.jpeg)
+
+![Rate Limiting](images/rate-limit.jpeg)
 
 ## Contributing
 

@@ -3,12 +3,12 @@ import { schnorr } from "@noble/curves/secp256k1";
 // Relay info (NIP-11)
 const relayInfo = {
   name: "Nosflare",
-  description: "A serverless Nostr relay through Cloudflare Worker and KV store",
+  description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "2.17.13",
+  version: "3.17.13",
 };
 
 // Relay favicon
@@ -314,8 +314,8 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
       sendOK(server, event.id, true, "Event received successfully.");
-      saveEventToKV(event).catch((error) => {
-        console.error("Error saving event to KV:", error);
+      saveEventToR2(event).catch((error) => {
+        console.error("Error saving event to R2:", error);
       });
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
@@ -334,175 +334,217 @@ async function processReq(message, server) {
   }
   const subscriptionId = message[1];
   const filters = message[2] || {};
-  const pagination = filters.pagination || { page: 1, limit: 20 };
-  const maxPages = 10; // limit max number of pages
-  pagination.page = Math.min(pagination.page, maxPages);
   const cacheKey = generateSubscriptionCacheKey(filters);
   let events = [];
-  // Check cache for filtered events
+  if (filters.ids) {
+    for (const id of filters.ids) {
+      if (!/^[a-f0-9]{64}$/.test(id)) {
+        sendError(server, `Invalid event ID format: ${id}`);
+        return;
+      }
+    }
+  }
+  if (filters.authors) {
+    for (const author of filters.authors) {
+      if (!/^[a-f0-9]{64}$/.test(author)) {
+        sendError(server, `Invalid author pubkey format: ${author}`);
+        return;
+      }
+    }
+  }
   let cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents) {
     events = cachedEvents;
   } else {
     try {
       const eventPromises = [];
-      let readCount = 0;
-      const maxReadCount = 100; // max read count limit per min
       if (filters.ids) {
-        // Check cache for events matching the ids filter
-        const cachedEvents = filters.ids.map(id => relayCache.get(`event:${id}`)).filter(event => event !== null);
-        events = cachedEvents;
-        const missingIds = filters.ids.filter(id => !events.some(event => event.id === id));
-        for (const id of missingIds) {
+        for (const id of filters.ids.slice(0, 25)) {
           const idKey = `event:${id}`;
-          eventPromises.push(relayDb.get(idKey, { type: 'json' }));
-          readCount++;
-          if (readCount > maxReadCount) {
-            throw new Error("Read limit exceeded");
-          }
+          const eventUrl = `${customDomain}/${idKey}`;
+          eventPromises.push(
+            fetch(eventUrl).then((response) => {
+              if (response.ok) {
+                return response.text().then((data) => {
+                  try {
+                    return JSON.parse(data);
+                  } catch (error) {
+                    console.error(`Malformed JSON for event with ID ${id}:`, error);
+                    return null;
+                  }
+                });
+              } else if (response.status === 404) {
+                return null;
+              } else {
+                throw new Error(`Error fetching event with ID ${id} from URL: ${eventUrl}. Status: ${response.status}`);
+              }
+            }).catch((error) => {
+              console.error(`Error fetching event with ID ${id} from URL: ${eventUrl}.`, error);
+              return null;
+            })
+          );
         }
       }
       if (filters.kinds) {
-        // Check cache for events matching the kinds filter
-        const cachedKindEvents = [];
         for (const kind of filters.kinds) {
-          const kindCacheKey = `kind-${kind}`;
-          const cachedEvents = relayCache.get(kindCacheKey);
-          if (cachedEvents) {
-            cachedKindEvents.push(...cachedEvents);
-          } else {
-            const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${kind}`;
-            const kindCount = parseInt(await relayDb.get(kindCountKey, 'text') || '0', 10);
-            const startIndex = (pagination.page - 1) * pagination.limit;
-            const endIndex = startIndex + pagination.limit - 1;
-            const startCount = Math.max(0, kindCount - endIndex);
-            const endCount = Math.max(0, kindCount - startIndex);
-            for (let i = endCount; i >= startCount; i--) {
-              const kindKey = `kind-${kind}:${i}`;
-              eventPromises.push(relayDb.get(kindKey, { type: 'json' }));
-              readCount++;
-              if (readCount > maxReadCount) {
-                throw new Error("Read limit exceeded");
-              }
-            }
+          const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${kind}`;
+          const cacheBustingParam = Date.now();
+          const kindCountUrl = `${customDomain}/${kindCountKey}?cb=${cacheBustingParam}`;
+          const kindCount = parseInt(await fetch(kindCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          for (let i = kindCount; i >= Math.max(1, kindCount - 25 + 1); i--) {
+            const kindKey = `kind-${kind}:${i}`;
+            const eventUrl = `${customDomain}/${kindKey}`;
+            eventPromises.push(
+              fetch(eventUrl).then((response) => {
+                if (response.ok) {
+                  return response.text().then((data) => {
+                    try {
+                      return JSON.parse(data);
+                    } catch (error) {
+                      console.error(`Malformed JSON for event with kind ${kind}:`, error);
+                      return null;
+                    }
+                  });
+                } else if (response.status === 404) {
+                  return null;
+                } else {
+                  throw new Error(`Error fetching event for kind ${kind} from URL: ${eventUrl}. Status: ${response.status}`);
+                }
+              }).catch((error) => {
+                console.error(`Error fetching event for kind ${kind} from URL: ${eventUrl}.`, error);
+                return null;
+              })
+            );
           }
         }
-        events = cachedKindEvents;
       }
       if (filters.authors) {
-        // Check cache for events matching the authors filter
-        const cachedAuthorEvents = [];
         for (const author of filters.authors) {
-          const authorCacheKey = `pubkey-${author}`;
-          const cachedEvents = relayCache.get(authorCacheKey);
-          if (cachedEvents) {
-            cachedAuthorEvents.push(...cachedEvents);
-          } else {
-            const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${author}`;
-            const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, 'text') || '0', 10);
-            const startIndex = (pagination.page - 1) * pagination.limit;
-            const endIndex = startIndex + pagination.limit - 1;
-            const startCount = Math.max(0, pubkeyCount - endIndex);
-            const endCount = Math.max(0, pubkeyCount - startIndex);
-            for (let i = endCount; i >= startCount; i--) {
-              const pubkeyKey = `pubkey-${author}:${i}`;
-              eventPromises.push(relayDb.get(pubkeyKey, { type: 'json' }));
-              readCount++;
-              if (readCount > maxReadCount) {
-                throw new Error("Read limit exceeded");
-              }
-            }
+          const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${author}`;
+          const cacheBustingParam = Date.now();
+          const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}?cb=${cacheBustingParam}`;
+          if (!/^[a-f0-9]{64}$/.test(author)) {
+            sendError(server, `Invalid author pubkey format: ${author}`);
+            return;
+          }
+          const pubkeyCount = parseInt(await fetch(pubkeyCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 25 + 1); i--) {
+            const pubkeyKey = `pubkey-${author}:${i}`;
+            const eventUrl = `${customDomain}/${pubkeyKey}`;
+            eventPromises.push(
+              fetch(eventUrl).then((response) => {
+                if (response.ok) {
+                  return response.text().then((data) => {
+                    try {
+                      return JSON.parse(data);
+                    } catch (error) {
+                      console.error(`Malformed JSON for event with author ${author}:`, error);
+                      return null;
+                    }
+                  });
+                } else if (response.status === 404) {
+                  return null;
+                } else {
+                  throw new Error(`Error fetching event for author ${author} from URL: ${eventUrl}. Status: ${response.status}`);
+                }
+              }).catch((error) => {
+                console.error(`Error fetching event for author ${author} from URL: ${eventUrl}.`, error);
+                return null;
+              })
+            );
           }
         }
-        events = cachedAuthorEvents;
       }
-      if (filters['#e']) {
-        // Check cache for events matching the 'e' filter
-        const cachedETagEvents = [];
-        for (const eTag of filters['#e']) {
-          const eTagCacheKey = `e-${eTag}`;
-          const cachedEvents = relayCache.get(eTagCacheKey);
-          if (cachedEvents) {
-            cachedETagEvents.push(...cachedEvents);
-          } else {
-            const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${eTag}`;
-            const eTagCount = parseInt(await relayDb.get(eTagCountKey, 'text') || '0', 10);
-            const startIndex = (pagination.page - 1) * pagination.limit;
-            const endIndex = startIndex + pagination.limit - 1;
-            const startCount = Math.max(0, eTagCount - endIndex);
-            const endCount = Math.max(0, eTagCount - startIndex);
-            for (let i = endCount; i >= startCount; i--) {
-              const eTagKey = `e-${eTag}:${i}`;
-              eventPromises.push(relayDb.get(eTagKey, { type: 'json' }));
-              readCount++;
-              if (readCount > maxReadCount) {
-                throw new Error("Read limit exceeded");
-              }
-            }
+      if (filters["#e"]) {
+        for (const eTag of filters["#e"]) {
+          const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${eTag}`;
+          const cacheBustingParam = Date.now();
+          const eTagCountUrl = `${customDomain}/${eTagCountKey}?cb=${cacheBustingParam}`;
+          if (!/^[a-f0-9]{64}$/.test(eTag)) {
+            sendError(server, `Invalid e tag format: ${eTag}`);
+            return;
+          }
+          const eTagCount = parseInt(await fetch(eTagCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          for (let i = eTagCount; i >= Math.max(1, eTagCount - 25 + 1); i--) {
+            const eTagKey = `e-${eTag}:${i}`;
+            const eventUrl = `${customDomain}/${eTagKey}`;
+            eventPromises.push(
+              fetch(eventUrl).then((response) => {
+                if (response.ok) {
+                  return response.text().then((data) => {
+                    try {
+                      return JSON.parse(data);
+                    } catch (error) {
+                      console.error(`Malformed JSON for event with e tag ${eTag}:`, error);
+                      return null;
+                    }
+                  });
+                } else if (response.status === 404) {
+                  return null;
+                } else {
+                  throw new Error(`Error fetching event for e tag ${eTag} from URL: ${eventUrl}. Status: ${response.status}`);
+                }
+              }).catch((error) => {
+                console.error(`Error fetching event for e tag ${eTag} from URL: ${eventUrl}.`, error);
+                return null;
+              })
+            );
           }
         }
-        events = cachedETagEvents;
       }
-      if (filters['#p']) {
-        // Check cache for events matching the 'p' filter
-        const cachedPTagEvents = [];
-        for (const pTag of filters['#p']) {
-          const pTagCacheKey = `p-${pTag}`;
-          const cachedEvents = relayCache.get(pTagCacheKey);
-          if (cachedEvents) {
-            cachedPTagEvents.push(...cachedEvents);
-          } else {
-            const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${pTag}`;
-            const pTagCount = parseInt(await relayDb.get(pTagCountKey, 'text') || '0', 10);
-            const startIndex = (pagination.page - 1) * pagination.limit;
-            const endIndex = startIndex + pagination.limit - 1;
-            const startCount = Math.max(0, pTagCount - endIndex);
-            const endCount = Math.max(0, pTagCount - startIndex);
-            for (let i = endCount; i >= startCount; i--) {
-              const pTagKey = `p-${pTag}:${i}`;
-              eventPromises.push(relayDb.get(pTagKey, { type: 'json' }));
-              readCount++;
-              if (readCount > maxReadCount) {
-                throw new Error("Read limit exceeded");
-              }
-            }
+      if (filters["#p"]) {
+        for (const pTag of filters["#p"]) {
+          const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${pTag}`;
+          const cacheBustingParam = Date.now();
+          const pTagCountUrl = `${customDomain}/${pTagCountKey}?cb=${cacheBustingParam}`;
+          if (!/^[a-f0-9]{64}$/.test(pTag)) {
+            sendError(server, `Invalid p tag format: ${pTag}`);
+            return;
+          }
+          const pTagCount = parseInt(await fetch(pTagCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          for (let i = pTagCount; i >= Math.max(1, pTagCount - 25 + 1); i--) {
+            const pTagKey = `p-${pTag}:${i}`;
+            const eventUrl = `${customDomain}/${pTagKey}`;
+            eventPromises.push(
+              fetch(eventUrl).then((response) => {
+                if (response.ok) {
+                  return response.text().then((data) => {
+                    try {
+                      return JSON.parse(data);
+                    } catch (error) {
+                      console.error(`Malformed JSON for event with p tag ${pTag}:`, error);
+                      return null;
+                    }
+                  });
+                } else if (response.status === 404) {
+                  return null;
+                } else {
+                  throw new Error(`Error fetching event for p tag ${pTag} from URL: ${eventUrl}. Status: ${response.status}`);
+                }
+              }).catch((error) => {
+                console.error(`Error fetching event for p tag ${pTag} from URL: ${eventUrl}.`, error);
+                return null;
+              })
+            );
           }
         }
-        events = cachedPTagEvents;
       }
       const fetchedEvents = await Promise.all(eventPromises);
-      events = [...events, ...fetchedEvents.filter((event) => event !== null)];
-      // Check if events should be included based on filters
+      events = fetchedEvents.filter((event) => event !== null);
       events = events.filter((event) => {
-        const includeEvent =
-          (!filters.ids || filters.ids.includes(event.id)) &&
-          (!filters.kinds || filters.kinds.includes(event.kind)) &&
-          (!filters.authors || filters.authors.includes(event.pubkey)) &&
-          (!filters['#e'] || event.tags.some(tag => tag[0] === 'e' && filters['#e'].includes(tag[1]))) &&
-          (!filters['#p'] || event.tags.some(tag => tag[0] === 'p' && filters['#p'].includes(tag[1]))) &&
-          (!filters.since || event.created_at >= filters.since) &&
-          (!filters.until || event.created_at <= filters.until);
+        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters["#e"] || event.tags.some((tag) => tag[0] === "e" && filters["#e"].includes(tag[1]))) && (!filters["#p"] || event.tags.some((tag) => tag[0] === "p" && filters["#p"].includes(tag[1]))) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
         return includeEvent;
       });
       relayCache.set(cacheKey, events);
     } catch (error) {
-      console.error(`Error retrieving events:`, error);
-      if (error.message === "Read limit exceeded") {
-        sendError(server, "Rate limit exceeded. Please try again later.");
-      } else {
-        events = [];
-      }
+      console.error(`Error retrieving events from R2:`, error);
+      events = [];
     }
   }
-  const totalEvents = events.length;
-  const totalPages = Math.min(Math.ceil(totalEvents / pagination.limit), maxPages);
-  const paginatedEvents = events.slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit);
-  for (const event of paginatedEvents) {
+  for (const event of events) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
   }
-  if (pagination.page >= totalPages) {
-    server.send(JSON.stringify(["EOSE", subscriptionId]));
-  }
+  server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
 
 // Handles CLOSE message
@@ -515,44 +557,77 @@ async function closeSubscription(subscriptionId, server) {
   }
 }
 
-// Handles saving event to KV store
+// Handles saving event to R2 storage
 const KIND_COUNT_KEY_PREFIX = 'kind_count_';
 const PUBKEY_COUNT_KEY_PREFIX = 'pubkey_count_';
 const ETAG_COUNT_KEY_PREFIX = 'etag_count_';
 const PTAG_COUNT_KEY_PREFIX = 'ptag_count_';
-async function saveEventToKV(event) {
+async function saveEventToR2(event) {
   const eventKey = `event:${event.id}`;
   // Rate limit duplicate event checks
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
     console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
     return;
   }
-  const storedEvent = await relayDb.get(eventKey, "json");
-  if (storedEvent) {
-    console.log(`Duplicate event: ${event.id}. Event dropped.`);
+  try {
+    const eventUrl = `${customDomain}/${eventKey}`;
+    const response = await fetch(eventUrl);
+    if (response.ok) {
+      console.log(`Duplicate event: ${event.id}. Event dropped.`);
+      return;
+    } else if (response.status !== 404) {
+      console.error(`Error checking duplicate event in R2: ${response.status}`);
+      return;
+    }
+  } catch (error) {
+    console.error(`Error checking duplicate event in R2: ${error.message}`);
+    return;
+  }
+  // Validate event JSON
+  try {
+    JSON.stringify(event);
+  } catch (error) {
+    console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
     return;
   }
   try {
     const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
-    const kindCount = parseInt(await relayDb.get(kindCountKey, 'text') || '0', 10);
+    const cacheBustingParam = Date.now();
+    const kindCountUrl = `${customDomain}/${kindCountKey}?cb=${cacheBustingParam}`;
+    let kindCount = parseInt(await fetch(kindCountUrl).then(response => response.text()).catch(() => '0'), 10);
+    if (isNaN(kindCount)) {
+      kindCount = 0;
+    }
     const kindKey = `kind-${event.kind}:${kindCount + 1}`;
     const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
-    const pubkeyCount = parseInt(await relayDb.get(pubkeyCountKey, 'text') || '0', 10);
+    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}?cb=${cacheBustingParam}`;
+    let pubkeyCount = parseInt(await fetch(pubkeyCountUrl).then(response => response.text()).catch(() => '0'), 10);
+    if (isNaN(pubkeyCount)) {
+      pubkeyCount = 0;
+    }
     const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
     const eventWithCountRef = { ...event, kindKey, pubkeyKey };
     const tagPromises = event.tags.map(async (tag) => {
       if (tag[0] === 'e') {
         const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const eTagCount = parseInt(await relayDb.get(eTagCountKey, 'text') || '0', 10);
+        const eTagCountUrl = `${customDomain}/${eTagCountKey}?cb=${cacheBustingParam}`;
+        let eTagCount = parseInt(await fetch(eTagCountUrl).then(response => response.text()).catch(() => '0'), 10);
+        if (isNaN(eTagCount)) {
+          eTagCount = 0;
+        }
         const eTagKey = `e-${tag[1]}:${eTagCount + 1}`;
-        return relayDb.put(eTagKey, JSON.stringify(event))
-          .then(() => relayDb.put(eTagCountKey, (eTagCount + 1).toString()));
+        await relayDb.put(eTagKey, JSON.stringify(event));
+        await relayDb.put(eTagCountKey, (eTagCount + 1).toString());
       } else if (tag[0] === 'p') {
         const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const pTagCount = parseInt(await relayDb.get(pTagCountKey, 'text') || '0', 10);
+        const pTagCountUrl = `${customDomain}/${pTagCountKey}?cb=${cacheBustingParam}`;
+        let pTagCount = parseInt(await fetch(pTagCountUrl).then(response => response.text()).catch(() => '0'), 10);
+        if (isNaN(pTagCount)) {
+          pTagCount = 0;
+        }
         const pTagKey = `p-${tag[1]}:${pTagCount + 1}`;
-        return relayDb.put(pTagKey, JSON.stringify(event))
-          .then(() => relayDb.put(pTagCountKey, (pTagCount + 1).toString()));
+        await relayDb.put(pTagKey, JSON.stringify(event));
+        await relayDb.put(pTagCountKey, (pTagCount + 1).toString());
       }
     });
     await Promise.all([
@@ -565,7 +640,7 @@ async function saveEventToKV(event) {
     ]);
     await blastEventToRelays(event);
   } catch (error) {
-    console.error(`Error saving event to KV: ${error.message}`);
+    console.error(`Error saving event to R2: ${error.message}`);
   }
 }
 
@@ -596,38 +671,67 @@ async function processDeletionEvent(deletionEvent, server) {
       const deletedEventIds = deletionEvent.tags
         .filter((tag) => tag[0] === "e")
         .map((tag) => tag[1]);
-      deletedEventIds.forEach(async (eventId) => {
+
+      for (const eventId of deletedEventIds) {
         const idKey = `event:${eventId}`;
-        const event = await relayDb.get(idKey, "json");
-        if (event && event.pubkey === deletionEvent.pubkey) {
-          const relatedDataKeys = [
-            event.kindKey,
-            event.pubkeyKey,
-            ...event.tags
-              .filter((tag) => tag[0] === 'e' || tag[0] === 'p')
-              .map((tag) => `${tag[0]}-${tag[1]}:${event.created_at}`),
-          ];
-          const relatedDataPromises = relatedDataKeys.map((key) => relayDb.get(key, "json"));
-          const relatedData = await Promise.all(relatedDataPromises);
-          const deletePromises = relatedDataKeys.map((key, index) => {
-            if (relatedData[index] && relatedData[index].pubkey === deletionEvent.pubkey) {
-              return relayDb.delete(key);
+        const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
+        try {
+          const response = await fetch(eventUrl);
+          if (response.ok) {
+            const event = await response.text();
+            const eventData = JSON.parse(event);
+            if (eventData && eventData.pubkey === deletionEvent.pubkey) {
+              const relatedDataKeys = [
+                eventData.kindKey,
+                eventData.pubkeyKey,
+                ...eventData.tags
+                  .filter((tag) => tag[0] === 'e' || tag[0] === 'p')
+                  .map((tag) => `${tag[0]}-${tag[1]}:${eventData.created_at}`),
+              ];
+              const deletePromises = [
+                relayDb.delete(idKey),
+                ...relatedDataKeys.map((key) => relayDb.delete(key)),
+              ];
+              await Promise.all(deletePromises);
+              const cacheKey = `event:${eventId}`;
+              relayCache.delete(cacheKey);
+              const relatedDataUrls = [
+                eventUrl,
+                ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`),
+              ];
+              const purgePromises = relatedDataUrls.map((url) => purgeCloudflareCache(url));
+              await Promise.all(purgePromises);
             }
-            return Promise.resolve();
-          });
-          await Promise.all(deletePromises);
-          await relayDb.delete(idKey);
-          // Delete event from the cache
-          const cacheKey = `event:${eventId}`;
-          relayCache.delete(cacheKey);
+          }
+        } catch (error) {
+          console.error(`Error retrieving event ${eventId} from R2:`, error);
         }
-      });
+      }
     } else {
       sendOK(server, deletionEvent.id, false, "Invalid deletion event.");
     }
   } catch (error) {
     console.error("Error processing deletion event:", error);
     sendOK(server, deletionEvent.id, false, `Error processing deletion event: ${error.message}`);
+  }
+}
+
+// Handles purging event from cache
+async function purgeCloudflareCache(url) {
+  const headers = new Headers();
+  headers.append('Authorization', `Bearer ${apiToken}`);
+  headers.append('Content-Type', 'application/json');
+  const requestOptions = {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify({ files: [url] }),
+  };
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`,
+    requestOptions
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to purge Cloudflare cache: ${response.status}`);
   }
 }
 
@@ -675,4 +779,4 @@ function sendOK(server, eventId, status, message) {
 }
 function sendError(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
-}
+} 

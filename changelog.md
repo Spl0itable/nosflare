@@ -1,3 +1,8 @@
+## v3.17.13 - 2024-05-08
+
+- New: integration with R2 bucket
+- Deprecated: use of KV store
+
 ## v2.17.13 - 2024-04-27
 
 - Hotfix: corrected deletion (kind 5) logic for indexation
