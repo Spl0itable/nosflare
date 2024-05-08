@@ -1,3 +1,5 @@
+![Nosflare](images/nosflare.png)
+
 # Nosflare
 
 Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket. 
