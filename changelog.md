@@ -1,3 +1,7 @@
+## v3.17.14 - 2024-05-09
+
+- Hotfix: improved fetching indexation count from R2 bucket
+
 ## v3.17.13 - 2024-05-08
 
 - New: integration with R2 bucket

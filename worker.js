@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.17.13",
+  version: "3.17.14",
 };
 
 // Relay favicon
@@ -388,9 +388,9 @@ async function processReq(message, server) {
       if (filters.kinds) {
         for (const kind of filters.kinds) {
           const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${kind}`;
-          const cacheBustingParam = Date.now();
-          const kindCountUrl = `${customDomain}/${kindCountKey}?cb=${cacheBustingParam}`;
-          const kindCount = parseInt(await fetch(kindCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          const kindCountResponse = await relayDb.get(kindCountKey);
+          const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
+          const kindCount = parseInt(kindCountValue, 10);
           for (let i = kindCount; i >= Math.max(1, kindCount - 25 + 1); i--) {
             const kindKey = `kind-${kind}:${i}`;
             const eventUrl = `${customDomain}/${kindKey}`;
@@ -421,13 +421,9 @@ async function processReq(message, server) {
       if (filters.authors) {
         for (const author of filters.authors) {
           const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${author}`;
-          const cacheBustingParam = Date.now();
-          const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}?cb=${cacheBustingParam}`;
-          if (!/^[a-f0-9]{64}$/.test(author)) {
-            sendError(server, `Invalid author pubkey format: ${author}`);
-            return;
-          }
-          const pubkeyCount = parseInt(await fetch(pubkeyCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+          const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
+          const pubkeyCount = parseInt(pubkeyCountValue, 10);
           for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 25 + 1); i--) {
             const pubkeyKey = `pubkey-${author}:${i}`;
             const eventUrl = `${customDomain}/${pubkeyKey}`;
@@ -458,13 +454,9 @@ async function processReq(message, server) {
       if (filters["#e"]) {
         for (const eTag of filters["#e"]) {
           const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${eTag}`;
-          const cacheBustingParam = Date.now();
-          const eTagCountUrl = `${customDomain}/${eTagCountKey}?cb=${cacheBustingParam}`;
-          if (!/^[a-f0-9]{64}$/.test(eTag)) {
-            sendError(server, `Invalid e tag format: ${eTag}`);
-            return;
-          }
-          const eTagCount = parseInt(await fetch(eTagCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          const eTagCountResponse = await relayDb.get(eTagCountKey);
+          const eTagCountValue = eTagCountResponse ? await eTagCountResponse.text() : '0';
+          const eTagCount = parseInt(eTagCountValue, 10);
           for (let i = eTagCount; i >= Math.max(1, eTagCount - 25 + 1); i--) {
             const eTagKey = `e-${eTag}:${i}`;
             const eventUrl = `${customDomain}/${eTagKey}`;
@@ -495,13 +487,9 @@ async function processReq(message, server) {
       if (filters["#p"]) {
         for (const pTag of filters["#p"]) {
           const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${pTag}`;
-          const cacheBustingParam = Date.now();
-          const pTagCountUrl = `${customDomain}/${pTagCountKey}?cb=${cacheBustingParam}`;
-          if (!/^[a-f0-9]{64}$/.test(pTag)) {
-            sendError(server, `Invalid p tag format: ${pTag}`);
-            return;
-          }
-          const pTagCount = parseInt(await fetch(pTagCountUrl).then((response) => response.text()).catch(() => "0"), 10);
+          const pTagCountResponse = await relayDb.get(pTagCountKey);
+          const pTagCountValue = pTagCountResponse ? await pTagCountResponse.text() : '0';
+          const pTagCount = parseInt(pTagCountValue, 10);
           for (let i = pTagCount; i >= Math.max(1, pTagCount - 25 + 1); i--) {
             const pTagKey = `p-${pTag}:${i}`;
             const eventUrl = `${customDomain}/${pTagKey}`;
@@ -592,16 +580,17 @@ async function saveEventToR2(event) {
   }
   try {
     const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
-    const cacheBustingParam = Date.now();
-    const kindCountUrl = `${customDomain}/${kindCountKey}?cb=${cacheBustingParam}`;
-    let kindCount = parseInt(await fetch(kindCountUrl).then(response => response.text()).catch(() => '0'), 10);
+    const kindCountResponse = await relayDb.get(kindCountKey);
+    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
+    let kindCount = parseInt(kindCountValue, 10);
     if (isNaN(kindCount)) {
       kindCount = 0;
     }
     const kindKey = `kind-${event.kind}:${kindCount + 1}`;
     const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
-    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}?cb=${cacheBustingParam}`;
-    let pubkeyCount = parseInt(await fetch(pubkeyCountUrl).then(response => response.text()).catch(() => '0'), 10);
+    const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
+    let pubkeyCount = parseInt(pubkeyCountValue, 10);
     if (isNaN(pubkeyCount)) {
       pubkeyCount = 0;
     }
@@ -610,8 +599,9 @@ async function saveEventToR2(event) {
     const tagPromises = event.tags.map(async (tag) => {
       if (tag[0] === 'e') {
         const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const eTagCountUrl = `${customDomain}/${eTagCountKey}?cb=${cacheBustingParam}`;
-        let eTagCount = parseInt(await fetch(eTagCountUrl).then(response => response.text()).catch(() => '0'), 10);
+        const eTagCountResponse = await relayDb.get(eTagCountKey);
+        const eTagCountValue = eTagCountResponse ? await eTagCountResponse.text() : '0';
+        let eTagCount = parseInt(eTagCountValue, 10);
         if (isNaN(eTagCount)) {
           eTagCount = 0;
         }
@@ -620,8 +610,9 @@ async function saveEventToR2(event) {
         await relayDb.put(eTagCountKey, (eTagCount + 1).toString());
       } else if (tag[0] === 'p') {
         const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const pTagCountUrl = `${customDomain}/${pTagCountKey}?cb=${cacheBustingParam}`;
-        let pTagCount = parseInt(await fetch(pTagCountUrl).then(response => response.text()).catch(() => '0'), 10);
+        const pTagCountResponse = await relayDb.get(pTagCountKey);
+        const pTagCountValue = pTagCountResponse ? await pTagCountResponse.text() : '0';
+        let pTagCount = parseInt(pTagCountValue, 10);
         if (isNaN(pTagCount)) {
           pTagCount = 0;
         }
