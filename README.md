@@ -16,9 +16,9 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers and KV Store enabled.
+- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers and R2 bucket enabled.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
-- [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update) (optional) or access to the Cloudflare dashboard for deployment.
+- (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update) or access to the Cloudflare dashboard for deployment.
 
 ### Dependencies
 
@@ -109,7 +109,6 @@ The current release of Nosflare is primarily focused on [basic protocol flow](ht
 - Event streaming
 - "Pay-to-relay" (charging sats for access)
 - Client authorization (NIP-42)
-- File storage through Cloudflare R2 bucket (NIP-96)
 - Encrypted DMs (NIP-44)
 
 ## Recommended Cloudflare Settings
