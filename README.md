@@ -90,7 +90,7 @@ wrangler publish
 
 #### NosflareDeploy Script
 
-A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
+A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). (USE AT YOUR OWN RISK)
 
 ## Usage
 
