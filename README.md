@@ -22,7 +22,7 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 ### Dependencies
 
-This project requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler:
+Nosflare requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations and the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler:
 
 ```
 npm install @noble/curves
@@ -90,7 +90,7 @@ wrangler publish
 
 #### NosflareDeploy Script
 
-A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy).
+A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
 
 ## Usage
 
