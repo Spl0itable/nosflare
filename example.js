@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.18.14"
+  version: "3.18.15"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2687,7 +2687,53 @@ async function processDeletionEvent(deletionEvent, server) {
               const relatedDataKeys = [
                 eventData.kindKey,
                 eventData.pubkeyKey,
-                ...eventData.tags.filter((tag) => tag[0] === "e" || tag[0] === "p").map((tag) => `${tag[0]}-${tag[1]}:${eventData.created_at}`)
+                ...eventData.tags.filter((tag) => [
+                  "a",
+                  "d",
+                  "e",
+                  "g",
+                  "i",
+                  "k",
+                  "l",
+                  "L",
+                  "m",
+                  "p",
+                  "q",
+                  "r",
+                  "t",
+                  "alt",
+                  "amount",
+                  "bolt11",
+                  "challenge",
+                  "client",
+                  "clone",
+                  "content-warning",
+                  "delegation",
+                  "description",
+                  "emoji",
+                  "encrypted",
+                  "expiration",
+                  "goal",
+                  "image",
+                  "imeta",
+                  "lnurl",
+                  "location",
+                  "name",
+                  "nonce",
+                  "preimage",
+                  "price",
+                  "proxy",
+                  "published_at",
+                  "relay",
+                  "relays",
+                  "server",
+                  "subject",
+                  "summary",
+                  "thumb",
+                  "title",
+                  "web",
+                  "zap"
+                ].includes(tag[0])).map((tag) => `${tag[0]}-${tag[1]}:${eventData.created_at}`)
               ];
               const deletePromises = [
                 relayDb.delete(idKey),

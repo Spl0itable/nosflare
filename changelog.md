@@ -1,3 +1,7 @@
+## v3.18.15 - 2024-06-05
+
+- Hotfix: updated deletion process to support all tags
+
 ## v3.18.14 - 2024-06-05
 
 - Added: support for all standardized tags
