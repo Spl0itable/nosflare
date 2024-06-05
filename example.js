@@ -2021,9 +2021,9 @@ var relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.17.14"
+  version: "3.18.14"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2073,8 +2073,7 @@ function containsBlockedContent(event) {
   return false;
 }
 var blastRelays = [
-  "wss://nostr.mutinywallet.com",
-  "wss://bostr.online"
+  "wss://nostr.mutinywallet.com"
   // ... add more relays
 ];
 addEventListener("fetch", (event) => {
@@ -2235,6 +2234,9 @@ async function handleWebSocket(event, request) {
             case "REQ":
               await processReq(message, server);
               break;
+            case "COUNT":
+              await processCount(message, server);
+              break;
             case "CLOSE":
               await closeSubscription(message[1], server);
               break;
@@ -2362,7 +2364,7 @@ async function processReq(message, server) {
       }
       if (filters.kinds) {
         for (const kind of filters.kinds) {
-          const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${kind}`;
+          const kindCountKey = `kind_count_${kind}`;
           const kindCountResponse = await relayDb.get(kindCountKey);
           const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
           const kindCount = parseInt(kindCountValue, 10);
@@ -2395,7 +2397,7 @@ async function processReq(message, server) {
       }
       if (filters.authors) {
         for (const author of filters.authors) {
-          const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${author}`;
+          const pubkeyCountKey = `pubkey_count_${author}`;
           const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
           const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
           const pubkeyCount = parseInt(pubkeyCountValue, 10);
@@ -2426,76 +2428,47 @@ async function processReq(message, server) {
           }
         }
       }
-      if (filters["#e"]) {
-        for (const eTag of filters["#e"]) {
-          const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${eTag}`;
-          const eTagCountResponse = await relayDb.get(eTagCountKey);
-          const eTagCountValue = eTagCountResponse ? await eTagCountResponse.text() : "0";
-          const eTagCount = parseInt(eTagCountValue, 10);
-          for (let i = eTagCount; i >= Math.max(1, eTagCount - 25 + 1); i--) {
-            const eTagKey = `e-${eTag}:${i}`;
-            const eventUrl = `${customDomain}/${eTagKey}`;
-            eventPromises.push(
-              fetch(eventUrl).then((response) => {
-                if (response.ok) {
-                  return response.text().then((data) => {
-                    try {
-                      return JSON.parse(data);
-                    } catch (error) {
-                      console.error(`Malformed JSON for event with e tag ${eTag}:`, error);
-                      return null;
-                    }
-                  });
-                } else if (response.status === 404) {
+      if (filters.tags) {
+        for (const [tagName, tagValues] of Object.entries(filters.tags)) {
+          for (const tagValue of tagValues) {
+            const tagCountKey = `${tagName}_count_${tagValue}`;
+            const tagCountResponse = await relayDb.get(tagCountKey);
+            const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+            const tagCount = parseInt(tagCountValue, 10);
+            for (let i = tagCount; i >= Math.max(1, tagCount - 25 + 1); i--) {
+              const tagKey = `${tagName}-${tagValue}:${i}`;
+              const eventUrl = `${customDomain}/${tagKey}`;
+              eventPromises.push(
+                fetch(eventUrl).then((response) => {
+                  if (response.ok) {
+                    return response.text().then((data) => {
+                      try {
+                        return JSON.parse(data);
+                      } catch (error) {
+                        console.error(`Malformed JSON for event with tag ${tagName}:${tagValue}:`, error);
+                        return null;
+                      }
+                    });
+                  } else if (response.status === 404) {
+                    return null;
+                  } else {
+                    throw new Error(`Error fetching event for tag ${tagName}:${tagValue} from URL: ${eventUrl}. Status: ${response.status}`);
+                  }
+                }).catch((error) => {
+                  console.error(`Error fetching event for tag ${tagName}:${tagValue} from URL: ${eventUrl}.`, error);
                   return null;
-                } else {
-                  throw new Error(`Error fetching event for e tag ${eTag} from URL: ${eventUrl}. Status: ${response.status}`);
-                }
-              }).catch((error) => {
-                console.error(`Error fetching event for e tag ${eTag} from URL: ${eventUrl}.`, error);
-                return null;
-              })
-            );
-          }
-        }
-      }
-      if (filters["#p"]) {
-        for (const pTag of filters["#p"]) {
-          const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${pTag}`;
-          const pTagCountResponse = await relayDb.get(pTagCountKey);
-          const pTagCountValue = pTagCountResponse ? await pTagCountResponse.text() : "0";
-          const pTagCount = parseInt(pTagCountValue, 10);
-          for (let i = pTagCount; i >= Math.max(1, pTagCount - 25 + 1); i--) {
-            const pTagKey = `p-${pTag}:${i}`;
-            const eventUrl = `${customDomain}/${pTagKey}`;
-            eventPromises.push(
-              fetch(eventUrl).then((response) => {
-                if (response.ok) {
-                  return response.text().then((data) => {
-                    try {
-                      return JSON.parse(data);
-                    } catch (error) {
-                      console.error(`Malformed JSON for event with p tag ${pTag}:`, error);
-                      return null;
-                    }
-                  });
-                } else if (response.status === 404) {
-                  return null;
-                } else {
-                  throw new Error(`Error fetching event for p tag ${pTag} from URL: ${eventUrl}. Status: ${response.status}`);
-                }
-              }).catch((error) => {
-                console.error(`Error fetching event for p tag ${pTag} from URL: ${eventUrl}.`, error);
-                return null;
-              })
-            );
+                })
+              );
+            }
           }
         }
       }
       const fetchedEvents = await Promise.all(eventPromises);
       events = fetchedEvents.filter((event) => event !== null);
       events = events.filter((event) => {
-        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters["#e"] || event.tags.some((tag) => tag[0] === "e" && filters["#e"].includes(tag[1]))) && (!filters["#p"] || event.tags.some((tag) => tag[0] === "p" && filters["#p"].includes(tag[1]))) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
+        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.tags || Object.entries(filters.tags).every(
+          ([tagName, tagValues]) => event.tags.some((tag) => tag[0] === tagName && tagValues.includes(tag[1]))
+        )) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
         return includeEvent;
       });
       relayCache.set(cacheKey, events);
@@ -2509,6 +2482,48 @@ async function processReq(message, server) {
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
+async function processCount(message, server) {
+  if (!reqRateLimiter.removeToken()) {
+    sendError(server, "Rate limit exceeded. Please try again later.");
+    return;
+  }
+  const subscriptionId = message[1];
+  const filters = message[2] || {};
+  let count = 0;
+  try {
+    const eventPromises = [];
+    if (filters.kinds) {
+      for (const kind of filters.kinds) {
+        const kindCountKey = `kind_count_${kind}`;
+        const kindCountResponse = await relayDb.get(kindCountKey);
+        const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
+        count += parseInt(kindCountValue, 10);
+      }
+    }
+    if (filters.authors) {
+      for (const author of filters.authors) {
+        const pubkeyCountKey = `pubkey_count_${author}`;
+        const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+        const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
+        count += parseInt(pubkeyCountValue, 10);
+      }
+    }
+    if (filters.tags) {
+      for (const [tagName, tagValues] of Object.entries(filters.tags)) {
+        for (const tagValue of tagValues) {
+          const tagCountKey = `${tagName}_count_${tagValue}`;
+          const tagCountResponse = await relayDb.get(tagCountKey);
+          const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+          count += parseInt(tagCountValue, 10);
+        }
+      }
+    }
+    server.send(JSON.stringify(["COUNT", subscriptionId, { count }]));
+  } catch (error) {
+    console.error(`Error processing count request:`, error);
+    sendError(server, "Failed to process count request");
+  }
+}
 async function closeSubscription(subscriptionId, server) {
   try {
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -2517,10 +2532,6 @@ async function closeSubscription(subscriptionId, server) {
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
   }
 }
-var KIND_COUNT_KEY_PREFIX = "kind_count_";
-var PUBKEY_COUNT_KEY_PREFIX = "pubkey_count_";
-var ETAG_COUNT_KEY_PREFIX = "etag_count_";
-var PTAG_COUNT_KEY_PREFIX = "ptag_count_";
 async function saveEventToR2(event) {
   const eventKey = `event:${event.id}`;
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
@@ -2548,7 +2559,7 @@ async function saveEventToR2(event) {
     return;
   }
   try {
-    const kindCountKey = `${KIND_COUNT_KEY_PREFIX}${event.kind}`;
+    const kindCountKey = `kind_count_${event.kind}`;
     const kindCountResponse = await relayDb.get(kindCountKey);
     const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
     let kindCount = parseInt(kindCountValue, 10);
@@ -2556,7 +2567,7 @@ async function saveEventToR2(event) {
       kindCount = 0;
     }
     const kindKey = `kind-${event.kind}:${kindCount + 1}`;
-    const pubkeyCountKey = `${PUBKEY_COUNT_KEY_PREFIX}${event.pubkey}`;
+    const pubkeyCountKey = `pubkey_count_${event.pubkey}`;
     const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
     const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
     let pubkeyCount = parseInt(pubkeyCountValue, 10);
@@ -2566,28 +2577,67 @@ async function saveEventToR2(event) {
     const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
     const eventWithCountRef = { ...event, kindKey, pubkeyKey };
     const tagPromises = event.tags.map(async (tag) => {
-      if (tag[0] === "e") {
-        const eTagCountKey = `${ETAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const eTagCountResponse = await relayDb.get(eTagCountKey);
-        const eTagCountValue = eTagCountResponse ? await eTagCountResponse.text() : "0";
-        let eTagCount = parseInt(eTagCountValue, 10);
-        if (isNaN(eTagCount)) {
-          eTagCount = 0;
-        }
-        const eTagKey = `e-${tag[1]}:${eTagCount + 1}`;
-        await relayDb.put(eTagKey, JSON.stringify(event));
-        await relayDb.put(eTagCountKey, (eTagCount + 1).toString());
-      } else if (tag[0] === "p") {
-        const pTagCountKey = `${PTAG_COUNT_KEY_PREFIX}${tag[1]}`;
-        const pTagCountResponse = await relayDb.get(pTagCountKey);
-        const pTagCountValue = pTagCountResponse ? await pTagCountResponse.text() : "0";
-        let pTagCount = parseInt(pTagCountValue, 10);
-        if (isNaN(pTagCount)) {
-          pTagCount = 0;
-        }
-        const pTagKey = `p-${tag[1]}:${pTagCount + 1}`;
-        await relayDb.put(pTagKey, JSON.stringify(event));
-        await relayDb.put(pTagCountKey, (pTagCount + 1).toString());
+      const tagName = tag[0];
+      const tagValue = tag[1];
+      switch (tagName) {
+        case "a":
+        case "d":
+        case "e":
+        case "g":
+        case "i":
+        case "k":
+        case "l":
+        case "L":
+        case "m":
+        case "p":
+        case "q":
+        case "r":
+        case "t":
+        case "alt":
+        case "amount":
+        case "bolt11":
+        case "challenge":
+        case "client":
+        case "clone":
+        case "content-warning":
+        case "delegation":
+        case "description":
+        case "emoji":
+        case "encrypted":
+        case "expiration":
+        case "goal":
+        case "image":
+        case "imeta":
+        case "lnurl":
+        case "location":
+        case "name":
+        case "nonce":
+        case "preimage":
+        case "price":
+        case "proxy":
+        case "published_at":
+        case "relay":
+        case "relays":
+        case "server":
+        case "subject":
+        case "summary":
+        case "thumb":
+        case "title":
+        case "web":
+        case "zap":
+          const tagCountKey = `${tagName}_count_${tagValue}`;
+          const tagCountResponse = await relayDb.get(tagCountKey);
+          const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+          let tagCount = parseInt(tagCountValue, 10);
+          if (isNaN(tagCount)) {
+            tagCount = 0;
+          }
+          const tagKey = `${tagName}-${tagValue}:${tagCount + 1}`;
+          await relayDb.put(tagKey, JSON.stringify(event));
+          await relayDb.put(tagCountKey, (tagCount + 1).toString());
+          break;
+        default:
+          break;
       }
     });
     await Promise.all([
@@ -2712,8 +2762,7 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0)
-    throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);

@@ -1,3 +1,8 @@
+## v3.18.14 - 2024-06-05
+
+- Added: support for all standardized tags
+- Added: suport for COUNT messages (NIP-45)
+
 ## v3.17.14 - 2024-05-09
 
 - Hotfix: improved fetching indexation count from R2 bucket
