@@ -1,3 +1,8 @@
+## v3.18.18 - 2024-06-06
+
+- Hotfix: support aA-zZ tags
+- Hotfix: corrected deletion bug
+
 ## v3.18.17 - 2024-06-06
 
 - Tweaked: added new tags to worker cache

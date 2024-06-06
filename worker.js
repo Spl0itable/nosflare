@@ -8,7 +8,7 @@ const relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.18.17",
+  version: "3.18.18",
 };
 
 // Relay favicon
@@ -180,10 +180,7 @@ function generateSubscriptionCacheKey(filters) {
     let value = filters[key];
     if (Array.isArray(value)) {
       if (key === 'kinds' || key === 'authors' || key === 'ids' ||
-          key === '#e' || key === '#p' || key === '#a' || key === '#d' ||
-          key === '#g' || key === '#i' || key === '#k' || key === '#l' ||
-          key === '#L' || key === '#m' || key === '#q' || key === '#r' ||
-          key === '#t') {
+        key.startsWith('#') && /^#[a-zA-Z]$/.test(key)) {
         value = value.sort().join(',');
       } else {
         value = value.sort();
@@ -451,21 +448,15 @@ async function processReq(message, server) {
           }
         }
       }
-      const tagQueries = [
-        { key: 'a', label: 'a' },
-        { key: 'd', label: 'd' },
-        { key: 'e', label: 'e' },
-        { key: 'g', label: 'g' },
-        { key: 'i', label: 'i' },
-        { key: 'k', label: 'k' },
-        { key: 'l', label: 'l' },
-        { key: 'L', label: 'L' },
-        { key: 'm', label: 'm' },
-        { key: 'p', label: 'p' },
-        { key: 'q', label: 'q' },
-        { key: 'r', label: 'r' },
-        { key: 't', label: 't' },
-      ];
+      const tagQueries = Array.from({ length: 26 }, (_, i) => ({
+        key: String.fromCharCode(97 + i),
+        label: String.fromCharCode(97 + i),
+      })).concat(
+        Array.from({ length: 26 }, (_, i) => ({
+          key: String.fromCharCode(65 + i),
+          label: String.fromCharCode(65 + i),
+        }))
+      );
       for (const query of tagQueries) {
         if (filters[`#${query.key}`]) {
           for (const tag of filters[`#${query.key}`]) {
@@ -593,36 +584,27 @@ async function saveEventToR2(event) {
     const tagPromises = event.tags.map(async (tag) => {
       const tagName = tag[0];
       const tagValue = tag[1];
-      switch (tagName) {
-        case 'a':
-        case 'd':
-        case 'e':
-        case 'g':
-        case 'i':
-        case 'k':
-        case 'l':
-        case 'L':
-        case 'm':
-        case 'p':
-        case 'q':
-        case 'r':
-        case 't':
-          // Handle tags
-          const tagCountKey = `${tagName}_count_${tagValue}`;
-          const tagCountResponse = await relayDb.get(tagCountKey);
-          const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
-          let tagCount = parseInt(tagCountValue, 10);
-          if (isNaN(tagCount)) {
-            tagCount = 0;
-          }
-          const tagKey = `${tagName}-${tagValue}:${tagCount + 1}`;
-          await relayDb.put(tagKey, JSON.stringify(event));
-          await relayDb.put(tagCountKey, (tagCount + 1).toString());
-          break;
-        default:
-          // Ignore unknown tags
-          break;
+      if (tagName && tagValue && /^[a-zA-Z]$/.test(tagName)) {
+        const tagCountKey = `${tagName}_count_${tagValue}`;
+        const tagCountResponse = await relayDb.get(tagCountKey);
+        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
+        let tagCount = parseInt(tagCountValue, 10);
+        if (isNaN(tagCount)) {
+          tagCount = 0;
+        }
+        const tagKey = `${tagName}-${tagValue}:${tagCount + 1}`;
+        eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
+        await relayDb.put(tagKey, JSON.stringify(event));
+        await relayDb.put(tagCountKey, (tagCount + 1).toString());
       }
+    });
+    await Promise.all(tagPromises);
+    eventWithCountRef.tags = event.tags.map((tag) => {
+      const [tagName, tagValue] = tag;
+      if (tagName && tagValue && /^[a-zA-Z]$/.test(tagName)) {
+        return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
+      }
+      return tag;
     });
     await Promise.all([
       relayDb.put(kindKey, JSON.stringify(event)),
@@ -630,7 +612,6 @@ async function saveEventToR2(event) {
       relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
       relayDb.put(kindCountKey, (kindCount + 1).toString()),
       relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
-      ...tagPromises,
     ]);
   } catch (error) {
     console.error(`Error saving event to R2: ${error.message}`);
@@ -659,11 +640,9 @@ async function processDeletionEvent(deletionEvent, server) {
                 eventData.kindKey,
                 eventData.pubkeyKey,
                 ...eventData.tags
-                  .filter((tag) => [
-                    'a', 'd', 'e', 'g', 'i', 'k', 'l', 'L', 'm', 'p', 'q', 'r', 't'
-                  ].includes(tag[0]))
-                  .map((tag) => `${tag[0]}-${tag[1]}:${eventData.created_at}`),
-              ];
+                  .filter((tag) => tag.length === 3 && /^[a-zA-Z]$/.test(tag[0]))
+                  .map((tag) => tag[2]),
+              ].filter((key) => key !== undefined);
               const deletePromises = [
                 relayDb.delete(idKey),
                 ...relatedDataKeys.map((key) => relayDb.delete(key)),
