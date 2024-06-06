@@ -2021,9 +2021,9 @@ var relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.18.16"
+  version: "3.18.17"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2072,10 +2072,6 @@ function containsBlockedContent(event) {
   }
   return false;
 }
-var blastRelays = [
-  "wss://nostr.mutinywallet.com"
-  // ... add more relays
-];
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -2175,7 +2171,7 @@ function generateSubscriptionCacheKey(filters) {
   const cacheKey = filterKeys.map((key) => {
     let value = filters[key];
     if (Array.isArray(value)) {
-      if (key === "kinds" || key === "authors" || key === "#e" || key === "#p" || key === "ids") {
+      if (key === "kinds" || key === "authors" || key === "ids" || key === "#e" || key === "#p" || key === "#a" || key === "#d" || key === "#g" || key === "#i" || key === "#k" || key === "#l" || key === "#L" || key === "#m" || key === "#q" || key === "#r" || key === "#t") {
         value = value.sort().join(",");
       } else {
         value = value.sort();
@@ -2233,9 +2229,6 @@ async function handleWebSocket(event, request) {
               break;
             case "REQ":
               await processReq(message, server);
-              break;
-            case "COUNT":
-              await processCount(message, server);
               break;
             case "CLOSE":
               await closeSubscription(message[1], server);
@@ -2353,6 +2346,7 @@ async function processReq(message, server) {
               } else if (response.status === 404) {
                 return null;
               } else {
+                response.body.cancel();
                 throw new Error(`Error fetching event with ID ${id} from URL: ${eventUrl}. Status: ${response.status}`);
               }
             }).catch((error) => {
@@ -2385,6 +2379,7 @@ async function processReq(message, server) {
                 } else if (response.status === 404) {
                   return null;
                 } else {
+                  response.body.cancel();
                   throw new Error(`Error fetching event for kind ${kind} from URL: ${eventUrl}. Status: ${response.status}`);
                 }
               }).catch((error) => {
@@ -2418,6 +2413,7 @@ async function processReq(message, server) {
                 } else if (response.status === 404) {
                   return null;
                 } else {
+                  response.body.cancel();
                   throw new Error(`Error fetching event for author ${author} from URL: ${eventUrl}. Status: ${response.status}`);
                 }
               }).catch((error) => {
@@ -2441,39 +2437,7 @@ async function processReq(message, server) {
         { key: "p", label: "p" },
         { key: "q", label: "q" },
         { key: "r", label: "r" },
-        { key: "t", label: "t" },
-        { key: "alt", label: "alt" },
-        { key: "amount", label: "amount" },
-        { key: "bolt11", label: "bolt11" },
-        { key: "challenge", label: "challenge" },
-        { key: "client", label: "client" },
-        { key: "clone", label: "clone" },
-        { key: "content-warning", label: "content-warning" },
-        { key: "delegation", label: "delegation" },
-        { key: "description", label: "description" },
-        { key: "emoji", label: "emoji" },
-        { key: "encrypted", label: "encrypted" },
-        { key: "expiration", label: "expiration" },
-        { key: "goal", label: "goal" },
-        { key: "image", label: "image" },
-        { key: "imeta", label: "imeta" },
-        { key: "lnurl", label: "lnurl" },
-        { key: "location", label: "location" },
-        { key: "name", label: "name" },
-        { key: "nonce", label: "nonce" },
-        { key: "preimage", label: "preimage" },
-        { key: "price", label: "price" },
-        { key: "proxy", label: "proxy" },
-        { key: "published_at", label: "published_at" },
-        { key: "relay", label: "relay" },
-        { key: "relays", label: "relays" },
-        { key: "server", label: "server" },
-        { key: "subject", label: "subject" },
-        { key: "summary", label: "summary" },
-        { key: "thumb", label: "thumb" },
-        { key: "title", label: "title" },
-        { key: "web", label: "web" },
-        { key: "zap", label: "zap" }
+        { key: "t", label: "t" }
       ];
       for (const query of tagQueries) {
         if (filters[`#${query.key}`]) {
@@ -2499,6 +2463,7 @@ async function processReq(message, server) {
                   } else if (response.status === 404) {
                     return null;
                   } else {
+                    response.body.cancel();
                     throw new Error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}. Status: ${response.status}`);
                   }
                 }).catch((error) => {
@@ -2535,48 +2500,6 @@ async function processReq(message, server) {
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
-async function processCount(message, server) {
-  if (!reqRateLimiter.removeToken()) {
-    sendError(server, "Rate limit exceeded. Please try again later.");
-    return;
-  }
-  const subscriptionId = message[1];
-  const filters = message[2] || {};
-  let count = 0;
-  try {
-    const eventPromises = [];
-    if (filters.kinds) {
-      for (const kind of filters.kinds) {
-        const kindCountKey = `kind_count_${kind}`;
-        const kindCountResponse = await relayDb.get(kindCountKey);
-        const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
-        count += parseInt(kindCountValue, 10);
-      }
-    }
-    if (filters.authors) {
-      for (const author of filters.authors) {
-        const pubkeyCountKey = `pubkey_count_${author}`;
-        const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-        const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
-        count += parseInt(pubkeyCountValue, 10);
-      }
-    }
-    if (filters.tags) {
-      for (const [tagName, tagValues] of Object.entries(filters.tags)) {
-        for (const tagValue of tagValues) {
-          const tagCountKey = `${tagName}_count_${tagValue}`;
-          const tagCountResponse = await relayDb.get(tagCountKey);
-          const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
-          count += parseInt(tagCountValue, 10);
-        }
-      }
-    }
-    server.send(JSON.stringify(["COUNT", subscriptionId, { count }]));
-  } catch (error) {
-    console.error(`Error processing count request:`, error);
-    sendError(server, "Failed to process count request");
-  }
-}
 async function closeSubscription(subscriptionId, server) {
   try {
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -2599,6 +2522,7 @@ async function saveEventToR2(event) {
       return;
     } else if (response.status !== 404) {
       console.error(`Error checking duplicate event in R2: ${response.status}`);
+      response.body.cancel();
       return;
     }
   } catch (error) {
@@ -2646,38 +2570,6 @@ async function saveEventToR2(event) {
         case "q":
         case "r":
         case "t":
-        case "alt":
-        case "amount":
-        case "bolt11":
-        case "challenge":
-        case "client":
-        case "clone":
-        case "content-warning":
-        case "delegation":
-        case "description":
-        case "emoji":
-        case "encrypted":
-        case "expiration":
-        case "goal":
-        case "image":
-        case "imeta":
-        case "lnurl":
-        case "location":
-        case "name":
-        case "nonce":
-        case "preimage":
-        case "price":
-        case "proxy":
-        case "published_at":
-        case "relay":
-        case "relays":
-        case "server":
-        case "subject":
-        case "summary":
-        case "thumb":
-        case "title":
-        case "web":
-        case "zap":
           const tagCountKey = `${tagName}_count_${tagValue}`;
           const tagCountResponse = await relayDb.get(tagCountKey);
           const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
@@ -2701,26 +2593,8 @@ async function saveEventToR2(event) {
       relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
       ...tagPromises
     ]);
-    await blastEventToRelays(event);
   } catch (error) {
     console.error(`Error saving event to R2: ${error.message}`);
-  }
-}
-async function blastEventToRelays(event) {
-  for (const relayUrl of blastRelays) {
-    try {
-      const socket = new WebSocket(relayUrl);
-      socket.addEventListener("open", () => {
-        const eventMessage = JSON.stringify(["EVENT", event]);
-        socket.send(eventMessage);
-        socket.close();
-      });
-      socket.addEventListener("error", (error) => {
-        console.error(`Error blasting event to relay ${relayUrl}:`, error);
-      });
-    } catch (error) {
-      console.error(`Error blasting event to relay ${relayUrl}:`, error);
-    }
   }
 }
 async function processDeletionEvent(deletionEvent, server) {
@@ -2753,39 +2627,7 @@ async function processDeletionEvent(deletionEvent, server) {
                   "p",
                   "q",
                   "r",
-                  "t",
-                  "alt",
-                  "amount",
-                  "bolt11",
-                  "challenge",
-                  "client",
-                  "clone",
-                  "content-warning",
-                  "delegation",
-                  "description",
-                  "emoji",
-                  "encrypted",
-                  "expiration",
-                  "goal",
-                  "image",
-                  "imeta",
-                  "lnurl",
-                  "location",
-                  "name",
-                  "nonce",
-                  "preimage",
-                  "price",
-                  "proxy",
-                  "published_at",
-                  "relay",
-                  "relays",
-                  "server",
-                  "subject",
-                  "summary",
-                  "thumb",
-                  "title",
-                  "web",
-                  "zap"
+                  "t"
                 ].includes(tag[0])).map((tag) => `${tag[0]}-${tag[1]}:${eventData.created_at}`)
               ];
               const deletePromises = [

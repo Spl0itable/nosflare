@@ -1,3 +1,11 @@
+## v3.18.17 - 2024-06-06
+
+- Tweaked: added new tags to worker cache
+- Tweaked: added minor improvement for worker limits
+- Removed: unneccessary tags
+- Removed: COUNT messages (NIP-45)
+- Removed: blasting to relays
+
 ## v3.18.16 - 2024-06-06
 
 - Hotfix: corrected bug that showed unrelated tags to user
