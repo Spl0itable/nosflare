@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.18.15"
+  version: "3.18.16"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2428,15 +2428,62 @@ async function processReq(message, server) {
           }
         }
       }
-      if (filters.tags) {
-        for (const [tagName, tagValues] of Object.entries(filters.tags)) {
-          for (const tagValue of tagValues) {
-            const tagCountKey = `${tagName}_count_${tagValue}`;
+      const tagQueries = [
+        { key: "a", label: "a" },
+        { key: "d", label: "d" },
+        { key: "e", label: "e" },
+        { key: "g", label: "g" },
+        { key: "i", label: "i" },
+        { key: "k", label: "k" },
+        { key: "l", label: "l" },
+        { key: "L", label: "L" },
+        { key: "m", label: "m" },
+        { key: "p", label: "p" },
+        { key: "q", label: "q" },
+        { key: "r", label: "r" },
+        { key: "t", label: "t" },
+        { key: "alt", label: "alt" },
+        { key: "amount", label: "amount" },
+        { key: "bolt11", label: "bolt11" },
+        { key: "challenge", label: "challenge" },
+        { key: "client", label: "client" },
+        { key: "clone", label: "clone" },
+        { key: "content-warning", label: "content-warning" },
+        { key: "delegation", label: "delegation" },
+        { key: "description", label: "description" },
+        { key: "emoji", label: "emoji" },
+        { key: "encrypted", label: "encrypted" },
+        { key: "expiration", label: "expiration" },
+        { key: "goal", label: "goal" },
+        { key: "image", label: "image" },
+        { key: "imeta", label: "imeta" },
+        { key: "lnurl", label: "lnurl" },
+        { key: "location", label: "location" },
+        { key: "name", label: "name" },
+        { key: "nonce", label: "nonce" },
+        { key: "preimage", label: "preimage" },
+        { key: "price", label: "price" },
+        { key: "proxy", label: "proxy" },
+        { key: "published_at", label: "published_at" },
+        { key: "relay", label: "relay" },
+        { key: "relays", label: "relays" },
+        { key: "server", label: "server" },
+        { key: "subject", label: "subject" },
+        { key: "summary", label: "summary" },
+        { key: "thumb", label: "thumb" },
+        { key: "title", label: "title" },
+        { key: "web", label: "web" },
+        { key: "zap", label: "zap" }
+      ];
+      for (const query of tagQueries) {
+        if (filters[`#${query.key}`]) {
+          for (const tag of filters[`#${query.key}`]) {
+            const tagCountKey = `${query.label}_count_${tag}`;
             const tagCountResponse = await relayDb.get(tagCountKey);
             const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
             const tagCount = parseInt(tagCountValue, 10);
             for (let i = tagCount; i >= Math.max(1, tagCount - 25 + 1); i--) {
-              const tagKey = `${tagName}-${tagValue}:${i}`;
+              const tagKey = `${query.label}-${tag}:${i}`;
               const eventUrl = `${customDomain}/${tagKey}`;
               eventPromises.push(
                 fetch(eventUrl).then((response) => {
@@ -2445,17 +2492,17 @@ async function processReq(message, server) {
                       try {
                         return JSON.parse(data);
                       } catch (error) {
-                        console.error(`Malformed JSON for event with tag ${tagName}:${tagValue}:`, error);
+                        console.error(`Malformed JSON for event with ${query.label} tag ${tag}:`, error);
                         return null;
                       }
                     });
                   } else if (response.status === 404) {
                     return null;
                   } else {
-                    throw new Error(`Error fetching event for tag ${tagName}:${tagValue} from URL: ${eventUrl}. Status: ${response.status}`);
+                    throw new Error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}. Status: ${response.status}`);
                   }
                 }).catch((error) => {
-                  console.error(`Error fetching event for tag ${tagName}:${tagValue} from URL: ${eventUrl}.`, error);
+                  console.error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}.`, error);
                   return null;
                 })
               );
@@ -2466,9 +2513,15 @@ async function processReq(message, server) {
       const fetchedEvents = await Promise.all(eventPromises);
       events = fetchedEvents.filter((event) => event !== null);
       events = events.filter((event) => {
-        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.tags || Object.entries(filters.tags).every(
-          ([tagName, tagValues]) => event.tags.some((tag) => tag[0] === tagName && tagValues.includes(tag[1]))
-        )) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
+        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
+        const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith("#"));
+        for (const [tagKey, tagValues] of tagFilters) {
+          const tagName = tagKey.slice(1);
+          const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
+          if (!tagValues.some((value) => eventTags.includes(value))) {
+            return false;
+          }
+        }
         return includeEvent;
       });
       relayCache.set(cacheKey, events);
@@ -2808,7 +2861,8 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0)
+    throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);

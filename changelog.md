@@ -1,3 +1,7 @@
+## v3.18.16 - 2024-06-06
+
+- Hotfix: corrected bug that showed unrelated tags to user
+
 ## v3.18.15 - 2024-06-05
 
 - Hotfix: updated deletion process to support all tags
