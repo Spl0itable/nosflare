@@ -2021,9 +2021,9 @@ var relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.18.18"
+  version: "3.19.18"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2072,6 +2072,27 @@ function containsBlockedContent(event) {
   }
   return false;
 }
+var blockedTags = /* @__PURE__ */ new Set([
+  // ... tags that are explicitly blocked
+]);
+var allowedTags = /* @__PURE__ */ new Set([
+  "p",
+  "e"
+  // ... tags that are explicitly allowed
+]);
+function isTagAllowed(tag) {
+  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
+    return false;
+  }
+  return !blockedTags.has(tag);
+}
+function isTagBlocked(tag) {
+  return blockedTags.has(tag);
+}
+var blastRelays = [
+  "wss://nostr.mutinywallet.com"
+  // ... add more relays
+];
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -2230,6 +2251,9 @@ async function handleWebSocket(event, request) {
             case "REQ":
               await processReq(message, server);
               break;
+            case "COUNT":
+              await processCount(message, server);
+              break;
             case "CLOSE":
               await closeSubscription(message[1], server);
               break;
@@ -2286,6 +2310,7 @@ async function processEvent(event, server) {
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
       sendOK(server, event.id, true, "Event received successfully.");
+      blastEventToRelays(event);
       saveEventToR2(event).catch((error) => {
         console.error("Error saving event to R2:", error);
       });
@@ -2330,7 +2355,7 @@ async function processReq(message, server) {
       const eventPromises = [];
       if (filters.ids) {
         for (const id of filters.ids.slice(0, 25)) {
-          const idKey = `event:${id}`;
+          const idKey = `events/event:${id}`;
           const eventUrl = `${customDomain}/${idKey}`;
           eventPromises.push(
             fetch(eventUrl).then((response) => {
@@ -2358,12 +2383,13 @@ async function processReq(message, server) {
       }
       if (filters.kinds) {
         for (const kind of filters.kinds) {
-          const kindCountKey = `kind_count_${kind}`;
-          const kindCountResponse = await relayDb.get(kindCountKey);
-          const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
+          const kindCountKey = `count/kind_count_${kind}`;
+          const kindCountUrl = `${customDomain}/${kindCountKey}`;
+          const kindCountResponse = await fetch(kindCountUrl);
+          const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
           const kindCount = parseInt(kindCountValue, 10);
           for (let i = kindCount; i >= Math.max(1, kindCount - 25 + 1); i--) {
-            const kindKey = `kind-${kind}:${i}`;
+            const kindKey = `kinds/kind-${kind}:${i}`;
             const eventUrl = `${customDomain}/${kindKey}`;
             eventPromises.push(
               fetch(eventUrl).then((response) => {
@@ -2392,12 +2418,13 @@ async function processReq(message, server) {
       }
       if (filters.authors) {
         for (const author of filters.authors) {
-          const pubkeyCountKey = `pubkey_count_${author}`;
-          const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-          const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
+          const pubkeyCountKey = `count/pubkey_count_${author}`;
+          const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
+          const pubkeyCountResponse = await fetch(pubkeyCountUrl);
+          const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
           const pubkeyCount = parseInt(pubkeyCountValue, 10);
           for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 25 + 1); i--) {
-            const pubkeyKey = `pubkey-${author}:${i}`;
+            const pubkeyKey = `pubkeys/pubkey-${author}:${i}`;
             const eventUrl = `${customDomain}/${pubkeyKey}`;
             eventPromises.push(
               fetch(eventUrl).then((response) => {
@@ -2436,12 +2463,13 @@ async function processReq(message, server) {
       for (const query of tagQueries) {
         if (filters[`#${query.key}`]) {
           for (const tag of filters[`#${query.key}`]) {
-            const tagCountKey = `${query.label}_count_${tag}`;
-            const tagCountResponse = await relayDb.get(tagCountKey);
-            const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+            const tagCountKey = `count/${query.label}_count_${tag}`;
+            const tagCountUrl = `${customDomain}/${tagCountKey}`;
+            const tagCountResponse = await fetch(tagCountUrl);
+            const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
             const tagCount = parseInt(tagCountValue, 10);
             for (let i = tagCount; i >= Math.max(1, tagCount - 25 + 1); i--) {
-              const tagKey = `${query.label}-${tag}:${i}`;
+              const tagKey = `tags/${query.label}-${tag}:${i}`;
               const eventUrl = `${customDomain}/${tagKey}`;
               eventPromises.push(
                 fetch(eventUrl).then((response) => {
@@ -2494,6 +2522,53 @@ async function processReq(message, server) {
   }
   server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
+async function processCount(message, server) {
+  if (!reqRateLimiter.removeToken()) {
+    sendError(server, "Rate limit exceeded. Please try again later.");
+    return;
+  }
+  const subscriptionId = message[1];
+  const filters = message[2] || {};
+  let count = 0;
+  let approximate = false;
+  try {
+    if (filters.authors && filters.kinds) {
+      for (const author of filters.authors) {
+        for (const kind of filters.kinds) {
+          const countKey = `count/author_${author}_kind_${kind}`;
+          const countUrl = `${customDomain}/${countKey}`;
+          const countResponse = await fetch(countUrl);
+          const countValue = countResponse.ok ? await countResponse.text() : "0";
+          count += parseInt(countValue, 10);
+        }
+      }
+    } else if (filters.kinds) {
+      for (const kind of filters.kinds) {
+        const kindCountKey = `count/kind_count_${kind}`;
+        const kindCountUrl = `${customDomain}/${kindCountKey}`;
+        const kindCountResponse = await fetch(kindCountUrl);
+        const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
+        count += parseInt(kindCountValue, 10);
+      }
+    } else if (filters.authors) {
+      for (const author of filters.authors) {
+        const pubkeyCountKey = `count/pubkey_count_${author}`;
+        const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
+        const pubkeyCountResponse = await fetch(pubkeyCountUrl);
+        const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
+        count += parseInt(pubkeyCountValue, 10);
+      }
+    }
+    if (count > 1e6) {
+      count = Math.floor(count / 1e3) * 1e3;
+      approximate = true;
+    }
+    server.send(JSON.stringify(["COUNT", subscriptionId, { count, approximate }]));
+  } catch (error) {
+    console.error(`Error processing count request:`, error);
+    server.send(JSON.stringify(["CLOSED", subscriptionId, "Failed to process count request"]));
+  }
+}
 async function closeSubscription(subscriptionId, server) {
   try {
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -2503,7 +2578,7 @@ async function closeSubscription(subscriptionId, server) {
   }
 }
 async function saveEventToR2(event) {
-  const eventKey = `event:${event.id}`;
+  const eventKey = `events/event:${event.id}`;
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
     console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
     return;
@@ -2530,47 +2605,50 @@ async function saveEventToR2(event) {
     return;
   }
   try {
-    const kindCountKey = `kind_count_${event.kind}`;
-    const kindCountResponse = await relayDb.get(kindCountKey);
-    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
+    const kindCountKey = `count/kind_count_${event.kind}`;
+    const kindCountUrl = `${customDomain}/${kindCountKey}`;
+    const kindCountResponse = await fetch(kindCountUrl);
+    const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
     let kindCount = parseInt(kindCountValue, 10);
     if (isNaN(kindCount)) {
       kindCount = 0;
     }
-    const kindKey = `kind-${event.kind}:${kindCount + 1}`;
-    const pubkeyCountKey = `pubkey_count_${event.pubkey}`;
-    const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
+    const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
+    const pubkeyCountKey = `count/pubkey_count_${event.pubkey}`;
+    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
+    const pubkeyCountResponse = await fetch(pubkeyCountUrl);
+    const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
     let pubkeyCount = parseInt(pubkeyCountValue, 10);
     if (isNaN(pubkeyCount)) {
       pubkeyCount = 0;
     }
-    const pubkeyKey = `pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+    const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
     const eventWithCountRef = { ...event, kindKey, pubkeyKey };
     const tagPromises = event.tags.map(async (tag) => {
       const tagName = tag[0];
       const tagValue = tag[1];
-      if (tagName && tagValue && /^[a-zA-Z]$/.test(tagName)) {
-        const tagCountKey = `${tagName}_count_${tagValue}`;
-        const tagCountResponse = await relayDb.get(tagCountKey);
-        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+      if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
+        const tagCountKey = `count/${tagName}_count_${tagValue}`;
+        const tagCountUrl = `${customDomain}/${tagCountKey}`;
+        const tagCountResponse = await fetch(tagCountUrl);
+        const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
         let tagCount = parseInt(tagCountValue, 10);
         if (isNaN(tagCount)) {
           tagCount = 0;
         }
-        const tagKey = `${tagName}-${tagValue}:${tagCount + 1}`;
+        const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
         eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
         await relayDb.put(tagKey, JSON.stringify(event));
         await relayDb.put(tagCountKey, (tagCount + 1).toString());
       }
     });
     await Promise.all(tagPromises);
-    eventWithCountRef.tags = event.tags.map((tag) => {
+    eventWithCountRef.tags = event.tags.filter((tag) => {
       const [tagName, tagValue] = tag;
-      if (tagName && tagValue && /^[a-zA-Z]$/.test(tagName)) {
-        return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
-      }
-      return tag;
+      return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
+    }).map((tag) => {
+      const [tagName, tagValue] = tag;
+      return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
     });
     await Promise.all([
       relayDb.put(kindKey, JSON.stringify(event)),
@@ -2589,7 +2667,7 @@ async function processDeletionEvent(deletionEvent, server) {
       sendOK(server, deletionEvent.id, true, "Deletion request received successfully.");
       const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
       for (const eventId of deletedEventIds) {
-        const idKey = `event:${eventId}`;
+        const idKey = `events/event:${eventId}`;
         const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
         try {
           const response = await fetch(eventUrl);
@@ -2600,7 +2678,7 @@ async function processDeletionEvent(deletionEvent, server) {
               const relatedDataKeys = [
                 eventData.kindKey,
                 eventData.pubkeyKey,
-                ...eventData.tags.filter((tag) => tag.length === 3 && /^[a-zA-Z]$/.test(tag[0])).map((tag) => tag[2])
+                ...eventData.tags.filter((tag) => tag.length === 3).map((tag) => tag[2])
               ].filter((key) => key !== void 0);
               const deletePromises = [
                 relayDb.delete(idKey),
@@ -2627,6 +2705,23 @@ async function processDeletionEvent(deletionEvent, server) {
   } catch (error) {
     console.error("Error processing deletion event:", error);
     sendOK(server, deletionEvent.id, false, `Error processing deletion event: ${error.message}`);
+  }
+}
+async function blastEventToRelays(event) {
+  for (const relayUrl of blastRelays) {
+    try {
+      const socket = new WebSocket(relayUrl);
+      socket.addEventListener("open", () => {
+        const eventMessage = JSON.stringify(["EVENT", event]);
+        socket.send(eventMessage);
+        socket.close();
+      });
+      socket.addEventListener("error", (error) => {
+        console.error(`Error blasting event to relay ${relayUrl}:`, error);
+      });
+    } catch (error) {
+      console.error(`Error blasting event to relay ${relayUrl}:`, error);
+    }
   }
 }
 async function purgeCloudflareCache(url) {
@@ -2675,8 +2770,7 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0)
-    throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);

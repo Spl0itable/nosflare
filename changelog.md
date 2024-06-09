@@ -1,3 +1,10 @@
+## v3.19.18 - 2024-06-09
+
+- Tweaked: indexation within R2 bucket now uses specific directories and changed the way indexing count is fetched (please see new cache bypass rule example in readme)
+- Added: reintroduced COUNT message support
+- Added: reintroduced blasting event to other relays
+- New: support for blocklisting or allowlisting specific tags
+
 ## v3.18.18 - 2024-06-06
 
 - Hotfix: support aA-zZ tags

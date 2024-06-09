@@ -6,11 +6,11 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
 
-Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds, throttle number of events from a single pubkey through rate limiting, block specific words or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words or phrases, blast events to other relays, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40.
+- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45.
 
 ## Getting Started
 
@@ -35,13 +35,14 @@ Clone the repo to your machine and open `worker.js` in a file editor. Edit the c
  
 *Optional:*
 - Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address.
-- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds.
+- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` and `blockedTags` or `allowedTags` to either blocklist or allowlist pubkeys and event kinds and tags.
 - Edit `blockedContent` to block specific words and/or phrases.
 - Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting.
+- Edit `blastRelays` to specify other relays for blasting events.
 
-You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds).
+You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
-> How blocklisting and allowlisting works: If pubkey(s) or event kind(s) is in blocklist, only that pubkey(s) or event kind(s) will be blocked and all others allowed. Conversely, if pubkey(s) or event kind(s) is in allowlist, only that pubkey(s) and event kind(s) will be allowed and all others blocked.
+> How blocklisting and allowlisting works: If pubkey(s) and event kind(s) and tag(s) are in blocklist, only that pubkey(s) and event kind(s) and tag(s) will be blocked and all others allowed. Conversely, if pubkey(s) and event kind(s) and tag(s) are in allowlist, only that pubkey(s) and event kind(s) and tag(s) will be allowed and all others blocked.
 
 We'll use `esbuild` to bundle the worker script:
 
@@ -66,6 +67,7 @@ You can deploy Nosflare using either the Wrangler CLI, directly through the Clou
 7. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 8. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 9. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
+10. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settngs section)
 
 Examples:
 
@@ -88,6 +90,7 @@ wrangler publish
 5. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 6. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 7. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
+8. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settngs section)
 
 #### NosflareDeploy Script
 
@@ -114,11 +117,13 @@ The current release of Nosflare is primarily focused on [basic protocol flow](ht
 
 ## Recommended Cloudflare Settings
 
-Ensure optimal performance of the relay by enforcing a high cache rate and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
+Ensure optimal performance of the relay by creating a Page Rule for enforcing a high cache rate through a "cache everything" rule and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
+
+Also, create a Page Rule for cache bypass on the `/count*` path of the R2 bucket custom domain.
 
 Examples:
 
-![Cache Rule](images/cache-setting.jpeg)
+![Cache Rule](images/cache-setting.png)
 
 ![Rate Limiting](images/rate-limit.jpeg)
 
