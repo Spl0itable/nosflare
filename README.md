@@ -67,7 +67,7 @@ You can deploy Nosflare using either the Wrangler CLI, directly through the Clou
 7. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 8. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 9. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
-10. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settngs section)
+10. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settings section)
 
 Examples:
 
@@ -90,7 +90,7 @@ wrangler publish
 5. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 6. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 7. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
-8. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settngs section)
+8. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settings section)
 
 #### NosflareDeploy Script
 
