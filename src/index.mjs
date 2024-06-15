@@ -1,9 +1,9 @@
 import { handleWebSocket, handleRelayInfoRequest, handleNIP05Request, serveFavicon } from './handlers/websocket.mjs';
-import { handleEvent } from './handlers/event.mjs';
-import { handleReq } from './handlers/req.mjs';
-import { handleDeletionEvent } from './handlers/deletion.mjs';
+import { processEvent } from './handlers/event.mjs';
+import { processReq } from './handlers/req.mjs';
+import { processDeletionEvent } from './handlers/deletion.mjs';
 
-const relayInfo = {
+export const relayInfo = {
   name: "Nosflare",
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
@@ -13,9 +13,9 @@ const relayInfo = {
   version: "4.19.18",
 };
 
-const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
+export const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 
-const nip05Users = {
+export const nip05Users = {
   "lucas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   // ... more NIP-05 verified users
 };
@@ -40,5 +40,3 @@ export default {
     }
   }
 };
-
-export { relayInfo, relayIcon, nip05Users };

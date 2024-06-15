@@ -2,6 +2,7 @@ import { processEvent } from './event.mjs';
 import { processReq } from './req.mjs';
 import { processDeletionEvent } from './deletion.mjs';
 import { messageRateLimiter, sendError } from '../utils/rateLimiter.mjs';
+import { relayInfo, relayIcon, nip05Users } from '../index.mjs';
 
 export async function handleWebSocket(request, env, ctx) {
   const { 0: client, 1: server } = new WebSocketPair();
