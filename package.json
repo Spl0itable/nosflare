@@ -3,10 +3,13 @@
     "version": "4.19.18",
     "main": "dist/worker.js",
     "scripts": {
-        "build": "esbuild src/index.mjs --bundle --outfile=dist/worker.js --platform=neutral --target=es2020 --format=esm"
+      "build": "node esbuild.config.js"
     },
     "dependencies": {
       "@noble/curves": "^1.0.0",
       "esbuild": "^0.12.1"
-    }
+    },
+    "scripts": {
+        "build": "esbuild src/index.mjs --bundle --outfile=dist/worker.js --platform=neutral --target=es2020 --format=esm"
+      }
   }
