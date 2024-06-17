@@ -1,0 +1,15 @@
+{
+    "name": "Nosflare",
+    "version": "4.19.18",
+    "main": "dist/relay-worker.js",
+    "scripts": {
+      "build:relay": "esbuild relay-worker.js --bundle --outfile=dist/relay-worker.js --platform=neutral --target=es2020 --format=esm --allow-overwrite",
+      "build:event": "esbuild event-worker.js --bundle --outfile=dist/event-worker.js --platform=neutral --target=es2020 --format=esm --allow-overwrite",
+      "build:req": "esbuild req-worker.js --bundle --outfile=dist/req-worker.js --platform=neutral --target=es2020 --format=esm --allow-overwrite",
+      "build": "npm run build:relay && npm run build:event && npm run build:req"
+    },
+    "dependencies": {
+      "@noble/curves": "^1.0.0",
+      "esbuild": "^0.12.1"
+    }
+  }

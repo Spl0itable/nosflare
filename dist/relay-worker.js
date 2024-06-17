@@ -4,7 +4,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// node_modules/@noble/hashes/esm/_assert.js
+// ../../../node_modules/@noble/hashes/esm/_assert.js
 function number(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error(`positive integer expected, not ${n}`);
@@ -38,10 +38,10 @@ function output(out, instance) {
   }
 }
 
-// node_modules/@noble/hashes/esm/crypto.js
+// ../../../node_modules/@noble/hashes/esm/crypto.js
 var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
 
-// node_modules/@noble/hashes/esm/utils.js
+// ../../../node_modules/@noble/hashes/esm/utils.js
 var createView = (arr) => new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 var rotr = (word, shift) => word << 32 - shift | word >>> shift;
 var isLE = new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68;
@@ -93,7 +93,7 @@ function randomBytes(bytesLength = 32) {
   throw new Error("crypto.getRandomValues must be defined");
 }
 
-// node_modules/@noble/hashes/esm/_md.js
+// ../../../node_modules/@noble/hashes/esm/_md.js
 function setBigUint64(view, byteOffset, value, isLE2) {
   if (typeof view.setBigUint64 === "function")
     return view.setBigUint64(byteOffset, value, isLE2);
@@ -195,7 +195,7 @@ var HashMD = class extends Hash {
   }
 };
 
-// node_modules/@noble/hashes/esm/sha256.js
+// ../../../node_modules/@noble/hashes/esm/sha256.js
 var SHA256_K = /* @__PURE__ */ new Uint32Array([
   1116352408,
   1899447441,
@@ -345,7 +345,7 @@ var SHA256 = class extends HashMD {
 };
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// node_modules/@noble/curves/esm/abstract/utils.js
+// ../../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
   abytes: () => abytes,
@@ -582,7 +582,7 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 
-// node_modules/@noble/curves/esm/abstract/modular.js
+// ../../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
 var _1n2 = BigInt(1);
 var _2n2 = BigInt(2);
@@ -848,7 +848,7 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// node_modules/@noble/curves/esm/abstract/curve.js
+// ../../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
 function wNAF(c, bits) {
@@ -966,7 +966,7 @@ function validateBasic(curve) {
   });
 }
 
-// node_modules/@noble/curves/esm/abstract/weierstrass.js
+// ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1763,7 +1763,7 @@ function weierstrass(curveDef) {
   };
 }
 
-// node_modules/@noble/hashes/esm/hmac.js
+// ../../../node_modules/@noble/hashes/esm/hmac.js
 var HMAC = class extends Hash {
   constructor(hash2, _key) {
     super();
@@ -1828,7 +1828,7 @@ var HMAC = class extends Hash {
 var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
 hmac.create = (hash2, key) => new HMAC(hash2, key);
 
-// node_modules/@noble/curves/esm/_shortw_utils.js
+// ../../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
   return {
     hash: hash2,
@@ -1841,7 +1841,7 @@ function createCurve(curveDef, defHash) {
   return Object.freeze({ ...create(defHash), create });
 }
 
-// node_modules/@noble/curves/esm/secp256k1.js
+// ../../../node_modules/@noble/curves/esm/secp256k1.js
 var secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
 var secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 var _1n5 = BigInt(1);
@@ -2015,21 +2015,31 @@ var schnorr = /* @__PURE__ */ (() => ({
   }
 }))();
 
-// worker.js
+// relay-worker.js
 var relayInfo = {
   name: "Nosflare",
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lucas@censorship.rip",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "3.19.18"
+  version: "4.19.18"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
   "lucas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
   // ... more NIP-05 verified users
 };
+var eventHelpers = [
+  "https://event-helper-1.example.com",
+  "https://event-helper-2.example.com"
+  // ... add 4 more helper workers
+];
+var reqHelpers = [
+  "https://req-helper-1.example.com",
+  "https://req-helper-2.example.com"
+  // ... add 4 more helper workers
+];
 var blockedPubkeys = [
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
@@ -2072,27 +2082,6 @@ function containsBlockedContent(event) {
   }
   return false;
 }
-var blockedTags = /* @__PURE__ */ new Set([
-  // ... tags that are explicitly blocked
-]);
-var allowedTags = /* @__PURE__ */ new Set([
-  "p",
-  "e"
-  // ... tags that are explicitly allowed
-]);
-function isTagAllowed(tag) {
-  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
-    return false;
-  }
-  return !blockedTags.has(tag);
-}
-function isTagBlocked(tag) {
-  return blockedTags.has(tag);
-}
-var blastRelays = [
-  "wss://nostr.mutinywallet.com"
-  // ... add more relays
-];
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -2187,22 +2176,6 @@ var relayCache = {
     delete this._cache[key];
   }
 };
-function generateSubscriptionCacheKey(filters) {
-  const filterKeys = Object.keys(filters).sort();
-  const cacheKey = filterKeys.map((key) => {
-    let value = filters[key];
-    if (Array.isArray(value)) {
-      if (key === "kinds" || key === "authors" || key === "ids" || key.startsWith("#") && /^#[a-zA-Z]$/.test(key)) {
-        value = value.sort().join(",");
-      } else {
-        value = value.sort();
-      }
-    }
-    value = Array.isArray(value) ? value.join(",") : String(value);
-    return `${key}:${value}`;
-  }).join("|");
-  return `subscription:${cacheKey}`;
-}
 var rateLimiter = class {
   constructor(rate, capacity) {
     this.tokens = capacity;
@@ -2228,8 +2201,6 @@ var rateLimiter = class {
 };
 var messageRateLimiter = new rateLimiter(100 / 6e4, 100);
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
-var reqRateLimiter = new rateLimiter(100 / 6e4, 100);
-var duplicateCheckRateLimiter = new rateLimiter(100 / 6e4, 100);
 var excludedRateLimitKinds = [];
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
@@ -2250,9 +2221,6 @@ async function handleWebSocket(event, request) {
               break;
             case "REQ":
               await processReq(message, server);
-              break;
-            case "COUNT":
-              await processCount(message, server);
               break;
             case "CLOSE":
               await closeSubscription(message[1], server);
@@ -2296,10 +2264,6 @@ async function processEvent(event, server) {
         return;
       }
     }
-    if (event.kind === 5) {
-      await processDeletionEvent(event, server);
-      return;
-    }
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
@@ -2309,11 +2273,12 @@ async function processEvent(event, server) {
     const isValidSignature = await verifyEventSignature(event);
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
-      sendOK(server, event.id, true, "Event received successfully.");
-      blastEventToRelays(event);
-      saveEventToR2(event).catch((error) => {
-        console.error("Error saving event to R2:", error);
-      });
+      if (event.kind === 5) {
+        sendOK(server, event.id, true, "Deletion request received successfully.");
+      } else {
+        sendOK(server, event.id, true, "Event received successfully.");
+      }
+      sendEventToHelper(event, server, event.id);
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }
@@ -2323,250 +2288,22 @@ async function processEvent(event, server) {
   }
 }
 async function processReq(message, server) {
-  if (!reqRateLimiter.removeToken()) {
-    sendError(server, "Rate limit exceeded. Please try again later.");
-    return;
-  }
   const subscriptionId = message[1];
   const filters = message[2] || {};
-  const cacheKey = generateSubscriptionCacheKey(filters);
-  let events = [];
-  if (filters.ids) {
-    for (const id of filters.ids) {
-      if (!/^[a-f0-9]{64}$/.test(id)) {
-        sendError(server, `Invalid event ID format: ${id}`);
-        return;
-      }
-    }
-  }
-  if (filters.authors) {
-    for (const author of filters.authors) {
-      if (!/^[a-f0-9]{64}$/.test(author)) {
-        sendError(server, `Invalid author pubkey format: ${author}`);
-        return;
-      }
-    }
-  }
-  let cachedEvents = relayCache.get(cacheKey);
-  if (cachedEvents) {
-    events = cachedEvents;
-  } else {
-    try {
-      const eventPromises = [];
-      if (filters.ids) {
-        for (const id of filters.ids.slice(0, 25)) {
-          const idKey = `events/event:${id}`;
-          const eventUrl = `${customDomain}/${idKey}`;
-          eventPromises.push(
-            fetch(eventUrl).then((response) => {
-              if (response.ok) {
-                return response.text().then((data) => {
-                  try {
-                    return JSON.parse(data);
-                  } catch (error) {
-                    console.error(`Malformed JSON for event with ID ${id}:`, error);
-                    return null;
-                  }
-                });
-              } else if (response.status === 404) {
-                return null;
-              } else {
-                response.body.cancel();
-                throw new Error(`Error fetching event with ID ${id} from URL: ${eventUrl}. Status: ${response.status}`);
-              }
-            }).catch((error) => {
-              console.error(`Error fetching event with ID ${id} from URL: ${eventUrl}.`, error);
-              return null;
-            })
-          );
-        }
-      }
-      if (filters.kinds) {
-        for (const kind of filters.kinds) {
-          const kindCountKey = `count/kind_count_${kind}`;
-          const kindCountUrl = `${customDomain}/${kindCountKey}`;
-          const kindCountResponse = await fetch(kindCountUrl);
-          const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
-          const kindCount = parseInt(kindCountValue, 10);
-          for (let i = kindCount; i >= Math.max(1, kindCount - 25 + 1); i--) {
-            const kindKey = `kinds/kind-${kind}:${i}`;
-            const eventUrl = `${customDomain}/${kindKey}`;
-            eventPromises.push(
-              fetch(eventUrl).then((response) => {
-                if (response.ok) {
-                  return response.text().then((data) => {
-                    try {
-                      return JSON.parse(data);
-                    } catch (error) {
-                      console.error(`Malformed JSON for event with kind ${kind}:`, error);
-                      return null;
-                    }
-                  });
-                } else if (response.status === 404) {
-                  return null;
-                } else {
-                  response.body.cancel();
-                  throw new Error(`Error fetching event for kind ${kind} from URL: ${eventUrl}. Status: ${response.status}`);
-                }
-              }).catch((error) => {
-                console.error(`Error fetching event for kind ${kind} from URL: ${eventUrl}.`, error);
-                return null;
-              })
-            );
-          }
-        }
-      }
-      if (filters.authors) {
-        for (const author of filters.authors) {
-          const pubkeyCountKey = `count/pubkey_count_${author}`;
-          const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-          const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-          const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
-          const pubkeyCount = parseInt(pubkeyCountValue, 10);
-          for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 25 + 1); i--) {
-            const pubkeyKey = `pubkeys/pubkey-${author}:${i}`;
-            const eventUrl = `${customDomain}/${pubkeyKey}`;
-            eventPromises.push(
-              fetch(eventUrl).then((response) => {
-                if (response.ok) {
-                  return response.text().then((data) => {
-                    try {
-                      return JSON.parse(data);
-                    } catch (error) {
-                      console.error(`Malformed JSON for event with author ${author}:`, error);
-                      return null;
-                    }
-                  });
-                } else if (response.status === 404) {
-                  return null;
-                } else {
-                  response.body.cancel();
-                  throw new Error(`Error fetching event for author ${author} from URL: ${eventUrl}. Status: ${response.status}`);
-                }
-              }).catch((error) => {
-                console.error(`Error fetching event for author ${author} from URL: ${eventUrl}.`, error);
-                return null;
-              })
-            );
-          }
-        }
-      }
-      const tagQueries = Array.from({ length: 26 }, (_, i) => ({
-        key: String.fromCharCode(97 + i),
-        label: String.fromCharCode(97 + i)
-      })).concat(
-        Array.from({ length: 26 }, (_, i) => ({
-          key: String.fromCharCode(65 + i),
-          label: String.fromCharCode(65 + i)
-        }))
-      );
-      for (const query of tagQueries) {
-        if (filters[`#${query.key}`]) {
-          for (const tag of filters[`#${query.key}`]) {
-            const tagCountKey = `count/${query.label}_count_${tag}`;
-            const tagCountUrl = `${customDomain}/${tagCountKey}`;
-            const tagCountResponse = await fetch(tagCountUrl);
-            const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
-            const tagCount = parseInt(tagCountValue, 10);
-            for (let i = tagCount; i >= Math.max(1, tagCount - 25 + 1); i--) {
-              const tagKey = `tags/${query.label}-${tag}:${i}`;
-              const eventUrl = `${customDomain}/${tagKey}`;
-              eventPromises.push(
-                fetch(eventUrl).then((response) => {
-                  if (response.ok) {
-                    return response.text().then((data) => {
-                      try {
-                        return JSON.parse(data);
-                      } catch (error) {
-                        console.error(`Malformed JSON for event with ${query.label} tag ${tag}:`, error);
-                        return null;
-                      }
-                    });
-                  } else if (response.status === 404) {
-                    return null;
-                  } else {
-                    response.body.cancel();
-                    throw new Error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}. Status: ${response.status}`);
-                  }
-                }).catch((error) => {
-                  console.error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}.`, error);
-                  return null;
-                })
-              );
-            }
-          }
-        }
-      }
-      const fetchedEvents = await Promise.all(eventPromises);
-      events = fetchedEvents.filter((event) => event !== null);
-      events = events.filter((event) => {
-        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
-        const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith("#"));
-        for (const [tagKey, tagValues] of tagFilters) {
-          const tagName = tagKey.slice(1);
-          const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
-          if (!tagValues.some((value) => eventTags.includes(value))) {
-            return false;
-          }
-        }
-        return includeEvent;
-      });
-      relayCache.set(cacheKey, events);
-    } catch (error) {
-      console.error(`Error retrieving events from R2:`, error);
-      events = [];
-    }
-  }
-  for (const event of events) {
-    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-  }
-  server.send(JSON.stringify(["EOSE", subscriptionId]));
-}
-async function processCount(message, server) {
-  if (!reqRateLimiter.removeToken()) {
-    sendError(server, "Rate limit exceeded. Please try again later.");
-    return;
-  }
-  const subscriptionId = message[1];
-  const filters = message[2] || {};
-  let count = 0;
-  let approximate = false;
   try {
-    if (filters.authors && filters.kinds) {
-      for (const author of filters.authors) {
-        for (const kind of filters.kinds) {
-          const countKey = `count/author_${author}_kind_${kind}`;
-          const countUrl = `${customDomain}/${countKey}`;
-          const countResponse = await fetch(countUrl);
-          const countValue = countResponse.ok ? await countResponse.text() : "0";
-          count += parseInt(countValue, 10);
-        }
-      }
-    } else if (filters.kinds) {
-      for (const kind of filters.kinds) {
-        const kindCountKey = `count/kind_count_${kind}`;
-        const kindCountUrl = `${customDomain}/${kindCountKey}`;
-        const kindCountResponse = await fetch(kindCountUrl);
-        const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
-        count += parseInt(kindCountValue, 10);
-      }
-    } else if (filters.authors) {
-      for (const author of filters.authors) {
-        const pubkeyCountKey = `count/pubkey_count_${author}`;
-        const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-        const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-        const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
-        count += parseInt(pubkeyCountValue, 10);
-      }
+    const numHelpers = Math.min(reqHelpers.length, 6);
+    const filterPromises = [];
+    const filterChunks = splitFilters(filters, numHelpers);
+    for (let i = 0; i < numHelpers; i++) {
+      const helperFilters = filterChunks[i];
+      const helper = reqHelpers[i];
+      filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
     }
-    if (count > 1e6) {
-      count = Math.floor(count / 1e3) * 1e3;
-      approximate = true;
-    }
-    server.send(JSON.stringify(["COUNT", subscriptionId, { count, approximate }]));
+    await Promise.all(filterPromises);
+    server.send(JSON.stringify(["EOSE", subscriptionId]));
   } catch (error) {
-    console.error(`Error processing count request:`, error);
-    server.send(JSON.stringify(["CLOSED", subscriptionId, "Failed to process count request"]));
+    console.error("Error fetching events:", error);
+    sendError(server, `Error fetching events: ${error.message}`);
   }
 }
 async function closeSubscription(subscriptionId, server) {
@@ -2577,169 +2314,91 @@ async function closeSubscription(subscriptionId, server) {
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
   }
 }
-async function saveEventToR2(event) {
-  const eventKey = `events/event:${event.id}`;
-  if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
-    console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
-    return;
-  }
+async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
   try {
-    const eventUrl = `${customDomain}/${eventKey}`;
-    const response = await fetch(eventUrl);
+    const response = await fetch(helper, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ type: "REQ", subscriptionId, filters })
+    });
     if (response.ok) {
-      console.log(`Duplicate event: ${event.id}. Event dropped.`);
-      return;
-    } else if (response.status !== 404) {
-      console.error(`Error checking duplicate event in R2: ${response.status}`);
-      response.body.cancel();
-      return;
-    }
-  } catch (error) {
-    console.error(`Error checking duplicate event in R2: ${error.message}`);
-    return;
-  }
-  try {
-    JSON.stringify(event);
-  } catch (error) {
-    console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
-    return;
-  }
-  try {
-    const kindCountKey = `count/kind_count_${event.kind}`;
-    const kindCountUrl = `${customDomain}/${kindCountKey}`;
-    const kindCountResponse = await fetch(kindCountUrl);
-    const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
-    let kindCount = parseInt(kindCountValue, 10);
-    if (isNaN(kindCount)) {
-      kindCount = 0;
-    }
-    const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
-    const pubkeyCountKey = `count/pubkey_count_${event.pubkey}`;
-    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-    const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-    const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
-    let pubkeyCount = parseInt(pubkeyCountValue, 10);
-    if (isNaN(pubkeyCount)) {
-      pubkeyCount = 0;
-    }
-    const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
-    const eventWithCountRef = { ...event, kindKey, pubkeyKey };
-    const tagPromises = event.tags.map(async (tag) => {
-      const tagName = tag[0];
-      const tagValue = tag[1];
-      if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
-        const tagCountKey = `count/${tagName}_count_${tagValue}`;
-        const tagCountUrl = `${customDomain}/${tagCountKey}`;
-        const tagCountResponse = await fetch(tagCountUrl);
-        const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
-        let tagCount = parseInt(tagCountValue, 10);
-        if (isNaN(tagCount)) {
-          tagCount = 0;
-        }
-        const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
-        eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
-        await relayDb.put(tagKey, JSON.stringify(event));
-        await relayDb.put(tagCountKey, (tagCount + 1).toString());
-      }
-    });
-    await Promise.all(tagPromises);
-    eventWithCountRef.tags = event.tags.filter((tag) => {
-      const [tagName, tagValue] = tag;
-      return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
-    }).map((tag) => {
-      const [tagName, tagValue] = tag;
-      return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
-    });
-    await Promise.all([
-      relayDb.put(kindKey, JSON.stringify(event)),
-      relayDb.put(pubkeyKey, JSON.stringify(event)),
-      relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
-      relayDb.put(kindCountKey, (kindCount + 1).toString()),
-      relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
-    ]);
-  } catch (error) {
-    console.error(`Error saving event to R2: ${error.message}`);
-  }
-}
-async function processDeletionEvent(deletionEvent, server) {
-  try {
-    if (deletionEvent.kind === 5 && deletionEvent.pubkey) {
-      sendOK(server, deletionEvent.id, true, "Deletion request received successfully.");
-      const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
-      for (const eventId of deletedEventIds) {
-        const idKey = `events/event:${eventId}`;
-        const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
-        try {
-          const response = await fetch(eventUrl);
-          if (response.ok) {
-            const event = await response.text();
-            const eventData = JSON.parse(event);
-            if (eventData && eventData.pubkey === deletionEvent.pubkey) {
-              const relatedDataKeys = [
-                eventData.kindKey,
-                eventData.pubkeyKey,
-                ...eventData.tags.filter((tag) => tag.length === 3).map((tag) => tag[2])
-              ].filter((key) => key !== void 0);
-              const deletePromises = [
-                relayDb.delete(idKey),
-                ...relatedDataKeys.map((key) => relayDb.delete(key))
-              ];
-              await Promise.all(deletePromises);
-              const cacheKey = `event:${eventId}`;
-              relayCache.delete(cacheKey);
-              const relatedDataUrls = [
-                eventUrl,
-                ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`)
-              ];
-              const purgePromises = relatedDataUrls.map((url) => purgeCloudflareCache(url));
-              await Promise.all(purgePromises);
-            }
-          }
-        } catch (error) {
-          console.error(`Error retrieving event ${eventId} from R2:`, error);
-        }
+      const events = await response.json();
+      for (const event of events) {
+        server.send(JSON.stringify(["EVENT", subscriptionId, event]));
       }
     } else {
-      sendOK(server, deletionEvent.id, false, "Invalid deletion event.");
+      console.error(`Error fetching events from relay ${helper}: ${response.status} - ${response.statusText}`);
+      sendError(server, `Error fetching events: ${response.status} - ${response.statusText}`);
     }
   } catch (error) {
-    console.error("Error processing deletion event:", error);
-    sendOK(server, deletionEvent.id, false, `Error processing deletion event: ${error.message}`);
+    console.error(`Error fetching events from relay ${helper}:`, error);
+    sendError(server, `Error fetching events: ${error.message}`);
   }
 }
-async function blastEventToRelays(event) {
-  for (const relayUrl of blastRelays) {
-    try {
-      const socket = new WebSocket(relayUrl);
-      socket.addEventListener("open", () => {
-        const eventMessage = JSON.stringify(["EVENT", event]);
-        socket.send(eventMessage);
-        socket.close();
-      });
-      socket.addEventListener("error", (error) => {
-        console.error(`Error blasting event to relay ${relayUrl}:`, error);
-      });
-    } catch (error) {
-      console.error(`Error blasting event to relay ${relayUrl}:`, error);
+async function sendEventToHelper(event, server, eventId) {
+  try {
+    const randomHelper2 = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
+    const response = await fetch(randomHelper2, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ type: "EVENT", event })
+    });
+    if (response.ok) {
+      sendOK(server, eventId, true, "Event received successfully.");
+    } else {
+      console.error(`Error sending event ${eventId} to helper ${randomHelper2}: ${response.status} - ${response.statusText}`);
+      sendOK(server, eventId, false, `Error sending event: ${response.status} - ${response.statusText}`);
+    }
+  } catch (error) {
+    console.error(`Error sending event ${eventId} to helper ${randomHelper}:`, error);
+    sendOK(server, eventId, false, `Error sending event: ${error.message}`);
+  }
+}
+function splitFilters(filters, numChunks) {
+  const baseFilters = {};
+  const arrayFilters = {};
+  for (const key in filters) {
+    if (Array.isArray(filters[key])) {
+      arrayFilters[key] = filters[key];
+    } else {
+      baseFilters[key] = filters[key];
     }
   }
-}
-async function purgeCloudflareCache(url) {
-  const headers = new Headers();
-  headers.append("Authorization", `Bearer ${apiToken}`);
-  headers.append("Content-Type", "application/json");
-  const requestOptions = {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ files: [url] })
-  };
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`,
-    requestOptions
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to purge Cloudflare cache: ${response.status}`);
+  const filterChunks = Array(numChunks).fill().map(() => ({ ...baseFilters }));
+  const arrayKeys = Object.keys(arrayFilters);
+  if (arrayKeys.length === 1) {
+    const key = arrayKeys[0];
+    const arrayValues = arrayFilters[key];
+    const arrayChunks = splitArray(arrayValues, numChunks);
+    for (let i = 0; i < numChunks; i++) {
+      filterChunks[i][key] = arrayChunks[i];
+    }
+  } else {
+    for (const key in arrayFilters) {
+      const arrayValues = arrayFilters[key];
+      if (key === "authors") {
+        const arrayChunks = splitArray(arrayValues, numChunks);
+        for (let i = 0; i < numChunks; i++) {
+          filterChunks[i][key] = arrayChunks[i];
+        }
+      } else {
+        for (let i = 0; i < numChunks; i++) {
+          filterChunks[i][key] = arrayValues;
+        }
+      }
+    }
   }
+  return filterChunks;
+}
+function splitArray(arr, numChunks) {
+  const chunkSize = Math.ceil(arr.length / numChunks);
+  return Array(numChunks).fill().map((_, index) => arr.slice(index * chunkSize, (index + 1) * chunkSize));
 }
 async function verifyEventSignature(event) {
   try {

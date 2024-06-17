@@ -1,3 +1,9 @@
+## v4.19.18 - 2024-06-17
+
+- New: introduction of EVENT and REQ message helpers
+- Removed: COUNT message support
+- Removed: blasting to other relays
+
 ## v3.19.18 - 2024-06-09
 
 - Tweaked: indexation within R2 bucket now uses specific directories and changed the way indexing count is fetched (please see new cache bypass rule example in readme)
