@@ -126,148 +126,181 @@ async function processEvent(event) {
 // Handles saving event to R2 bucket
 async function saveEventToR2(event) {
     const eventKey = `events/event:${event.id}`;
-    // Rate limit duplicate event checks
     if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
-        console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
-        return { success: false, error: 'Duplicate check rate limit exceeded' };
+      console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
+      return { success: false, error: "Duplicate check rate limit exceeded" };
     }
     try {
-        const eventUrl = `${customDomain}/${eventKey}`;
-        const response = await fetch(eventUrl);
-        if (response.ok) {
-            console.log(`Duplicate event: ${event.id}. Event dropped.`);
-            return { success: false, error: 'Duplicate event' };
-        } else if (response.status !== 404) {
-            console.error(`Error checking duplicate event in R2: ${response.status}`);
-            response.body.cancel();
-            return { success: false, error: `Error checking duplicate event in R2: ${response.status}` };
-        } else {
-            // Purge the Cloudflare cache for the event ID URL
-            await purgeCloudflareCache(eventUrl);
-        }
+      const eventUrl = `${customDomain}/${eventKey}`;
+      const response = await fetch(eventUrl);
+      if (response.ok) {
+        console.log(`Duplicate event: ${event.id}. Event dropped.`);
+        return { success: false, error: "Duplicate event" };
+      } else if (response.status !== 404) {
+        console.error(`Error checking duplicate event in R2: ${response.status}`);
+        response.body.cancel();
+        return { success: false, error: `Error checking duplicate event in R2: ${response.status}` };
+      } else {
+        purgeCloudflareCache(eventUrl);
+      }
     } catch (error) {
-        console.error(`Error checking duplicate event in R2: ${error.message}`);
-        return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
-    }
-    // Validate event JSON
-    try {
-        JSON.stringify(event);
-    } catch (error) {
-        console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
-        return { success: false, error: `Invalid JSON for event: ${event.id}` };
+      console.error(`Error checking duplicate event in R2: ${error.message}`);
+      return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
     }
     try {
-        const kindCountKey = `count/kind_count_${event.kind}`;
-        const kindCountUrl = `${customDomain}/${kindCountKey}`;
-        const kindCountResponse = await fetch(kindCountUrl);
-        const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : '0';
-        let kindCount = parseInt(kindCountValue, 10);
-        if (isNaN(kindCount)) {
-            kindCount = 0;
-        }
-        const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
-        const pubkeyCountKey = `count/pubkey_count_${event.pubkey}`;
-        const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-        const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-        const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : '0';
-        let pubkeyCount = parseInt(pubkeyCountValue, 10);
-        if (isNaN(pubkeyCount)) {
-            pubkeyCount = 0;
-        }
-        const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
-        const eventWithCountRef = { ...event, kindKey, pubkeyKey };
-        const tagPromises = event.tags.map(async (tag) => {
-            const tagName = tag[0];
-            const tagValue = tag[1];
-            if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
-                const tagCountKey = `count/${tagName}_count_${tagValue}`;
-                const tagCountUrl = `${customDomain}/${tagCountKey}`;
-                const tagCountResponse = await fetch(tagCountUrl);
-                const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : '0';
-                let tagCount = parseInt(tagCountValue, 10);
-                if (isNaN(tagCount)) {
-                    tagCount = 0;
-                }
-                const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
-                eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
-                await relayDb.put(tagKey, JSON.stringify(event));
-                await relayDb.put(tagCountKey, (tagCount + 1).toString());
-            }
-        });
-        await Promise.all(tagPromises);
-        eventWithCountRef.tags = event.tags.filter((tag) => {
-            const [tagName, tagValue] = tag;
-            return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
-        }).map((tag) => {
-            const [tagName, tagValue] = tag;
-            return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
-        });
-        await Promise.all([
-            relayDb.put(kindKey, JSON.stringify(event)),
-            relayDb.put(pubkeyKey, JSON.stringify(event)),
-            relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
-            relayDb.put(kindCountKey, (kindCount + 1).toString()),
-            relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
-        ]);
-        return { success: true };
+      JSON.stringify(event);
     } catch (error) {
-        console.error(`Error saving event to R2: ${error.message}`);
-        return { success: false, error: `Error saving event to R2: ${error.message}` };
+      console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
+      return { success: false, error: `Invalid JSON for event: ${event.id}` };
     }
-}
+    try {
+      const kindCountKey = `count/kind_count_${event.kind}`;
+      const kindCountUrl = `${customDomain}/${kindCountKey}`;
+      const kindCountResponse = await fetch(kindCountUrl);
+      const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
+      let kindCount = parseInt(kindCountValue, 10);
+      if (isNaN(kindCount)) {
+        kindCount = 0;
+      }
+      const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
+      const pubkeyCountKey = `count/pubkey_count_${event.pubkey}`;
+      const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
+      const pubkeyCountResponse = await fetch(pubkeyCountUrl);
+      const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
+      let pubkeyCount = parseInt(pubkeyCountValue, 10);
+      if (isNaN(pubkeyCount)) {
+        pubkeyCount = 0;
+      }
+      const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+      const eventWithCountRef = { ...event, kindKey, pubkeyKey };
+      const tagBatches = [];
+      let currentBatch = [];
+      for (const tag of event.tags) {
+        const tagName = tag[0];
+        const tagValue = tag[1];
+        if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
+          const tagCountKey = `count/${tagName}_count_${tagValue}`;
+          const tagCountUrl = `${customDomain}/${tagCountKey}`;
+          const tagCountResponse = await fetch(tagCountUrl);
+          const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
+          let tagCount = parseInt(tagCountValue, 10);
+          if (isNaN(tagCount)) {
+            tagCount = 0;
+          }
+          const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
+          eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
+          currentBatch.push(relayDb.put(tagKey, JSON.stringify(event)));
+          currentBatch.push(relayDb.put(tagCountKey, (tagCount + 1).toString()));
+  
+          if (currentBatch.length === 5) {
+            tagBatches.push(currentBatch);
+            currentBatch = [];
+          }
+        }
+      }
+      if (currentBatch.length > 0) {
+        tagBatches.push(currentBatch);
+      }
+      eventWithCountRef.tags = event.tags.filter((tag) => {
+        const [tagName, tagValue] = tag;
+        return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
+      }).map((tag) => {
+        const [tagName, tagValue] = tag;
+        return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
+      });
+      await Promise.all([
+        relayDb.put(kindKey, JSON.stringify(event)),
+        relayDb.put(pubkeyKey, JSON.stringify(event)),
+        relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
+        relayDb.put(kindCountKey, (kindCount + 1).toString()),
+        relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
+      ]);
+      for (const batch of tagBatches) {
+        await Promise.all(batch);
+      }
+      return { success: true };
+    } catch (error) {
+      console.error(`Error saving event to R2: ${error.message}`);
+      return { success: false, error: `Error saving event to R2: ${error.message}` };
+    }
+  }
 
 // Handles event deletes (NIP-09)
 async function processDeletionEvent(deletionEvent) {
     try {
-        if (deletionEvent.kind === 5 && deletionEvent.pubkey) {
-            const deletedEventIds = deletionEvent.tags
-                .filter((tag) => tag[0] === "e")
-                .map((tag) => tag[1]);
-
-            for (const eventId of deletedEventIds) {
-                const idKey = `events/event:${eventId}`;
-                const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
-                try {
-                    const response = await fetch(eventUrl);
-                    if (response.ok) {
-                        const event = await response.json();
-                        if (event && event.pubkey === deletionEvent.pubkey) {
-                            const relatedDataKeys = [
-                                event.kindKey,
-                                event.pubkeyKey,
-                                ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/")),
-                            ].filter((key) => key !== undefined);
-                            const deletePromises = [
-                                relayDb.delete(idKey),
-                                event.kindKey ? relayDb.delete(event.kindKey) : Promise.resolve(),
-                                event.pubkeyKey ? relayDb.delete(event.pubkeyKey) : Promise.resolve(),
-                                ...relatedDataKeys.map((key) => relayDb.delete(key)),
-                            ];
-                            await Promise.all(deletePromises);
-                            const cacheKey = `event:${eventId}`;
-                            relayCache.delete(cacheKey);
-                            const relatedDataUrls = [
-                                eventUrl,
-                                event.kindKey ? `${customDomain}/${encodeURIComponent(event.kindKey)}` : undefined,
-                                event.pubkeyKey ? `${customDomain}/${encodeURIComponent(event.pubkeyKey)}` : undefined,
-                                ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`),
-                            ].filter((url) => url !== undefined);
-                            const purgePromises = relatedDataUrls.map((url) => purgeCloudflareCache(url));
-                            await Promise.all(purgePromises);
-                        }
-                    }
-                } catch (error) {
-                    console.error(`Error retrieving event ${eventId} from R2:`, error);
+      if (deletionEvent.kind === 5 && deletionEvent.pubkey) {
+        const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
+        for (const eventId of deletedEventIds) {
+          const idKey = `events/event:${eventId}`;
+          const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
+          try {
+            const response = await fetch(eventUrl);
+            if (response.ok) {
+              const event = await response.json();
+              if (event && event.pubkey === deletionEvent.pubkey) {
+                const relatedDataKeys = [
+                  event.kindKey,
+                  event.pubkeyKey,
+                  ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
+                ].filter((key) => key !== undefined);
+                const deleteOperations = [
+                  relayDb.delete(idKey),
+                  event.kindKey ? relayDb.delete(event.kindKey) : Promise.resolve(),
+                  event.pubkeyKey ? relayDb.delete(event.pubkeyKey) : Promise.resolve(),
+                  ...relatedDataKeys.map((key) => relayDb.delete(key)),
+                ];
+                const deleteBatches = [];
+                let currentBatch = [];
+                for (const operation of deleteOperations) {
+                  currentBatch.push(operation);
+                  if (currentBatch.length === 5) {
+                    deleteBatches.push(currentBatch);
+                    currentBatch = [];
+                  }
                 }
+                if (currentBatch.length > 0) {
+                  deleteBatches.push(currentBatch);
+                }
+                for (const batch of deleteBatches) {
+                  await Promise.all(batch);
+                }
+                const cacheKey = `event:${eventId}`;
+                relayCache.delete(cacheKey);
+                const relatedDataUrls = [
+                  eventUrl,
+                  event.kindKey ? `${customDomain}/${encodeURIComponent(event.kindKey)}` : undefined,
+                  event.pubkeyKey ? `${customDomain}/${encodeURIComponent(event.pubkeyKey)}` : undefined,
+                  ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`),
+                ].filter((url) => url !== undefined);
+                const purgeBatches = [];
+                let currentPurgeBatch = [];
+                for (const url of relatedDataUrls) {
+                  currentPurgeBatch.push(purgeCloudflareCache(url));
+                  if (currentPurgeBatch.length === 5) {
+                    purgeBatches.push(currentPurgeBatch);
+                    currentPurgeBatch = [];
+                  }
+                }
+                if (currentPurgeBatch.length > 0) {
+                  purgeBatches.push(currentPurgeBatch);
+                }
+                for (const batch of purgeBatches) {
+                  await Promise.all(batch);
+                }
+              }
             }
-        } else {
-            return "Invalid deletion event.";
+          } catch (error) {
+            console.error(`Error retrieving event ${eventId} from R2:`, error);
+          }
         }
+      } else {
+        return "Invalid deletion event.";
+      }
     } catch (error) {
-        console.error("Error processing deletion event:", error);
-        return `Error processing deletion event: ${error.message}`;
+      console.error("Error processing deletion event:", error);
+      return `Error processing deletion event: ${error.message}`;
     }
-}
+  }
 
 // Handles purging event from cache
 async function purgeCloudflareCache(url) {

@@ -124,7 +124,7 @@ async function saveEventToR2(event) {
       response.body.cancel();
       return { success: false, error: `Error checking duplicate event in R2: ${response.status}` };
     } else {
-      await purgeCloudflareCache(eventUrl);
+      purgeCloudflareCache(eventUrl);
     }
   } catch (error) {
     console.error(`Error checking duplicate event in R2: ${error.message}`);
@@ -156,7 +156,9 @@ async function saveEventToR2(event) {
     }
     const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
     const eventWithCountRef = { ...event, kindKey, pubkeyKey };
-    const tagPromises = event.tags.map(async (tag) => {
+    const tagBatches = [];
+    let currentBatch = [];
+    for (const tag of event.tags) {
       const tagName = tag[0];
       const tagValue = tag[1];
       if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
@@ -170,11 +172,17 @@ async function saveEventToR2(event) {
         }
         const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
         eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
-        await relayDb.put(tagKey, JSON.stringify(event));
-        await relayDb.put(tagCountKey, (tagCount + 1).toString());
+        currentBatch.push(relayDb.put(tagKey, JSON.stringify(event)));
+        currentBatch.push(relayDb.put(tagCountKey, (tagCount + 1).toString()));
+        if (currentBatch.length === 5) {
+          tagBatches.push(currentBatch);
+          currentBatch = [];
+        }
       }
-    });
-    await Promise.all(tagPromises);
+    }
+    if (currentBatch.length > 0) {
+      tagBatches.push(currentBatch);
+    }
     eventWithCountRef.tags = event.tags.filter((tag) => {
       const [tagName, tagValue] = tag;
       return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
@@ -189,6 +197,9 @@ async function saveEventToR2(event) {
       relayDb.put(kindCountKey, (kindCount + 1).toString()),
       relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
     ]);
+    for (const batch of tagBatches) {
+      await Promise.all(batch);
+    }
     return { success: true };
   } catch (error) {
     console.error(`Error saving event to R2: ${error.message}`);
@@ -212,13 +223,27 @@ async function processDeletionEvent(deletionEvent) {
                 event.pubkeyKey,
                 ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
               ].filter((key) => key !== void 0);
-              const deletePromises = [
+              const deleteOperations = [
                 relayDb.delete(idKey),
                 event.kindKey ? relayDb.delete(event.kindKey) : Promise.resolve(),
                 event.pubkeyKey ? relayDb.delete(event.pubkeyKey) : Promise.resolve(),
                 ...relatedDataKeys.map((key) => relayDb.delete(key))
               ];
-              await Promise.all(deletePromises);
+              const deleteBatches = [];
+              let currentBatch = [];
+              for (const operation of deleteOperations) {
+                currentBatch.push(operation);
+                if (currentBatch.length === 5) {
+                  deleteBatches.push(currentBatch);
+                  currentBatch = [];
+                }
+              }
+              if (currentBatch.length > 0) {
+                deleteBatches.push(currentBatch);
+              }
+              for (const batch of deleteBatches) {
+                await Promise.all(batch);
+              }
               const cacheKey = `event:${eventId}`;
               relayCache.delete(cacheKey);
               const relatedDataUrls = [
@@ -227,8 +252,21 @@ async function processDeletionEvent(deletionEvent) {
                 event.pubkeyKey ? `${customDomain}/${encodeURIComponent(event.pubkeyKey)}` : void 0,
                 ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`)
               ].filter((url) => url !== void 0);
-              const purgePromises = relatedDataUrls.map((url) => purgeCloudflareCache(url));
-              await Promise.all(purgePromises);
+              const purgeBatches = [];
+              let currentPurgeBatch = [];
+              for (const url of relatedDataUrls) {
+                currentPurgeBatch.push(purgeCloudflareCache(url));
+                if (currentPurgeBatch.length === 5) {
+                  purgeBatches.push(currentPurgeBatch);
+                  currentPurgeBatch = [];
+                }
+              }
+              if (currentPurgeBatch.length > 0) {
+                purgeBatches.push(currentPurgeBatch);
+              }
+              for (const batch of purgeBatches) {
+                await Promise.all(batch);
+              }
             }
           }
         } catch (error) {
