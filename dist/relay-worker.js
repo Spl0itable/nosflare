@@ -2033,12 +2033,12 @@ var nip05Users = {
 var eventHelpers = [
   "https://event-helper-1.example.com",
   "https://event-helper-2.example.com"
-  // ... add 4 more helper workers
+  // ... add more helper workers
 ];
 var reqHelpers = [
   "https://req-helper-1.example.com",
   "https://req-helper-2.example.com"
-  // ... add 4 more helper workers
+  // ... add more helper workers
 ];
 var blockedPubkeys = [
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
@@ -2291,12 +2291,13 @@ async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
   try {
-    const numHelpers = Math.min(reqHelpers.length, 6);
+    const shuffledHelpers = shuffleArray([...reqHelpers]);
+    const numHelpers = Math.min(shuffledHelpers.length, 6);
     const filterPromises = [];
     const filterChunks = splitFilters(filters, numHelpers);
     for (let i = 0; i < numHelpers; i++) {
       const helperFilters = filterChunks[i];
-      const helper = reqHelpers[i];
+      const helper = shuffledHelpers[i];
       filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
     }
     await Promise.all(filterPromises);
@@ -2399,6 +2400,13 @@ function splitFilters(filters, numChunks) {
 function splitArray(arr, numChunks) {
   const chunkSize = Math.ceil(arr.length / numChunks);
   return Array(numChunks).fill().map((_, index) => arr.slice(index * chunkSize, (index + 1) * chunkSize));
+}
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
 }
 async function verifyEventSignature(event) {
   try {

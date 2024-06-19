@@ -4,13 +4,23 @@
 
 Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket. 
 
-This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social  protocol.
+This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social protocol.
 
-Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words or phrases, blast events to other relays, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
+Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
+
+Nosflare introduces a unique "helper" scheme which allows utilizing helper workers for handling EVENT and REQ messages. This let's the primary websocket worker communicate with helper workers in order to improve the saving and retrieval of events to and from the R2 bucket. At least one helper worker for both EVENT and REQ messages is required, detailed further in the Deployment section.
+
+These helper workers communicate with the primary relay websocket worker through POST requests. This means, you can technically query your R2 bucket using standard HTTP POST requests like this example using cURL:
+
+```
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer AuthToken123" -d '{"type":"REQ","subscriptionId":"sub1","filters":{"kinds":[1]}}' "https://req-helper-1.example.com"
+```
+
+This opens up many possibilities for the relay to share event data outside of a Nostr client. By default, Nosflare is configured to use an Authorization header to secure and authenticate the inter-relay communication between websocket worker and helper workers in order to prevent abuse. However, you could alter the code if you'd like to remove this restriction.
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45.
+- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40.
 
 ## Getting Started
 
@@ -18,7 +28,7 @@ Most applicable NIPs are supported along with support for allowlisting or blockl
 
 - A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers and R2 bucket enabled.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
-- (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update) or access to the Cloudflare dashboard for deployment.
+- (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
 
 ### Dependencies
 
@@ -31,80 +41,52 @@ npm install -g esbuild
 
 ### Building
 
-Clone the repo to your machine and open `worker.js` in a file editor. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+Clone this repo to your machine, then `cd` into its directory, and open `relay-worker.js` in a file editor. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+
+***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
 *Optional:*
 - Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address.
 - Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` and `blockedTags` or `allowedTags` to either blocklist or allowlist pubkeys and event kinds and tags.
 - Edit `blockedContent` to block specific words and/or phrases.
 - Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting.
-- Edit `blastRelays` to specify other relays for blasting events.
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
 > How blocklisting and allowlisting works: If pubkey(s) and event kind(s) and tag(s) are in blocklist, only that pubkey(s) and event kind(s) and tag(s) will be blocked and all others allowed. Conversely, if pubkey(s) and event kind(s) and tag(s) are in allowlist, only that pubkey(s) and event kind(s) and tag(s) will be allowed and all others blocked.
 
-We'll use `esbuild` to bundle the worker script:
-
-```
-esbuild worker.js --bundle --outfile=dist/worker.js --platform=neutral --target=es2020
-```
-
-The command assumes you're in the same directory as the `worker.js` file.
+Once you've made the desired edits, from the project's directory use the command `npm run build` to bundle the worker scripts. This will overwrite the `relay-worker.js`, `event-worker.js`, and `req-worker.js` files and save them in the `dist/` directory. You will use these three scripts from the `dist/` directory to deploy the relay.
 
 ### Deployment
 
-You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script:
+You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
 
 #### Cloudflare Dashboard
 
 1. Log in to your Cloudflare dashboard.
-2. Go to the Workers section and create a new worker. You can call it whatever you'd like.
-3. Copy the contents of `dist/worker.js` and paste into the online editor. See the `example.js` file in this repo for what a successfully bundled file should look like.
-4. Save and deploy the worker.
-5. Add a custom domain in Worker's settings (this will be the desired relay URL).
-6. Create a R2 bucket to store events. You can call it whatever you want.
-7. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
-8. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
-9. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
-10. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settings section)
-
-Examples:
-
+2. Go to the Workers section and create a new worker. You can call it whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
+3. Copy the contents of `dist/relay-worker.js` file and paste into the online editor.
+4. Save and deploy the relay worker.
+5. Create another worker. You can call it whatever you'd like. This will be the EVENT messages helper worker.
+6. Copy the contents of `dist/event-worker.js` file and paste into the online editor.
+7. Save and deploy the events helper worker.
+8. Create another worker. You can call it whatever you'd like. This will be the REQ messages helper worker.
+9. Copy the contents of `dist/req-worker.js` file and paste into the online editor.
+10. Save and deploy the req helper worker.
+11. Add a custom domain in the relay Worker's settings in "Triggers" tab (this will be the desired relay URL).
+12. Add custom subdomain in both event and req helper Worker's settings in "Triggers" tab (this will be the desired URL used for `eventHelpers` and `reqHelpers`). Repeat this step if you want to create multiple event and req helper workers!
+![Helper Workers Custom Subdomain](images/helper-workers-domain.png)
+13. Create a R2 bucket to store events. You can call it whatever and choose the location you want.
+14. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 ![R2 Bucket Subdomain](images/custom-domain.jpeg)
-
-![Environment Variables](images/env-vars.jpeg)
-
+15. In each Worker's variables settings add the following environment variables: `r2BucketDomain` that will be the subdomain URL you set as the custome domain in the R2 bucket, `authToken` this will be something unique (think password) that will be used to authenticate the communication from the relay worker to the helper workers, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
+![Worker Environment Variables](images/env-vars.png)
+16. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
-
-#### Wrangler CLI
-
-1. Configure your `wrangler.toml` with your Cloudflare account details.
-2. Publish the worker:
-
-```
-wrangler publish
-```
-3. Add a custom domain in Worker's settings (this will be the desired relay URL).
-4. Create a R2 bucket to store events. You can call it whatever you want.
-5. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
-6. In the Worker's variables settings add the following environment variables: `customDomain` that will be the subdomain URL you set in bucket, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
-7. In a different section on the Settings > Variables page, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
-8. !Important. Create a new Page Rule to bypass cache on the /count path (see example in recommended settings section)
 
 #### NosflareDeploy Script
 
 A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
-
-## Usage
-
-Nosflare acts as a Nostr relay. Users can connect using any standard Nostr client by pointing to the deployed Cloudflare Worker URL or custom domain. The relay adheres to the basic tenets of the Nostr protocol, handling events according to the specified NIPs above.
-
-As mentioned, you can either use the Cloudflare Worker's default "workers.dev" endpoint URL or a custom domain, adding it to any Nostr client using the secure websocket protocol.
-
-Example:
-
-- `wss://nostr-relay.example.workers.dev/`
 
 ## Roadmap
 
@@ -118,8 +100,6 @@ The current release of Nosflare is primarily focused on [basic protocol flow](ht
 ## Recommended Cloudflare Settings
 
 Ensure optimal performance of the relay by creating a Page Rule for enforcing a high cache rate through a "cache everything" rule and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
-
-Also, create a Page Rule for cache bypass on the `/count*` path of the R2 bucket custom domain.
 
 Examples:
 

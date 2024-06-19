@@ -126,7 +126,7 @@ async function processReq(subscriptionId, filters) {
             if (filters.ids) {
                 for (const id of filters.ids.slice(0, 100)) {
                     const idKey = `events/event:${id}`;
-                    const eventUrl = `${customDomain}/${idKey}`;
+                    const eventUrl = `https://${r2BucketDomain}/${idKey}`;
                     eventPromises.push(
                         fetch(eventUrl).then((response) => {
                             if (response.ok) {
@@ -153,14 +153,13 @@ async function processReq(subscriptionId, filters) {
             }
             if (filters.kinds) {
                 for (const kind of filters.kinds) {
-                    const kindCountKey = `count/kind_count_${kind}`;
-                    const kindCountUrl = `${customDomain}/${kindCountKey}`;
-                    const kindCountResponse = await fetch(kindCountUrl);
-                    const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : '0';
+                    const kindCountKey = `counts/kind_count_${kind}`;
+                    const kindCountResponse = await relayDb.get(kindCountKey);
+                    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
                     const kindCount = parseInt(kindCountValue, 10);
                     for (let i = kindCount; i >= Math.max(1, kindCount - 100 + 1); i--) {
                         const kindKey = `kinds/kind-${kind}:${i}`;
-                        const eventUrl = `${customDomain}/${kindKey}`;
+                        const eventUrl = `https://${r2BucketDomain}/${kindKey}`;
                         eventPromises.push(
                             fetch(eventUrl).then((response) => {
                                 if (response.ok) {
@@ -188,14 +187,13 @@ async function processReq(subscriptionId, filters) {
             }
             if (filters.authors) {
                 for (const author of filters.authors) {
-                    const pubkeyCountKey = `count/pubkey_count_${author}`;
-                    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-                    const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-                    const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : '0';
+                    const pubkeyCountKey = `counts/pubkey_count_${author}`;
+                    const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+                    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
                     const pubkeyCount = parseInt(pubkeyCountValue, 10);
                     for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 100 + 1); i--) {
                         const pubkeyKey = `pubkeys/pubkey-${author}:${i}`;
-                        const eventUrl = `${customDomain}/${pubkeyKey}`;
+                        const eventUrl = `https://${r2BucketDomain}/${pubkeyKey}`;
                         eventPromises.push(
                             fetch(eventUrl).then((response) => {
                                 if (response.ok) {
@@ -233,14 +231,13 @@ async function processReq(subscriptionId, filters) {
             for (const query of tagQueries) {
                 if (filters[`#${query.key}`]) {
                     for (const tag of filters[`#${query.key}`]) {
-                        const tagCountKey = `count/${query.label}_count_${tag}`;
-                        const tagCountUrl = `${customDomain}/${tagCountKey}`;
-                        const tagCountResponse = await fetch(tagCountUrl);
-                        const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : '0';
+                        const tagCountKey = `counts/${query.label}_count_${tag}`;
+                        const tagCountResponse = await relayDb.get(tagCountKey);
+                        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
                         const tagCount = parseInt(tagCountValue, 10);
                         for (let i = tagCount; i >= Math.max(1, tagCount - 100 + 1); i--) {
                             const tagKey = `tags/${query.label}-${tag}:${i}`;
-                            const eventUrl = `${customDomain}/${tagKey}`;
+                            const eventUrl = `https://${r2BucketDomain}/${tagKey}`;
                             eventPromises.push(
                                 fetch(eventUrl).then((response) => {
                                     if (response.ok) {

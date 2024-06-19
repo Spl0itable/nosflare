@@ -26,14 +26,14 @@ const nip05Users = {
 const eventHelpers = [
     "https://event-helper-1.example.com",
     "https://event-helper-2.example.com"
-    // ... add 4 more helper workers
+    // ... add more helper workers
 ];
 
 // Handles REQ messages from helper workers
 const reqHelpers = [
     "https://req-helper-1.example.com",
     "https://req-helper-2.example.com"
-    // ... add 4 more helper workers
+    // ... add more helper workers
 ];
 
 // Blocked pubkeys
@@ -319,14 +319,15 @@ async function processReq(message, server) {
     const subscriptionId = message[1];
     const filters = message[2] || {};
     try {
-        const numHelpers = Math.min(reqHelpers.length, 6); // Limit to a maximum of 6 helpers
+        const shuffledHelpers = shuffleArray([...reqHelpers]);
+        const numHelpers = Math.min(shuffledHelpers.length, 6); // Limit to maximum 6 reqhelpers
         const filterPromises = [];
         // Split the filters into chunks based on the number of helpers
         const filterChunks = splitFilters(filters, numHelpers);
         // Assign each chunk of filters to a helper
         for (let i = 0; i < numHelpers; i++) {
             const helperFilters = filterChunks[i];
-            const helper = reqHelpers[i];
+            const helper = shuffledHelpers[i];
             filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
         }
         await Promise.all(filterPromises);
@@ -416,12 +417,11 @@ function splitFilters(filters, numChunks) {
         const key = arrayKeys[0];
         const arrayValues = arrayFilters[key];
         const arrayChunks = splitArray(arrayValues, numChunks);
-  
         for (let i = 0; i < numChunks; i++) {
             filterChunks[i][key] = arrayChunks[i];
         }
     } else {
-        // If there are multiple filters, split the 'authors' filter (if present) and assign other filters as is
+        // If there are multiple filters, split the 'authors' filter and assign other filters
         for (const key in arrayFilters) {
             const arrayValues = arrayFilters[key];
             if (key === 'authors') {
@@ -437,15 +437,24 @@ function splitFilters(filters, numChunks) {
         }
     }
     return filterChunks;
-  }
-  
-  // Helper to split an array into chunks
-  function splitArray(arr, numChunks) {
+}
+
+// Helper to split an array into chunks
+function splitArray(arr, numChunks) {
     const chunkSize = Math.ceil(arr.length / numChunks);
     return Array(numChunks)
         .fill()
         .map((_, index) => arr.slice(index * chunkSize, (index + 1) * chunkSize));
-  }
+}
+
+// Helper to shuffle 6 reqHelper selection
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
 
 // Verify event sig
 async function verifyEventSignature(event) {

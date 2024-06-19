@@ -1,4 +1,4 @@
-## v4.19.18 - 2024-06-17
+## v4.19.18 - 2024-06-19
 
 - New: introduction of EVENT and REQ message helpers
 - Removed: COUNT message support

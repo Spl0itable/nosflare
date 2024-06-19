@@ -114,21 +114,16 @@ async function saveEventToR2(event) {
     return { success: false, error: "Duplicate check rate limit exceeded" };
   }
   try {
-    const eventUrl = `${customDomain}/${eventKey}`;
-    const response = await fetch(eventUrl);
-    if (response.ok) {
+    const existingEvent = await relayDb.get(eventKey);
+    if (existingEvent) {
       console.log(`Duplicate event: ${event.id}. Event dropped.`);
       return { success: false, error: "Duplicate event" };
-    } else if (response.status !== 404) {
-      console.error(`Error checking duplicate event in R2: ${response.status}`);
-      response.body.cancel();
-      return { success: false, error: `Error checking duplicate event in R2: ${response.status}` };
-    } else {
-      purgeCloudflareCache(eventUrl);
     }
   } catch (error) {
-    console.error(`Error checking duplicate event in R2: ${error.message}`);
-    return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
+    if (error.name !== "R2Error" || error.message !== "R2 object not found") {
+      console.error(`Error checking duplicate event in R2: ${error.message}`);
+      return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
+    }
   }
   try {
     JSON.stringify(event);
@@ -137,19 +132,17 @@ async function saveEventToR2(event) {
     return { success: false, error: `Invalid JSON for event: ${event.id}` };
   }
   try {
-    const kindCountKey = `count/kind_count_${event.kind}`;
-    const kindCountUrl = `${customDomain}/${kindCountKey}`;
-    const kindCountResponse = await fetch(kindCountUrl);
-    const kindCountValue = kindCountResponse.ok ? await kindCountResponse.text() : "0";
+    const kindCountKey = `counts/kind_count_${event.kind}`;
+    const kindCountResponse = await relayDb.get(kindCountKey);
+    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
     let kindCount = parseInt(kindCountValue, 10);
     if (isNaN(kindCount)) {
       kindCount = 0;
     }
     const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
-    const pubkeyCountKey = `count/pubkey_count_${event.pubkey}`;
-    const pubkeyCountUrl = `${customDomain}/${pubkeyCountKey}`;
-    const pubkeyCountResponse = await fetch(pubkeyCountUrl);
-    const pubkeyCountValue = pubkeyCountResponse.ok ? await pubkeyCountResponse.text() : "0";
+    const pubkeyCountKey = `counts/pubkey_count_${event.pubkey}`;
+    const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
     let pubkeyCount = parseInt(pubkeyCountValue, 10);
     if (isNaN(pubkeyCount)) {
       pubkeyCount = 0;
@@ -162,10 +155,9 @@ async function saveEventToR2(event) {
       const tagName = tag[0];
       const tagValue = tag[1];
       if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
-        const tagCountKey = `count/${tagName}_count_${tagValue}`;
-        const tagCountUrl = `${customDomain}/${tagCountKey}`;
-        const tagCountResponse = await fetch(tagCountUrl);
-        const tagCountValue = tagCountResponse.ok ? await tagCountResponse.text() : "0";
+        const tagCountKey = `counts/${tagName}_count_${tagValue}`;
+        const tagCountResponse = await relayDb.get(tagCountKey);
+        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
         let tagCount = parseInt(tagCountValue, 10);
         if (isNaN(tagCount)) {
           tagCount = 0;
@@ -173,7 +165,7 @@ async function saveEventToR2(event) {
         const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
         eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
         currentBatch.push(relayDb.put(tagKey, JSON.stringify(event)));
-        currentBatch.push(relayDb.put(tagCountKey, (tagCount + 1).toString()));
+        currentBatch.push(relayDb.put(tagCountKey, tagCount.toString()));
         if (currentBatch.length === 5) {
           tagBatches.push(currentBatch);
           currentBatch = [];
@@ -212,7 +204,7 @@ async function processDeletionEvent(deletionEvent) {
       const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
       for (const eventId of deletedEventIds) {
         const idKey = `events/event:${eventId}`;
-        const eventUrl = `${customDomain}/${encodeURIComponent(idKey)}`;
+        const eventUrl = `https://${r2BucketDomain}/${encodeURIComponent(idKey)}`;
         try {
           const response = await fetch(eventUrl);
           if (response.ok) {
@@ -223,49 +215,22 @@ async function processDeletionEvent(deletionEvent) {
                 event.pubkeyKey,
                 ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
               ].filter((key) => key !== void 0);
-              const deleteOperations = [
-                relayDb.delete(idKey),
-                event.kindKey ? relayDb.delete(event.kindKey) : Promise.resolve(),
-                event.pubkeyKey ? relayDb.delete(event.pubkeyKey) : Promise.resolve(),
-                ...relatedDataKeys.map((key) => relayDb.delete(key))
-              ];
-              const deleteBatches = [];
-              let currentBatch = [];
-              for (const operation of deleteOperations) {
-                currentBatch.push(operation);
-                if (currentBatch.length === 5) {
-                  deleteBatches.push(currentBatch);
-                  currentBatch = [];
-                }
-              }
-              if (currentBatch.length > 0) {
-                deleteBatches.push(currentBatch);
-              }
-              for (const batch of deleteBatches) {
-                await Promise.all(batch);
+              await relayDb.delete(idKey);
+              if (event.kindKey) await relayDb.delete(event.kindKey);
+              if (event.pubkeyKey) await relayDb.delete(event.pubkeyKey);
+              for (const key of relatedDataKeys) {
+                await relayDb.delete(key);
               }
               const cacheKey = `event:${eventId}`;
               relayCache.delete(cacheKey);
               const relatedDataUrls = [
                 eventUrl,
-                event.kindKey ? `${customDomain}/${encodeURIComponent(event.kindKey)}` : void 0,
-                event.pubkeyKey ? `${customDomain}/${encodeURIComponent(event.pubkeyKey)}` : void 0,
-                ...relatedDataKeys.map((key) => `${customDomain}/${encodeURIComponent(key)}`)
+                event.kindKey ? `https://${r2BucketDomain}/${encodeURIComponent(event.kindKey)}` : void 0,
+                event.pubkeyKey ? `https://${r2BucketDomain}/${encodeURIComponent(event.pubkeyKey)}` : void 0,
+                ...relatedDataKeys.map((key) => `https://${r2BucketDomain}/${encodeURIComponent(key)}`)
               ].filter((url) => url !== void 0);
-              const purgeBatches = [];
-              let currentPurgeBatch = [];
               for (const url of relatedDataUrls) {
-                currentPurgeBatch.push(purgeCloudflareCache(url));
-                if (currentPurgeBatch.length === 5) {
-                  purgeBatches.push(currentPurgeBatch);
-                  currentPurgeBatch = [];
-                }
-              }
-              if (currentPurgeBatch.length > 0) {
-                purgeBatches.push(currentPurgeBatch);
-              }
-              for (const batch of purgeBatches) {
-                await Promise.all(batch);
+                await purgeCloudflareCache(url);
               }
             }
           }
