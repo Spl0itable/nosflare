@@ -103,7 +103,7 @@ Ensure optimal performance of the relay by creating a Page Rule for enforcing a 
 
 Examples:
 
-![Cache Rule](images/cache-setting.png)
+![Cache Rule](images/cache-setting.jpeg)
 
 ![Rate Limiting](images/rate-limit.jpeg)
 
