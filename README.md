@@ -12,9 +12,7 @@ Nosflare introduces a unique "helper" scheme which allows utilizing helper worke
 
 These helper workers communicate with the primary relay websocket worker through POST requests. This means, you can technically query your R2 bucket using standard HTTP POST requests like this example using cURL:
 
-```
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer AuthToken123" -d '{"type":"REQ","subscriptionId":"sub1","filters":{"kinds":[1]}}' "https://req-helper-1.example.com"
-```
+> ```curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer AuthToken123" -d '{"type":"REQ","subscriptionId":"sub1","filters":{"kinds":[1]}}' "https://req-helper-1.example.com"```
 
 This opens up many possibilities for the relay to share event data outside of a Nostr client. By default, Nosflare is configured to use an Authorization header to secure and authenticate the inter-relay communication between websocket worker and helper workers in order to prevent abuse. However, you could alter the code if you'd like to remove this restriction.
 
