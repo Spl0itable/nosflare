@@ -44,10 +44,8 @@ Clone this repo to your machine, then `cd` into its directory, and open `relay-w
 ***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
 *Optional:*
-- Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address.
-- Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` and `blockedTags` or `allowedTags` to either blocklist or allowlist pubkeys and event kinds and tags.
-- Edit `blockedContent` to block specific words and/or phrases.
-- Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting.
+- Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting in the `relay-worker.js` file.
+- Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags in the `event-worker.js` file.
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
