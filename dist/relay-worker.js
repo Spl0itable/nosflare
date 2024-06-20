@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lucas@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.19.18"
+  version: "4.19.20"
 };
 var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
 var nip05Users = {
@@ -2278,7 +2278,7 @@ async function processEvent(event, server) {
       } else {
         sendOK(server, event.id, true, "Event received successfully.");
       }
-      sendEventToHelper(event, server, event.id);
+      await sendEventToHelper(event, server, event.id);
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }
@@ -2300,7 +2300,11 @@ async function processReq(message, server) {
       const helper = shuffledHelpers[i];
       filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
     }
-    await Promise.all(filterPromises);
+    const fetchedEvents = await Promise.all(filterPromises);
+    const events = fetchedEvents.flat();
+    for (const event of events) {
+      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+    }
     server.send(JSON.stringify(["EOSE", subscriptionId]));
   } catch (error) {
     console.error("Error fetching events:", error);
@@ -2327,16 +2331,14 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
     });
     if (response.ok) {
       const events = await response.json();
-      for (const event of events) {
-        server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-      }
+      return events;
     } else {
       console.error(`Error fetching events from relay ${helper}: ${response.status} - ${response.statusText}`);
-      sendError(server, `Error fetching events: ${response.status} - ${response.statusText}`);
+      throw new Error(`Error fetching events: ${response.status} - ${response.statusText}`);
     }
   } catch (error) {
     console.error(`Error fetching events from relay ${helper}:`, error);
-    sendError(server, `Error fetching events: ${error.message}`);
+    throw error;
   }
 }
 async function sendEventToHelper(event, server, eventId) {
@@ -2350,15 +2352,11 @@ async function sendEventToHelper(event, server, eventId) {
       },
       body: JSON.stringify({ type: "EVENT", event })
     });
-    if (response.ok) {
-      sendOK(server, eventId, true, "Event received successfully.");
-    } else {
+    if (!response.ok) {
       console.error(`Error sending event ${eventId} to helper ${randomHelper2}: ${response.status} - ${response.statusText}`);
-      sendOK(server, eventId, false, `Error sending event: ${response.status} - ${response.statusText}`);
     }
   } catch (error) {
     console.error(`Error sending event ${eventId} to helper ${randomHelper}:`, error);
-    sendOK(server, eventId, false, `Error sending event: ${error.message}`);
   }
 }
 function splitFilters(filters, numChunks) {

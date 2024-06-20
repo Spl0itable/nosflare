@@ -1,3 +1,7 @@
+## v4.19.20 - 2024-06-20
+
+- Hotfix: fixed response
+
 ## v4.19.19 - 2024-06-20
 
 - Hotfix: fixed tag count increment
