@@ -182,7 +182,7 @@ async function saveEventToR2(event) {
         const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
         eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
         currentBatch.push(relayDb.put(tagKey, JSON.stringify(event)));
-        currentBatch.push(relayDb.put(tagCountKey, tagCount.toString()));
+        currentBatch.push(relayDb.put(tagCountKey, (tagCount + 1).toString()));
         if (currentBatch.length === 5) {
           tagBatches.push(currentBatch);
           currentBatch = [];

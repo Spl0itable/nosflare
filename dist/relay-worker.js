@@ -2437,7 +2437,8 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0)
+    throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);

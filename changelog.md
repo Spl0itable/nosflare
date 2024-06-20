@@ -1,3 +1,7 @@
+## v4.19.19 - 2024-06-20
+
+- Hotfix: fixed tag count increment
+
 ## v4.19.18 - 2024-06-19
 
 - New: introduction of EVENT and REQ message helpers
