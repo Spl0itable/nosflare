@@ -1,3 +1,8 @@
+## v4.19.21 - 2024-06-22
+
+- Hotfix: changed number of fetched events
+- Hotfix: removed unnecessary in-memory caching
+
 ## v4.19.20 - 2024-06-20
 
 - Hotfix: fixed response

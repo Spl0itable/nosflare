@@ -42,25 +42,6 @@ function isTagAllowed(tag) {
 function isTagBlocked(tag) {
   return blockedTags.has(tag);
 }
-var relayCache = {
-  _cache: {},
-  get(key) {
-    const item = this._cache[key];
-    if (item && item.expires > Date.now()) {
-      return item.value;
-    }
-    return null;
-  },
-  set(key, value, ttl = 6e4) {
-    this._cache[key] = {
-      value,
-      expires: Date.now() + ttl
-    };
-  },
-  delete(key) {
-    delete this._cache[key];
-  }
-};
 var rateLimiter = class {
   constructor(rate, capacity) {
     this.tokens = capacity;
@@ -91,12 +72,6 @@ async function processEvent(event) {
       await processDeletionEvent(event);
       return "Deletion request received successfully.";
     }
-    const cacheKey = `event:${event.id}`;
-    const cachedEvent = relayCache.get(cacheKey);
-    if (cachedEvent) {
-      return "Duplicate. Event dropped.";
-    }
-    relayCache.set(cacheKey, event);
     const saveResult = await saveEventToR2(event);
     if (!saveResult.success) {
       return `Error: Failed to save event - ${saveResult.error}`;
@@ -216,15 +191,11 @@ async function processDeletionEvent(deletionEvent) {
                 ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
               ].filter((key) => key !== void 0);
               await relayDb.delete(idKey);
-              if (event.kindKey)
-                await relayDb.delete(event.kindKey);
-              if (event.pubkeyKey)
-                await relayDb.delete(event.pubkeyKey);
+              if (event.kindKey) await relayDb.delete(event.kindKey);
+              if (event.pubkeyKey) await relayDb.delete(event.pubkeyKey);
               for (const key of relatedDataKeys) {
                 await relayDb.delete(key);
               }
-              const cacheKey = `event:${eventId}`;
-              relayCache.delete(cacheKey);
               const relatedDataUrls = [
                 eventUrl,
                 event.kindKey ? `https://${r2BucketDomain}/${encodeURIComponent(event.kindKey)}` : void 0,

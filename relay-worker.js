@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lucas@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.19.20",
+    version: "4.19.21",
 };
 
 // Relay favicon

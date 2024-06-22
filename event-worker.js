@@ -50,27 +50,6 @@ function isTagBlocked(tag) {
   return blockedTags.has(tag);
 }
 
-// Use in-memory cache
-const relayCache = {
-  _cache: {},
-  get(key) {
-    const item = this._cache[key];
-    if (item && item.expires > Date.now()) {
-      return item.value;
-    }
-    return null;
-  },
-  set(key, value, ttl = 60000) {
-    this._cache[key] = {
-      value,
-      expires: Date.now() + ttl,
-    };
-  },
-  delete(key) {
-    delete this._cache[key];
-  },
-};
-
 // Rate limit messages
 class rateLimiter {
   constructor(rate, capacity) {
@@ -105,13 +84,6 @@ async function processEvent(event) {
       await processDeletionEvent(event);
       return "Deletion request received successfully.";
     }
-    // Check cache for duplicate event ID
-    const cacheKey = `event:${event.id}`;
-    const cachedEvent = relayCache.get(cacheKey);
-    if (cachedEvent) {
-      return "Duplicate. Event dropped.";
-    }
-    relayCache.set(cacheKey, event);
     const saveResult = await saveEventToR2(event);
     if (!saveResult.success) {
       return `Error: Failed to save event - ${saveResult.error}`;
@@ -240,8 +212,6 @@ async function processDeletionEvent(deletionEvent) {
               for (const key of relatedDataKeys) {
                 await relayDb.delete(key);
               }
-              const cacheKey = `event:${eventId}`;
-              relayCache.delete(cacheKey);
               const relatedDataUrls = [
                 eventUrl,
                 event.kindKey ? `https://${r2BucketDomain}/${encodeURIComponent(event.kindKey)}` : void 0,
