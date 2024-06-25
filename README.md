@@ -56,7 +56,7 @@ Once you've made the desired edits, from the project's directory use the command
 
 ### Deployment
 
-You can deploy Nosflare using either the Wrangler CLI, directly through the Cloudflare dashboard, or with the third-party deployment script. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
+You can deploy Nosflare using either the Wrangler CLIor directly through the Cloudflare dashboard. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
 
 #### Cloudflare Dashboard
 
@@ -80,10 +80,6 @@ You can deploy Nosflare using either the Wrangler CLI, directly through the Clou
 ![Worker Environment Variables](images/env-vars.png)
 16. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
-
-#### NosflareDeploy Script
-
-A third-party script to easily deploy Nosflare. Read more [here](https://github.com/PastaGringo/NosflareDeploy). 
 
 ## Roadmap
 
@@ -121,4 +117,3 @@ For inquiries related to Nosflare, you can reach out on Nostr at `npub16jdfqgazr
 - The awesome Nostr community for the protocol development.
 - Cloudflare Workers for an easy-to-use serverless execution environment.
 - The noble library for providing Schnorr signatures over secp256k1.
-- [PastaGringo](https://github.com/PastaGringo) for making the NosflareDeploy script.
