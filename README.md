@@ -64,21 +64,22 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 2. Go to the Workers section and create a new worker. You can call it whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
 3. Copy the contents of `dist/relay-worker.js` file and paste into the online editor.
 4. Save and deploy the relay worker.
-5. Create another worker. You can call it whatever you'd like. This will be the EVENT messages helper worker.
-6. Copy the contents of `dist/event-worker.js` file and paste into the online editor.
-7. Save and deploy the events helper worker.
-8. Create another worker. You can call it whatever you'd like. This will be the REQ messages helper worker.
-9. Copy the contents of `dist/req-worker.js` file and paste into the online editor.
-10. Save and deploy the req helper worker.
-11. Add a custom domain in the relay Worker's settings in "Triggers" tab (this will be the desired relay URL).
-12. Add custom subdomain in both event and req helper Worker's settings in "Triggers" tab (this will be the desired URL used for `eventHelpers` and `reqHelpers`). Repeat this step if you want to create multiple event and req helper workers!
+5. Add a custom domain in the relay Worker's settings in "Triggers" tab (this will be the desired relay URL).
+6. Create another worker. You can call it whatever you'd like. This will be the EVENT messages helper worker.
+7. Copy the contents of `dist/event-worker.js` file and paste into the online editor.
+8. Save and deploy the events helper worker.
+9. Add custom subdomain in Worker's settings in "Triggers" tab (this will be the desired URL used for `eventHelpers`). Repeat this step if you want to create multiple event helper workers!
+10. Create another worker. You can call it whatever you'd like. This will be the REQ messages helper worker.
+11. Copy the contents of `dist/req-worker.js` file and paste into the online editor.
+12. Save and deploy the req helper worker.
+13. Add custom subdomain in Worker's settings in "Triggers" tab (this will be the desired URL used for `reqHelpers`). Repeat this step if you want to create multiple req helper workers!
 ![Helper Workers Custom Subdomain](images/helper-workers-domain.png)
-13. Create a R2 bucket to store events. You can call it whatever and choose the location you want.
-14. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
+14. Create a R2 bucket to store events. You can call it whatever and choose the location you want.
+15. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 ![R2 Bucket Subdomain](images/custom-domain.jpeg)
-15. In each Worker's variables settings add the following environment variables: `r2BucketDomain` that will be the subdomain URL you set as the custome domain in the R2 bucket, `authToken` this will be something unique (think password) that will be used to authenticate the communication from the relay worker to the helper workers, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
+16. In each Worker's variables settings add the following environment variables: `r2BucketDomain` that will be the subdomain URL you set as the custome domain in the R2 bucket, `authToken` this will be something unique (think password) that will be used to authenticate the communication from the relay worker to the helper workers, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 ![Worker Environment Variables](images/env-vars.png)
-16. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
+17. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
 
 ## Roadmap
