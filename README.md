@@ -56,7 +56,7 @@ Once you've made the desired edits, from the project's directory use the command
 
 ### Deployment
 
-You can deploy Nosflare using either the Wrangler CLIor directly through the Cloudflare dashboard. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
+You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
 
 #### Cloudflare Dashboard
 
