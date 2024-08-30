@@ -77,7 +77,7 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 14. Create a R2 bucket to store events. You can call it whatever and choose the location you want.
 15. In R2 bucket settings, add a custom subdomain (ex: nostr-events.site.com).
 ![R2 Bucket Subdomain](images/custom-domain.jpeg)
-16. In each Worker's variables settings add the following environment variables: `r2BucketDomain` that will be the subdomain URL you set as the custome domain in the R2 bucket, `authToken` this will be something unique (think password) that will be used to authenticate the communication from the relay worker to the helper workers, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
+16. In each Worker's variables settings add the following environment variables: `r2BucketDomain` that will be the subdomain URL you set as the custom domain in the R2 bucket, `authToken` this will be something unique (think password) that will be used to authenticate the communication from the relay worker to the helper workers, `apiToken` this will be your cloudflare API token (recommended to set a custom API token that only has cache purge privileges), `zoneId` which is for the domain you're using for the R2 bucket (this ID can be found in the right sidebar of the overview page for the domain).
 ![Worker Environment Variables](images/env-vars.png)
 17. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
@@ -103,7 +103,7 @@ Examples:
 
 ## Contributing
 
-Contributions to Nosflare are welcome! Please submit issues, feature requests, or pull requests through the project's [GitHub repository](https://github.com/Spl0itable/nosflare).
+Contributions to Nosflare are welcome! Please submit issues, feature requests, or pull requests through the project's GitHub repo.
 
 ## License
 
@@ -111,10 +111,5 @@ Nosflare is open-sourced software licensed under the MIT license.
 
 ## Contact
 
-For inquiries related to Nosflare, you can reach out on Nostr at `npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
-
-## Acknowledgements
-
-- The awesome Nostr community for the protocol development.
-- Cloudflare Workers for an easy-to-use serverless execution environment.
-- The noble library for providing Schnorr signatures over secp256k1.
+For inquiries related to Nosflare, you can start a discussion on the GitHub repo or reach out on Nostr:
+- `npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
