@@ -111,5 +111,9 @@ Nosflare is open-sourced software licensed under the MIT license.
 
 ## Contact
 
-For inquiries related to Nosflare, you can start a discussion on the GitHub repo or reach out on Nostr:
-- `npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
+For inquiries related to Nosflare, you can start a discussion on the GitHub repo or reach out on Nostr:    
+
+ <img src="https://github.com/user-attachments/assets/a6fa97ed-f855-409f-b356-583ad0728160" alt="npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" width="200px" height="auto"></img>    
+ 
+`npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
+
