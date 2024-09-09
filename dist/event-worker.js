@@ -25,6 +25,15 @@ async function handlePostRequest(request) {
     return new Response(`Error processing request: ${error.message}`, { status: 500 });
   }
 }
+var bypassDuplicateKinds = /* @__PURE__ */ new Set([
+  0,
+  3
+  // Kinds 0, 3 are for metadata and should not be checked for duplicates
+]);
+function isDuplicateBypassed(kind) {
+  return bypassDuplicateKinds.has(kind);
+}
+var enableGlobalDuplicateCheck = false;
 var blockedTags = /* @__PURE__ */ new Set([
   // ... tags that are explicitly blocked
 ]);
@@ -84,6 +93,24 @@ async function processEvent(event) {
 }
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
+  const contentHash = await hashContent(event);
+  const contentHashKey = enableGlobalDuplicateCheck ? `hashes/${contentHash}` : `hashes/${event.pubkey}:${contentHash}`;
+  if (isDuplicateBypassed(event.kind)) {
+    console.log(`Skipping duplicate check for kind: ${event.kind}`);
+  } else {
+    try {
+      const existingHash = await relayDb.get(contentHashKey);
+      if (existingHash) {
+        console.log(`Duplicate content detected. Event dropped.`);
+        return { success: false, error: "Duplicate content detected" };
+      }
+    } catch (error) {
+      if (error.name !== "R2Error" || error.message !== "R2 object not found") {
+        console.error(`Error checking content hash in R2: ${error.message}`);
+        return { success: false, error: `Error checking content hash in R2: ${error.message}` };
+      }
+    }
+  }
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
     console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
     return { success: false, error: "Duplicate check rate limit exceeded" };
@@ -164,14 +191,28 @@ async function saveEventToR2(event) {
       relayDb.put(kindCountKey, (kindCount + 1).toString()),
       relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
     ]);
-    for (const batch of tagBatches) {
-      await Promise.all(batch);
+    if (!isDuplicateBypassed(event.kind)) {
+      await relayDb.put(contentHashKey, JSON.stringify(event));
     }
     return { success: true };
   } catch (error) {
     console.error(`Error saving event to R2: ${error.message}`);
     return { success: false, error: `Error saving event to R2: ${error.message}` };
   }
+}
+async function hashContent(event) {
+  const contentToHash = JSON.stringify({
+    pubkey: event.pubkey,
+    kind: event.kind,
+    tags: event.tags,
+    content: event.content
+  });
+  const buffer = new TextEncoder().encode(contentToHash);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return bytesToHex(new Uint8Array(hashBuffer));
+}
+function bytesToHex(bytes) {
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 async function processDeletionEvent(deletionEvent) {
   try {

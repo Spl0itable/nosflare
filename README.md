@@ -52,7 +52,15 @@ You can find full list of event kinds [here](https://github.com/nostr-protocol/n
 How blocklisting and allowlisting works:
 > If pubkey(s) and event kind(s) and tag(s) are in blocklist, only that pubkey(s) and event kind(s) and tag(s) will be blocked and all others allowed. Conversely, if pubkey(s) and event kind(s) and tag(s) are in allowlist, only that pubkey(s) and event kind(s) and tag(s) will be allowed and all others blocked.
 
-Once you've made the desired edits, from the project's directory use the command `npm run build` to bundle the worker scripts. This will overwrite the `relay-worker.js`, `event-worker.js`, and `req-worker.js` files and save them in the `dist/` directory. You will use these three scripts from the `dist/` directory to deploy the relay.
+*Spam filtering:*
+
+Nosflare has a robust spam filtering mechanism. Each event submitted to the relay generates a hash based on the author's pubkey and the content of the event, which is stored within the "hashes" directory of the R2 bucket. By default, in the `event-worker.js` file it is set to only allow 1 of the same hash per pubkey. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note. However, by default kinds 0 and 3 are set to be bypassed, as they are used for metadata. 
+
+You can also change which event kinds are subjected to checking for duplicate hashes in the `bypassDuplicateKinds` and `duplicateCheckedKinds` arrays in the `event-worker.js` file. There you can have more granular control over what event kinds are subjected to the spam filtering. Similar allowlisting/blocklisting logic as explained further above is also relevant here. Effectively, these sections are where you can enable or disable the spam filtering.
+
+Furthermore, you can have even further granular control over the spam filtering by changing the value of `enableGlobalDuplicateCheck` in the `event-worker.js` file. By default, this option is set to `false` value, which means each event submitted to the relay is hashed with the author's pubkey. If set to `true` value it globally hashes the event content. As with the example given earlier, if one person were to write "Hey whatsup" and the value of `enableGlobalDuplicateCheck` is set to `true` then no other person can also write a note with "Hey whatsup" as the hash will already exist and any subsequent events would be dropped. This is particularly useful if your relay is under spam attack and the attackers are using disposable pubkeys, but the content of the spam notes are the same for each (such as the attack by "ReplyGuy").
+
+Once you've made the desired edits, from the project's directory within CLI use the command `npm run build` to bundle the worker scripts. This will overwrite the `relay-worker.js`, `event-worker.js`, and `req-worker.js` files and save them in the `dist/` directory. You will use these three scripts from the `dist/` directory to deploy the relay.
 
 ### Deployment
 

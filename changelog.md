@@ -1,3 +1,7 @@
+## v4.20.21 - 2024-09-09
+
+- New: spam filtering through hash based duplicate checker
+
 ## v4.19.21 - 2024-06-22
 
 - Hotfix: changed number of fetched events

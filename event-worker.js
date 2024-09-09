@@ -29,6 +29,29 @@ async function handlePostRequest(request) {
   }
 }
 
+// Bypass kinds from duplicate hash checks
+// Add comma-separated kinds Ex: 3, 5
+const bypassDuplicateKinds = new Set([
+  0, 3 // Kinds 0, 3 are for metadata and should not be checked for duplicates
+]);
+
+// Kinds subjected to duplicate hash checks
+const duplicateCheckedKinds = new Set([
+  // Add kinds you explicitly want to have duplication checks
+  // Ex: 1, 2, 4, 5
+]);
+function isDuplicateChecked(kind) {
+  if (duplicateCheckedKinds.size > 0 && !duplicateCheckedKinds.has(kind)) {
+    return false;
+  }
+  return !bypassDuplicateKinds.has(kind);
+}
+function isDuplicateBypassed(kind) {
+  return bypassDuplicateKinds.has(kind);
+}
+// Setting to enable or disable global duplicate hash check
+const enableGlobalDuplicateCheck = false;  // Set to true for global duplicate hash regardless of pubkey, or set to false for per-pubkey hash
+
 // Blocked tags
 // Add comma-separated tags Ex: t, e, p
 const blockedTags = new Set([
@@ -98,10 +121,40 @@ async function processEvent(event) {
 // Handles saving event to R2 bucket
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
+
+  // Generate a hash of the event content
+  const contentHash = await hashContent(event);
+
+  // Define the content hash key depending on the global setting
+  const contentHashKey = enableGlobalDuplicateCheck
+    ? `hashes/${contentHash}`   // Global duplicate check (same content is blocked for everyone)
+    : `hashes/${event.pubkey}:${contentHash}`;  // Per-pubkey duplicate check (same content is allowed once for different pubkeys)
+
+  // Check if the event kind allows duplicate hash checks
+  if (isDuplicateBypassed(event.kind)) {
+    console.log(`Skipping duplicate check for kind: ${event.kind}`);
+  } else {
+    // Check if the content hash already exists
+    try {
+      const existingHash = await relayDb.get(contentHashKey);
+      if (existingHash) {
+        console.log(`Duplicate content detected. Event dropped.`);
+        return { success: false, error: "Duplicate content detected" };
+      }
+    } catch (error) {
+      if (error.name !== "R2Error" || error.message !== "R2 object not found") {
+        console.error(`Error checking content hash in R2: ${error.message}`);
+        return { success: false, error: `Error checking content hash in R2: ${error.message}` };
+      }
+    }
+  }
+
+  // Check if the event ID already exists
   if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
     console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
     return { success: false, error: "Duplicate check rate limit exceeded" };
   }
+
   try {
     const existingEvent = await relayDb.get(eventKey);
     if (existingEvent) {
@@ -114,16 +167,19 @@ async function saveEventToR2(event) {
       return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
     }
   }
+
   try {
-    JSON.stringify(event);
+    JSON.stringify(event); // Ensure event is valid JSON
   } catch (error) {
     console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
     return { success: false, error: `Invalid JSON for event: ${event.id}` };
   }
+
+  // Save the event to R2
   try {
     const kindCountKey = `counts/kind_count_${event.kind}`;
     const kindCountResponse = await relayDb.get(kindCountKey);
-    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
+    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
     let kindCount = parseInt(kindCountValue, 10);
     if (isNaN(kindCount)) {
       kindCount = 0;
@@ -131,7 +187,7 @@ async function saveEventToR2(event) {
     const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
     const pubkeyCountKey = `counts/pubkey_count_${event.pubkey}`;
     const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
+    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
     let pubkeyCount = parseInt(pubkeyCountValue, 10);
     if (isNaN(pubkeyCount)) {
       pubkeyCount = 0;
@@ -146,7 +202,7 @@ async function saveEventToR2(event) {
       if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
         const tagCountKey = `counts/${tagName}_count_${tagValue}`;
         const tagCountResponse = await relayDb.get(tagCountKey);
-        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
+        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
         let tagCount = parseInt(tagCountValue, 10);
         if (isNaN(tagCount)) {
           tagCount = 0;
@@ -176,16 +232,40 @@ async function saveEventToR2(event) {
       relayDb.put(pubkeyKey, JSON.stringify(event)),
       relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
       relayDb.put(kindCountKey, (kindCount + 1).toString()),
-      relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString()),
+      relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
     ]);
-    for (const batch of tagBatches) {
-      await Promise.all(batch);
+
+    // Save the content hash if duplicate checks are allowed for this kind
+    if (!isDuplicateBypassed(event.kind)) {
+      await relayDb.put(contentHashKey, JSON.stringify(event));
     }
+
     return { success: true };
   } catch (error) {
     console.error(`Error saving event to R2: ${error.message}`);
     return { success: false, error: `Error saving event to R2: ${error.message}` };
   }
+}
+
+// Handles hashing the content of the event (excluding the ID)
+async function hashContent(event) {
+  const contentToHash = JSON.stringify({
+    pubkey: event.pubkey,
+    kind: event.kind,
+    tags: event.tags,
+    content: event.content,
+  });
+
+  const buffer = new TextEncoder().encode(contentToHash);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return bytesToHex(new Uint8Array(hashBuffer));
+}
+
+// Convert byte array to hex string
+function bytesToHex(bytes) {
+  return Array.from(bytes)
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // Handles event deletes (NIP-09)

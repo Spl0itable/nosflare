@@ -4,7 +4,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../../../node_modules/@noble/hashes/esm/_assert.js
+// ../../node_modules/@noble/hashes/esm/_assert.js
 function number(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error(`positive integer expected, not ${n}`);
@@ -38,10 +38,10 @@ function output(out, instance) {
   }
 }
 
-// ../../../node_modules/@noble/hashes/esm/crypto.js
+// ../../node_modules/@noble/hashes/esm/crypto.js
 var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
 
-// ../../../node_modules/@noble/hashes/esm/utils.js
+// ../../node_modules/@noble/hashes/esm/utils.js
 var createView = (arr) => new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 var rotr = (word, shift) => word << 32 - shift | word >>> shift;
 var isLE = new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68;
@@ -93,7 +93,7 @@ function randomBytes(bytesLength = 32) {
   throw new Error("crypto.getRandomValues must be defined");
 }
 
-// ../../../node_modules/@noble/hashes/esm/_md.js
+// ../../node_modules/@noble/hashes/esm/_md.js
 function setBigUint64(view, byteOffset, value, isLE2) {
   if (typeof view.setBigUint64 === "function")
     return view.setBigUint64(byteOffset, value, isLE2);
@@ -195,7 +195,7 @@ var HashMD = class extends Hash {
   }
 };
 
-// ../../../node_modules/@noble/hashes/esm/sha256.js
+// ../../node_modules/@noble/hashes/esm/sha256.js
 var SHA256_K = /* @__PURE__ */ new Uint32Array([
   1116352408,
   1899447441,
@@ -345,7 +345,7 @@ var SHA256 = class extends HashMD {
 };
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// ../../../node_modules/@noble/curves/esm/abstract/utils.js
+// ../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
   abytes: () => abytes,
@@ -582,7 +582,7 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/modular.js
+// ../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
 var _1n2 = BigInt(1);
 var _2n2 = BigInt(2);
@@ -848,7 +848,7 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/curve.js
+// ../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
 function wNAF(c, bits) {
@@ -966,7 +966,7 @@ function validateBasic(curve) {
   });
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
+// ../../node_modules/@noble/curves/esm/abstract/weierstrass.js
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1763,7 +1763,7 @@ function weierstrass(curveDef) {
   };
 }
 
-// ../../../node_modules/@noble/hashes/esm/hmac.js
+// ../../node_modules/@noble/hashes/esm/hmac.js
 var HMAC = class extends Hash {
   constructor(hash2, _key) {
     super();
@@ -1828,7 +1828,7 @@ var HMAC = class extends Hash {
 var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
 hmac.create = (hash2, key) => new HMAC(hash2, key);
 
-// ../../../node_modules/@noble/curves/esm/_shortw_utils.js
+// ../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
   return {
     hash: hash2,
@@ -1841,7 +1841,7 @@ function createCurve(curveDef, defHash) {
   return Object.freeze({ ...create(defHash), create });
 }
 
-// ../../../node_modules/@noble/curves/esm/secp256k1.js
+// ../../node_modules/@noble/curves/esm/secp256k1.js
 var secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
 var secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 var _1n5 = BigInt(1);
