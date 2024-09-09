@@ -29,6 +29,9 @@ async function handlePostRequest(request) {
   }
 }
 
+// Setting to enable or disable global duplicate hash check
+const enableGlobalDuplicateCheck = false;  // Set to true for global duplicate hash regardless of pubkey, or set to false for per-pubkey hash
+
 // Bypass kinds from duplicate hash checks
 // Add comma-separated kinds Ex: 3, 5
 const bypassDuplicateKinds = new Set([
@@ -49,8 +52,6 @@ function isDuplicateChecked(kind) {
 function isDuplicateBypassed(kind) {
   return bypassDuplicateKinds.has(kind);
 }
-// Setting to enable or disable global duplicate hash check
-const enableGlobalDuplicateCheck = false;  // Set to true for global duplicate hash regardless of pubkey, or set to false for per-pubkey hash
 
 // Blocked tags
 // Add comma-separated tags Ex: t, e, p
@@ -249,12 +250,19 @@ async function saveEventToR2(event) {
 
 // Handles hashing the content of the event (excluding the ID)
 async function hashContent(event) {
-  const contentToHash = JSON.stringify({
-    pubkey: event.pubkey,
-    kind: event.kind,
-    tags: event.tags,
-    content: event.content,
-  });
+  // Conditionally include or exclude `pubkey` based on the global setting
+  const contentToHash = enableGlobalDuplicateCheck
+    ? JSON.stringify({
+        kind: event.kind,
+        tags: event.tags,
+        content: event.content,
+      })  // Exclude pubkey for global duplicate check
+    : JSON.stringify({
+        pubkey: event.pubkey,
+        kind: event.kind,
+        tags: event.tags,
+        content: event.content,
+      });  // Include pubkey for per-pubkey duplicate check
 
   const buffer = new TextEncoder().encode(contentToHash);
   const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);

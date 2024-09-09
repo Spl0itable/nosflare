@@ -25,6 +25,7 @@ async function handlePostRequest(request) {
     return new Response(`Error processing request: ${error.message}`, { status: 500 });
   }
 }
+var enableGlobalDuplicateCheck = false;
 var bypassDuplicateKinds = /* @__PURE__ */ new Set([
   0,
   3
@@ -33,7 +34,6 @@ var bypassDuplicateKinds = /* @__PURE__ */ new Set([
 function isDuplicateBypassed(kind) {
   return bypassDuplicateKinds.has(kind);
 }
-var enableGlobalDuplicateCheck = false;
 var blockedTags = /* @__PURE__ */ new Set([
   // ... tags that are explicitly blocked
 ]);
@@ -201,7 +201,11 @@ async function saveEventToR2(event) {
   }
 }
 async function hashContent(event) {
-  const contentToHash = JSON.stringify({
+  const contentToHash = enableGlobalDuplicateCheck ? JSON.stringify({
+    kind: event.kind,
+    tags: event.tags,
+    content: event.content
+  }) : JSON.stringify({
     pubkey: event.pubkey,
     kind: event.kind,
     tags: event.tags,

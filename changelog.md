@@ -1,3 +1,7 @@
+## v4.20.22 - 2024-09-09
+
+- Hotfix: corrected global spam filtering hash logic
+
 ## v4.20.21 - 2024-09-09
 
 - New: spam filtering through hash based duplicate checker
