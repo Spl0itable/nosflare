@@ -300,9 +300,9 @@ async function processEvent(event, server) {
         if (isValidSignature) {
             relayCache.set(cacheKey, event);
             if (event.kind === 5) {
-                sendOK(server, event.id, true, "Deletion request received successfully.");
+                sendOK(server, event.id, true, "Deletion request received successfully for processing.");
             } else {
-                sendOK(server, event.id, true, "Event received successfully.");
+                sendOK(server, event.id, true, "Event received successfully for processing.");
             }
             await sendEventToHelper(event, server, event.id);
         } else {
