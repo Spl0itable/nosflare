@@ -2025,7 +2025,7 @@ var relayInfo = {
   software: "https://github.com/Spl0itable/nosflare",
   version: "4.20.23"
 };
-var relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
+var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
   "lucas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
   // ... more NIP-05 verified users

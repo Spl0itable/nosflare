@@ -14,7 +14,7 @@ const relayInfo = {
 };
 
 // Relay favicon
-const relayIcon = "https://workers.cloudflare.com/resources/logo/logo.svg";
+const relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 
 // Nostr address NIP-05 verified users
 const nip05Users = {
