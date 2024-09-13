@@ -318,27 +318,50 @@ async function processEvent(event, server) {
 async function processReq(message, server) {
     const subscriptionId = message[1];
     const filters = message[2] || {};
-    try {
-      const shuffledHelpers = shuffleArray([...reqHelpers]);
-      const numHelpers = Math.min(shuffledHelpers.length, 6);
-      const filterPromises = [];
-      const filterChunks = splitFilters(filters, numHelpers);
-      for (let i = 0; i < numHelpers; i++) {
-        const helperFilters = filterChunks[i];
-        const helper = shuffledHelpers[i];
-        filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
-      }
-      const fetchedEvents = await Promise.all(filterPromises);
-      const events = fetchedEvents.flat();
-      for (const event of events) {
-        server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-      }
-      server.send(JSON.stringify(["EOSE", subscriptionId]));
-    } catch (error) {
-      console.error("Error fetching events:", error);
-      sendError(server, `Error fetching events: ${error.message}`);
+
+    // Generate a unique cache key based on the filters
+    const cacheKey = `req:${JSON.stringify(filters)}`;
+    const cachedEvents = relayCache.get(cacheKey);
+
+    if (cachedEvents) {
+        // If cached events exist, return them immediately
+        for (const event of cachedEvents) {
+            server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+        }
+        server.send(JSON.stringify(["EOSE", subscriptionId]));
+        return;
     }
-  }
+
+    try {
+        // Shuffle helpers and distribute the filters
+        const shuffledHelpers = shuffleArray([...reqHelpers]);
+        const numHelpers = Math.min(shuffledHelpers.length, 6);
+        const filterPromises = [];
+        const filterChunks = splitFilters(filters, numHelpers);
+
+        for (let i = 0; i < numHelpers; i++) {
+            const helperFilters = filterChunks[i];
+            const helper = shuffledHelpers[i];
+            filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
+        }
+
+        // Await all events from the helper workers
+        const fetchedEvents = await Promise.all(filterPromises);
+        const events = fetchedEvents.flat();
+
+        // Cache the events for the filters
+        relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
+
+        // Send the events to the client
+        for (const event of events) {
+            server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+        }
+        server.send(JSON.stringify(["EOSE", subscriptionId]));
+    } catch (error) {
+        console.error("Error fetching events:", error);
+        sendError(server, `Error fetching events: ${error.message}`);
+    }
+}
 
 // Handles CLOSE message
 async function closeSubscription(subscriptionId, server) {

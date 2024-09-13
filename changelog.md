@@ -1,3 +1,7 @@
+## v4.20.23 - 2024-09-13
+
+- Hotfix: improved in-memory cache
+
 ## v4.20.22 - 2024-09-09
 
 - Hotfix: corrected global spam filtering hash logic
