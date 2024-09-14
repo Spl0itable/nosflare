@@ -2292,7 +2292,7 @@ async function processReq(message, server) {
   const filters = message[2] || {};
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
-  if (cachedEvents) {
+  if (cachedEvents && cachedEvents.length > 0) {
     for (const event of cachedEvents) {
       server.send(JSON.stringify(["EVENT", subscriptionId, event]));
     }
@@ -2311,7 +2311,9 @@ async function processReq(message, server) {
     }
     const fetchedEvents = await Promise.all(filterPromises);
     const events = fetchedEvents.flat();
-    relayCache.set(cacheKey, events, 6e4);
+    if (events.length > 0) {
+      relayCache.set(cacheKey, events, 6e4);
+    }
     for (const event of events) {
       server.send(JSON.stringify(["EVENT", subscriptionId, event]));
     }

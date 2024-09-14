@@ -323,8 +323,8 @@ async function processReq(message, server) {
     const cacheKey = `req:${JSON.stringify(filters)}`;
     const cachedEvents = relayCache.get(cacheKey);
 
-    if (cachedEvents) {
-        // If cached events exist, return them immediately
+    if (cachedEvents && cachedEvents.length > 0) {
+        // If cached events exist and are non-empty, return them immediately
         for (const event of cachedEvents) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
@@ -349,8 +349,10 @@ async function processReq(message, server) {
         const fetchedEvents = await Promise.all(filterPromises);
         const events = fetchedEvents.flat();
 
-        // Cache the events for the filters
-        relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
+        // Only cache the events if we actually have events
+        if (events.length > 0) {
+            relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
+        }
 
         // Send the events to the client
         for (const event of events) {
