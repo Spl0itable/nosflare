@@ -18,7 +18,7 @@ const relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 
 // Nostr address NIP-05 verified users
 const nip05Users = {
-    "lucas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+    "lux": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
     // ... more NIP-05 verified users
 };
 
