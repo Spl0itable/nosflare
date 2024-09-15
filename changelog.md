@@ -1,3 +1,8 @@
+## v4.20.24 - 2024-09-15
+
+- Hotfix: improved subscription management
+- Tweak: better logging
+
 ## v4.20.23 - 2024-09-13
 
 - Hotfix: improved in-memory cache

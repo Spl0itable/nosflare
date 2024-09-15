@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.20.23",
+    version: "4.20.24",
 };
 
 // Relay favicon
@@ -172,7 +172,10 @@ async function handleNIP05Request(url) {
 
 // Use in-memory cache
 const relayCache = {
-    _cache: {},
+    _cache: {}, // In-memory cache for events
+    _subscriptions: {}, // Subscriptions will be stored in R2
+
+    // In-memory caching for short-term event storage
     get(key) {
         const item = this._cache[key];
         if (item && item.expires > Date.now()) {
@@ -189,6 +192,48 @@ const relayCache = {
     delete(key) {
         delete this._cache[key];
     },
+
+    // R2-based subscription management
+    async getSubscription(wsId, subscriptionId) {
+        const key = `subscriptions/${wsId}/${subscriptionId}`;
+        try {
+            const object = await relayDb.get(key);
+            if (object) {
+                return await object.json();
+            }
+        } catch (error) {
+            console.error(`Error fetching subscription from R2: ${error.message}`);
+        }
+        return null;
+    },
+
+    async addSubscription(wsId, subscriptionId, filters) {
+        const key = `subscriptions/${wsId}/${subscriptionId}`;
+        try {
+            await relayDb.put(key, JSON.stringify(filters));
+        } catch (error) {
+            console.error(`Error storing subscription in R2: ${error.message}`);
+        }
+    },
+
+    async deleteSubscription(wsId, subscriptionId) {
+        const key = `subscriptions/${wsId}/${subscriptionId}`;
+        try {
+            await relayDb.delete(key);
+        } catch (error) {
+            console.error(`Error deleting subscription from R2: ${error.message}`);
+        }
+    },
+
+    async clearSubscriptions(wsId) {
+        try {
+            const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
+            const deletePromises = listResponse.objects.map(object => relayDb.delete(object.key));
+            await Promise.all(deletePromises);
+        } catch (error) {
+            console.error(`Error clearing subscriptions for ${wsId}: ${error.message}`);
+        }
+    }
 };
 
 // Rate limit messages
@@ -253,6 +298,8 @@ async function handleWebSocket(event, request) {
         );
     });
     server.addEventListener("close", (event) => {
+        const wsId = server.id || Math.random().toString(36).substr(2, 9);
+        relayCache.clearSubscriptions(wsId); // Clear all subscriptions for this connection
         console.log("WebSocket closed", event.code, event.reason);
     });
     server.addEventListener("error", (error) => {
@@ -264,7 +311,7 @@ async function handleWebSocket(event, request) {
     });
 }
 
-// Handles EVENT message
+// Handles EVENT messages
 async function processEvent(event, server) {
     try {
         // Check if the pubkey is allowed
@@ -289,6 +336,7 @@ async function processEvent(event, server) {
                 return;
             }
         }
+
         // Check cache for duplicate event ID
         const cacheKey = `event:${event.id}`;
         const cachedEvent = relayCache.get(cacheKey);
@@ -296,39 +344,63 @@ async function processEvent(event, server) {
             sendOK(server, event.id, false, "Duplicate. Event dropped.");
             return;
         }
+
+        // Verify event signature
         const isValidSignature = await verifyEventSignature(event);
-        if (isValidSignature) {
-            relayCache.set(cacheKey, event);
-            if (event.kind === 5) {
-                sendOK(server, event.id, true, "Deletion request received successfully for processing.");
-            } else {
-                sendOK(server, event.id, true, "Event received successfully for processing.");
-            }
-            await sendEventToHelper(event, server, event.id);
-        } else {
+        if (!isValidSignature) {
             sendOK(server, event.id, false, "Invalid: signature verification failed.");
+            return;
         }
+
+        // Add event to cache
+        relayCache.set(cacheKey, event);
+
+        // Retrieve all subscriptions for this WebSocket connection
+        const wsId = server.id || Math.random().toString(36).substr(2, 9);
+        const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
+        const subscriptionPromises = listResponse.objects.map(object => relayCache.getSubscription(wsId, object.key.split('/').pop()));
+
+        const subscriptions = await Promise.all(subscriptionPromises);
+
+        // Send event to matching subscriptions
+        for (const [subscriptionId, filters] of subscriptions.filter(Boolean)) {
+            if (matchesFilters(event, filters)) {
+                server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+            }
+        }
+
+        // Forward the event to helper workers
+        await sendEventToHelper(event, server, event.id);
+
+        // Acknowledge the event
+        sendOK(server, event.id, true, "Event received successfully for processing.");
     } catch (error) {
         console.error("Error in EVENT processing:", error);
         sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
     }
 }
 
-// Handles REQ message
+// Handles REQ messages
 async function processReq(message, server) {
     const subscriptionId = message[1];
     const filters = message[2] || {};
 
+    // Generate a unique WebSocket ID for this connection
+    const wsId = server.id || Math.random().toString(36).substr(2, 9);
+
+    // Store the subscription in R2 for future reference
+    await relayCache.addSubscription(wsId, subscriptionId, filters);
+
     // Generate a unique cache key based on the filters
     const cacheKey = `req:${JSON.stringify(filters)}`;
-    const cachedEvents = relayCache.get(cacheKey);
+    const cachedEvents = relayCache.get(cacheKey); // In-memory event cache
 
     if (cachedEvents && cachedEvents.length > 0) {
         // If cached events exist and are non-empty, return them immediately
         for (const event of cachedEvents) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId]));
+        server.send(JSON.stringify(["EOSE", subscriptionId])); // End of Stored Events
         return;
     }
 
@@ -351,71 +423,112 @@ async function processReq(message, server) {
 
         // Only cache the events if we actually have events
         if (events.length > 0) {
-            relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
+            relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds in-memory
         }
 
         // Send the events to the client
         for (const event of events) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId]));
+        server.send(JSON.stringify(["EOSE", subscriptionId])); // End of Stored Events
     } catch (error) {
         console.error("Error fetching events:", error);
         sendError(server, `Error fetching events: ${error.message}`);
     }
 }
 
-// Handles CLOSE message
+// Handles CLOSE messages
 async function closeSubscription(subscriptionId, server) {
-    try {
-        server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
-    } catch (error) {
-        console.error("Error closing subscription:", error);
-        sendError(server, `error: failed to close subscription ${subscriptionId}`);
-    }
+    const wsId = server.id || Math.random().toString(36).substr(2, 9);
+    
+    // Delete the subscription from R2
+    await relayCache.deleteSubscription(wsId, subscriptionId);
+
+    // Notify the client that the subscription is closed
+    server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
 }
 
 // Handles requesting events from helper workers
 async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
+    const logContext = {
+        helper,
+        subscriptionId,
+        filters,
+    };
+
     try {
-      const response = await fetch(helper, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ type: 'REQ', subscriptionId, filters }),
-      });
-      if (response.ok) {
-        const events = await response.json();
-        return events;
-      } else {
-        console.error(`Error fetching events from relay ${helper}: ${response.status} - ${response.statusText}`);
-        throw new Error(`Error fetching events: ${response.status} - ${response.statusText}`);
-      }
+        console.log(`Requesting events from helper worker`, logContext);
+
+        const response = await fetch(helper, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ type: "REQ", subscriptionId, filters }),
+        });
+
+        if (response.ok) {
+            const events = await response.json();
+            console.log(`Successfully retrieved events from helper worker`, {
+                ...logContext,
+                eventCount: events.length,
+            });
+            return events;
+        } else {
+            console.error(`Error fetching events from helper worker`, {
+                ...logContext,
+                status: response.status,
+                statusText: response.statusText,
+            });
+            throw new Error(
+                `Failed to fetch events: ${response.status} - ${response.statusText}`
+            );
+        }
     } catch (error) {
-      console.error(`Error fetching events from relay ${helper}:`, error);
-      throw error;
+        console.error(`Error in fetchEventsFromHelper`, {
+            ...logContext,
+            error: error.message,
+        });
+        throw error;
     }
-  }
+}
 
 // Handles sending event to helper workers
 async function sendEventToHelper(event, server, eventId) {
+    const randomHelper = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
+    const logContext = {
+        helper: randomHelper,
+        eventId,
+        pubkey: event.pubkey,
+    };
+
     try {
-        const randomHelper = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
+        console.log(`Sending event to helper worker`, logContext);
+
         const response = await fetch(randomHelper, {
-            method: 'POST',
+            method: "POST",
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${authToken}`
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ type: 'EVENT', event }),
+            body: JSON.stringify({ type: "EVENT", event }),
         });
-        if (!response.ok) {
-            console.error(`Error sending event ${eventId} to helper ${randomHelper}: ${response.status} - ${response.statusText}`);
+
+        if (response.ok) {
+            console.log(`Successfully sent event to helper worker`, logContext);
+        } else {
+            console.error(`Error sending event to helper worker`, {
+                ...logContext,
+                status: response.status,
+                statusText: response.statusText,
+            });
         }
     } catch (error) {
-        console.error(`Error sending event ${eventId} to helper ${randomHelper}:`, error);
+        console.error(`Error in sendEventToHelper`, {
+            ...logContext,
+            error: error.message,
+        });
     }
 }
 
@@ -458,6 +571,29 @@ function splitFilters(filters, numChunks) {
         }
     }
     return filterChunks;
+}
+
+// Check if an event matches the subscription filters
+function matchesFilters(event, filters) {
+    // Example filter checks
+    if (filters.ids && !filters.ids.includes(event.id)) return false;
+    if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
+    if (filters.kinds && !filters.kinds.includes(event.kind)) return false;
+    if (filters.since && event.created_at < filters.since) return false;
+    if (filters.until && event.created_at > filters.until) return false;
+
+    // Check tag filters (#e, #p, etc.)
+    for (const [filterKey, filterValues] of Object.entries(filters)) {
+        if (filterKey.startsWith("#")) {
+            const tagKey = filterKey.slice(1);
+            const eventTags = event.tags.filter(tag => tag[0] === tagKey).map(tag => tag[1]);
+            if (!filterValues.some(value => eventTags.includes(value))) {
+                return false;
+            }
+        }
+    }
+
+    return true; // All filters passed
 }
 
 // Helper to split an array into chunks

@@ -4,7 +4,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../../../node_modules/@noble/hashes/esm/_assert.js
+// ../../node_modules/@noble/hashes/esm/_assert.js
 function number(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error(`positive integer expected, not ${n}`);
@@ -38,10 +38,10 @@ function output(out, instance) {
   }
 }
 
-// ../../../node_modules/@noble/hashes/esm/crypto.js
+// ../../node_modules/@noble/hashes/esm/crypto.js
 var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
 
-// ../../../node_modules/@noble/hashes/esm/utils.js
+// ../../node_modules/@noble/hashes/esm/utils.js
 var createView = (arr) => new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 var rotr = (word, shift) => word << 32 - shift | word >>> shift;
 var isLE = new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68;
@@ -93,7 +93,7 @@ function randomBytes(bytesLength = 32) {
   throw new Error("crypto.getRandomValues must be defined");
 }
 
-// ../../../node_modules/@noble/hashes/esm/_md.js
+// ../../node_modules/@noble/hashes/esm/_md.js
 function setBigUint64(view, byteOffset, value, isLE2) {
   if (typeof view.setBigUint64 === "function")
     return view.setBigUint64(byteOffset, value, isLE2);
@@ -195,7 +195,7 @@ var HashMD = class extends Hash {
   }
 };
 
-// ../../../node_modules/@noble/hashes/esm/sha256.js
+// ../../node_modules/@noble/hashes/esm/sha256.js
 var SHA256_K = /* @__PURE__ */ new Uint32Array([
   1116352408,
   1899447441,
@@ -345,7 +345,7 @@ var SHA256 = class extends HashMD {
 };
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// ../../../node_modules/@noble/curves/esm/abstract/utils.js
+// ../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
   abytes: () => abytes,
@@ -582,7 +582,7 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/modular.js
+// ../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
 var _1n2 = BigInt(1);
 var _2n2 = BigInt(2);
@@ -848,7 +848,7 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/curve.js
+// ../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
 function wNAF(c, bits) {
@@ -966,7 +966,7 @@ function validateBasic(curve) {
   });
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
+// ../../node_modules/@noble/curves/esm/abstract/weierstrass.js
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1763,7 +1763,7 @@ function weierstrass(curveDef) {
   };
 }
 
-// ../../../node_modules/@noble/hashes/esm/hmac.js
+// ../../node_modules/@noble/hashes/esm/hmac.js
 var HMAC = class extends Hash {
   constructor(hash2, _key) {
     super();
@@ -1828,7 +1828,7 @@ var HMAC = class extends Hash {
 var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
 hmac.create = (hash2, key) => new HMAC(hash2, key);
 
-// ../../../node_modules/@noble/curves/esm/_shortw_utils.js
+// ../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
   return {
     hash: hash2,
@@ -1841,7 +1841,7 @@ function createCurve(curveDef, defHash) {
   return Object.freeze({ ...create(defHash), create });
 }
 
-// ../../../node_modules/@noble/curves/esm/secp256k1.js
+// ../../node_modules/@noble/curves/esm/secp256k1.js
 var secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
 var secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 var _1n5 = BigInt(1);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.20.23"
+  version: "4.20.24"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2159,6 +2159,10 @@ async function handleNIP05Request(url) {
 }
 var relayCache = {
   _cache: {},
+  // In-memory cache for events
+  _subscriptions: {},
+  // Subscriptions will be stored in R2
+  // In-memory caching for short-term event storage
   get(key) {
     const item = this._cache[key];
     if (item && item.expires > Date.now()) {
@@ -2174,6 +2178,44 @@ var relayCache = {
   },
   delete(key) {
     delete this._cache[key];
+  },
+  // R2-based subscription management
+  async getSubscription(wsId, subscriptionId) {
+    const key = `subscriptions/${wsId}/${subscriptionId}`;
+    try {
+      const object = await relayDb.get(key);
+      if (object) {
+        return await object.json();
+      }
+    } catch (error) {
+      console.error(`Error fetching subscription from R2: ${error.message}`);
+    }
+    return null;
+  },
+  async addSubscription(wsId, subscriptionId, filters) {
+    const key = `subscriptions/${wsId}/${subscriptionId}`;
+    try {
+      await relayDb.put(key, JSON.stringify(filters));
+    } catch (error) {
+      console.error(`Error storing subscription in R2: ${error.message}`);
+    }
+  },
+  async deleteSubscription(wsId, subscriptionId) {
+    const key = `subscriptions/${wsId}/${subscriptionId}`;
+    try {
+      await relayDb.delete(key);
+    } catch (error) {
+      console.error(`Error deleting subscription from R2: ${error.message}`);
+    }
+  },
+  async clearSubscriptions(wsId) {
+    try {
+      const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
+      const deletePromises = listResponse.objects.map((object) => relayDb.delete(object.key));
+      await Promise.all(deletePromises);
+    } catch (error) {
+      console.error(`Error clearing subscriptions for ${wsId}: ${error.message}`);
+    }
   }
 };
 var rateLimiter = class {
@@ -2234,6 +2276,8 @@ async function handleWebSocket(event, request) {
     );
   });
   server.addEventListener("close", (event2) => {
+    const wsId = server.id || Math.random().toString(36).substr(2, 9);
+    relayCache.clearSubscriptions(wsId);
     console.log("WebSocket closed", event2.code, event2.reason);
   });
   server.addEventListener("error", (error) => {
@@ -2271,17 +2315,22 @@ async function processEvent(event, server) {
       return;
     }
     const isValidSignature = await verifyEventSignature(event);
-    if (isValidSignature) {
-      relayCache.set(cacheKey, event);
-      if (event.kind === 5) {
-        sendOK(server, event.id, true, "Deletion request received successfully for processing.");
-      } else {
-        sendOK(server, event.id, true, "Event received successfully for processing.");
-      }
-      await sendEventToHelper(event, server, event.id);
-    } else {
+    if (!isValidSignature) {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
+      return;
     }
+    relayCache.set(cacheKey, event);
+    const wsId = server.id || Math.random().toString(36).substr(2, 9);
+    const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
+    const subscriptionPromises = listResponse.objects.map((object) => relayCache.getSubscription(wsId, object.key.split("/").pop()));
+    const subscriptions = await Promise.all(subscriptionPromises);
+    for (const [subscriptionId, filters] of subscriptions.filter(Boolean)) {
+      if (matchesFilters(event, filters)) {
+        server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+      }
+    }
+    await sendEventToHelper(event, server, event.id);
+    sendOK(server, event.id, true, "Event received successfully for processing.");
   } catch (error) {
     console.error("Error in EVENT processing:", error);
     sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
@@ -2290,6 +2339,8 @@ async function processEvent(event, server) {
 async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
+  const wsId = server.id || Math.random().toString(36).substr(2, 9);
+  await relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents && cachedEvents.length > 0) {
@@ -2324,15 +2375,18 @@ async function processReq(message, server) {
   }
 }
 async function closeSubscription(subscriptionId, server) {
-  try {
-    server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
-  } catch (error) {
-    console.error("Error closing subscription:", error);
-    sendError(server, `error: failed to close subscription ${subscriptionId}`);
-  }
+  const wsId = server.id || Math.random().toString(36).substr(2, 9);
+  await relayCache.deleteSubscription(wsId, subscriptionId);
+  server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
 }
 async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
+  const logContext = {
+    helper,
+    subscriptionId,
+    filters
+  };
   try {
+    console.log(`Requesting events from helper worker`, logContext);
     const response = await fetch(helper, {
       method: "POST",
       headers: {
@@ -2343,20 +2397,39 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
     });
     if (response.ok) {
       const events = await response.json();
+      console.log(`Successfully retrieved events from helper worker`, {
+        ...logContext,
+        eventCount: events.length
+      });
       return events;
     } else {
-      console.error(`Error fetching events from relay ${helper}: ${response.status} - ${response.statusText}`);
-      throw new Error(`Error fetching events: ${response.status} - ${response.statusText}`);
+      console.error(`Error fetching events from helper worker`, {
+        ...logContext,
+        status: response.status,
+        statusText: response.statusText
+      });
+      throw new Error(
+        `Failed to fetch events: ${response.status} - ${response.statusText}`
+      );
     }
   } catch (error) {
-    console.error(`Error fetching events from relay ${helper}:`, error);
+    console.error(`Error in fetchEventsFromHelper`, {
+      ...logContext,
+      error: error.message
+    });
     throw error;
   }
 }
 async function sendEventToHelper(event, server, eventId) {
+  const randomHelper = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
+  const logContext = {
+    helper: randomHelper,
+    eventId,
+    pubkey: event.pubkey
+  };
   try {
-    const randomHelper2 = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
-    const response = await fetch(randomHelper2, {
+    console.log(`Sending event to helper worker`, logContext);
+    const response = await fetch(randomHelper, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2364,11 +2437,20 @@ async function sendEventToHelper(event, server, eventId) {
       },
       body: JSON.stringify({ type: "EVENT", event })
     });
-    if (!response.ok) {
-      console.error(`Error sending event ${eventId} to helper ${randomHelper2}: ${response.status} - ${response.statusText}`);
+    if (response.ok) {
+      console.log(`Successfully sent event to helper worker`, logContext);
+    } else {
+      console.error(`Error sending event to helper worker`, {
+        ...logContext,
+        status: response.status,
+        statusText: response.statusText
+      });
     }
   } catch (error) {
-    console.error(`Error sending event ${eventId} to helper ${randomHelper}:`, error);
+    console.error(`Error in sendEventToHelper`, {
+      ...logContext,
+      error: error.message
+    });
   }
 }
 function splitFilters(filters, numChunks) {
@@ -2406,6 +2488,23 @@ function splitFilters(filters, numChunks) {
     }
   }
   return filterChunks;
+}
+function matchesFilters(event, filters) {
+  if (filters.ids && !filters.ids.includes(event.id)) return false;
+  if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
+  if (filters.kinds && !filters.kinds.includes(event.kind)) return false;
+  if (filters.since && event.created_at < filters.since) return false;
+  if (filters.until && event.created_at > filters.until) return false;
+  for (const [filterKey, filterValues] of Object.entries(filters)) {
+    if (filterKey.startsWith("#")) {
+      const tagKey = filterKey.slice(1);
+      const eventTags = event.tags.filter((tag) => tag[0] === tagKey).map((tag) => tag[1]);
+      if (!filterValues.some((value) => eventTags.includes(value))) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 function splitArray(arr, numChunks) {
   const chunkSize = Math.ceil(arr.length / numChunks);
@@ -2447,8 +2546,7 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0)
-    throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
