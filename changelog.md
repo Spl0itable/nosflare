@@ -2,6 +2,7 @@
 
 - Hotfix: improved subscription management
 - Tweak: better logging
+- Tweak: refactored req helper worker
 
 ## v4.20.23 - 2024-09-13
 

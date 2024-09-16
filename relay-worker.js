@@ -172,10 +172,9 @@ async function handleNIP05Request(url) {
 
 // Use in-memory cache
 const relayCache = {
-    _cache: {}, // In-memory cache for events
-    _subscriptions: {}, // Subscriptions will be stored in R2
+    _cache: {},
+    _subscriptions: {}, // Store subscriptions
 
-    // In-memory caching for short-term event storage
     get(key) {
         const item = this._cache[key];
         if (item && item.expires > Date.now()) {
@@ -192,47 +191,22 @@ const relayCache = {
     delete(key) {
         delete this._cache[key];
     },
-
-    // R2-based subscription management
-    async getSubscription(wsId, subscriptionId) {
-        const key = `subscriptions/${wsId}/${subscriptionId}`;
-        try {
-            const object = await relayDb.get(key);
-            if (object) {
-                return await object.json();
-            }
-        } catch (error) {
-            console.error(`Error fetching subscription from R2: ${error.message}`);
+    addSubscription(wsId, subscriptionId, filters) {
+        if (!this._subscriptions[wsId]) {
+            this._subscriptions[wsId] = {};
         }
-        return null;
+        this._subscriptions[wsId][subscriptionId] = filters;
     },
-
-    async addSubscription(wsId, subscriptionId, filters) {
-        const key = `subscriptions/${wsId}/${subscriptionId}`;
-        try {
-            await relayDb.put(key, JSON.stringify(filters));
-        } catch (error) {
-            console.error(`Error storing subscription in R2: ${error.message}`);
+    getSubscription(wsId, subscriptionId) {
+        return this._subscriptions[wsId]?.[subscriptionId] || null;
+    },
+    deleteSubscription(wsId, subscriptionId) {
+        if (this._subscriptions[wsId]) {
+            delete this._subscriptions[wsId][subscriptionId];
         }
     },
-
-    async deleteSubscription(wsId, subscriptionId) {
-        const key = `subscriptions/${wsId}/${subscriptionId}`;
-        try {
-            await relayDb.delete(key);
-        } catch (error) {
-            console.error(`Error deleting subscription from R2: ${error.message}`);
-        }
-    },
-
-    async clearSubscriptions(wsId) {
-        try {
-            const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
-            const deletePromises = listResponse.objects.map(object => relayDb.delete(object.key));
-            await Promise.all(deletePromises);
-        } catch (error) {
-            console.error(`Error clearing subscriptions for ${wsId}: ${error.message}`);
-        }
+    clearSubscriptions(wsId) {
+        delete this._subscriptions[wsId];
     }
 };
 
@@ -352,28 +326,38 @@ async function processEvent(event, server) {
             return;
         }
 
-        // Add event to cache
-        relayCache.set(cacheKey, event);
-
-        // Retrieve all subscriptions for this WebSocket connection
-        const wsId = server.id || Math.random().toString(36).substr(2, 9);
-        const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
-        const subscriptionPromises = listResponse.objects.map(object => relayCache.getSubscription(wsId, object.key.split('/').pop()));
-
-        const subscriptions = await Promise.all(subscriptionPromises);
+        // Add event to cache with a TTL of 60 seconds (or more, as needed)
+        relayCache.set(cacheKey, event, 60000);
 
         // Send event to matching subscriptions
-        for (const [subscriptionId, filters] of subscriptions.filter(Boolean)) {
-            if (matchesFilters(event, filters)) {
-                server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+        const wsId = server.id || Math.random().toString(36).substr(2, 9);
+        const subscriptions = relayCache._subscriptions[wsId];
+
+        if (subscriptions) {
+            for (const [subscriptionId, filters] of Object.entries(subscriptions)) {
+                if (matchesFilters(event, filters)) {
+                    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+                }
             }
         }
 
-        // Forward the event to helper workers
-        await sendEventToHelper(event, server, event.id);
+        // Update the cache for matching subscriptions in memory
+        for (const [wsId, wsSubscriptions] of Object.entries(relayCache._subscriptions)) {
+            for (const [subscriptionId, filters] of Object.entries(wsSubscriptions)) {
+                if (matchesFilters(event, filters)) {
+                    const cacheKey = `req:${JSON.stringify(filters)}`;
+                    const cachedEvents = relayCache.get(cacheKey) || [];
+                    cachedEvents.push(event);
+                    relayCache.set(cacheKey, cachedEvents, 60000); // Cache for 60 seconds
+                }
+            }
+        }
 
         // Acknowledge the event
         sendOK(server, event.id, true, "Event received successfully for processing.");
+
+        // Forward the event to helper workers
+        await sendEventToHelper(event, server, event.id);
     } catch (error) {
         console.error("Error in EVENT processing:", error);
         sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
@@ -388,19 +372,19 @@ async function processReq(message, server) {
     // Generate a unique WebSocket ID for this connection
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
 
-    // Store the subscription in R2 for future reference
-    await relayCache.addSubscription(wsId, subscriptionId, filters);
+    // Store the subscription in the relayCache for future reference
+    relayCache.addSubscription(wsId, subscriptionId, filters);
 
     // Generate a unique cache key based on the filters
     const cacheKey = `req:${JSON.stringify(filters)}`;
-    const cachedEvents = relayCache.get(cacheKey); // In-memory event cache
+    const cachedEvents = relayCache.get(cacheKey);
 
     if (cachedEvents && cachedEvents.length > 0) {
         // If cached events exist and are non-empty, return them immediately
         for (const event of cachedEvents) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId])); // End of Stored Events
+        server.send(JSON.stringify(["EOSE", subscriptionId]));
         return;
     }
 
@@ -423,14 +407,14 @@ async function processReq(message, server) {
 
         // Only cache the events if we actually have events
         if (events.length > 0) {
-            relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds in-memory
+            relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
         }
 
         // Send the events to the client
         for (const event of events) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId])); // End of Stored Events
+        server.send(JSON.stringify(["EOSE", subscriptionId]));
     } catch (error) {
         console.error("Error fetching events:", error);
         sendError(server, `Error fetching events: ${error.message}`);
@@ -440,9 +424,7 @@ async function processReq(message, server) {
 // Handles CLOSE messages
 async function closeSubscription(subscriptionId, server) {
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
-    
-    // Delete the subscription from R2
-    await relayCache.deleteSubscription(wsId, subscriptionId);
+    relayCache.deleteSubscription(wsId, subscriptionId);
 
     // Notify the client that the subscription is closed
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -469,7 +451,27 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
         });
 
         if (response.ok) {
-            const events = await response.json();
+            // Check if the response is JSON or ArrayBuffer
+            const contentType = response.headers.get("Content-Type");
+            let events;
+
+            if (contentType && contentType.includes("application/json")) {
+                // Parse as JSON
+                events = await response.json();
+            } else {
+                // Handle ArrayBuffer response
+                const arrayBuffer = await response.arrayBuffer();
+                const textDecoder = new TextDecoder("utf-8");
+                const jsonString = textDecoder.decode(arrayBuffer);
+
+                try {
+                    events = JSON.parse(jsonString);
+                } catch (error) {
+                    console.error("Error parsing ArrayBuffer to JSON:", error);
+                    throw new Error("Failed to parse response as JSON.");
+                }
+            }
+
             console.log(`Successfully retrieved events from helper worker`, {
                 ...logContext,
                 eventCount: events.length,

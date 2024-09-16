@@ -9,6 +9,8 @@ addEventListener("fetch", (event) => {
         event.respondWith(new Response("Invalid request", { status: 400 }));
     }
 });
+
+// Handles POST requests
 async function handlePostRequest(request) {
     try {
         // Checks if Authorization header is present and matches authToken
@@ -32,7 +34,7 @@ async function handlePostRequest(request) {
     }
 }
 
-// Rate limit messages
+// Rate limiter class
 class rateLimiter {
     constructor(rate, capacity) {
         this.tokens = capacity;
@@ -58,190 +60,145 @@ class rateLimiter {
 }
 const reqRateLimiter = new rateLimiter(100 / 60000, 100); // 100 reqs per min
 
-// Handles REQ message
+// Handles REQ messages with batching
 async function processReq(subscriptionId, filters) {
     if (!reqRateLimiter.removeToken()) {
         throw new Error("Rate limit exceeded. Please try again later.");
     }
+
     let events = [];
-    if (filters.ids) {
-        for (const id of filters.ids) {
-            if (!/^[a-f0-9]{64}$/.test(id)) {
-                throw new Error(`Invalid event ID format: ${id}`);
-            }
-        }
-    }
-    if (filters.authors) {
-        for (const author of filters.authors) {
-            if (!/^[a-f0-9]{64}$/.test(author)) {
-                throw new Error(`Invalid author pubkey format: ${author}`);
-            }
-        }
-    }
+    const eventPromises = [];
+
+    // Validate filters
+    if (filters.ids) validateIds(filters.ids);
+    if (filters.authors) validateAuthors(filters.authors);
+
+    // Fetch events in batches
     try {
-        const eventPromises = [];
         if (filters.ids) {
-            for (const id of filters.ids.slice(0, 25)) {
-                const idKey = `events/event:${id}`;
-                const eventUrl = `https://${r2BucketDomain}/${idKey}`;
-                eventPromises.push(
-                    fetch(eventUrl).then((response) => {
-                        if (response.ok) {
-                            return response.text().then((data) => {
-                                try {
-                                    return JSON.parse(data);
-                                } catch (error) {
-                                    console.error(`Malformed JSON for event with ID ${id}:`, error);
-                                    return null;
-                                }
-                            });
-                        } else if (response.status === 404) {
-                            return null;
-                        } else {
-                            response.body.cancel();
-                            throw new Error(`Error fetching event with ID ${id} from URL: ${eventUrl}. Status: ${response.status}`);
-                        }
-                    }).catch((error) => {
-                        console.error(`Error fetching event with ID ${id} from URL: ${eventUrl}.`, error);
-                        return null;
-                    })
-                );
-            }
+            eventPromises.push(...fetchEventsById(filters.ids));
         }
         if (filters.kinds) {
-            for (const kind of filters.kinds) {
-                const kindCountKey = `counts/kind_count_${kind}`;
-                const kindCountResponse = await relayDb.get(kindCountKey);
-                const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
-                const kindCount = parseInt(kindCountValue, 10);
-                for (let i = kindCount; i >= Math.max(1, kindCount - 25 + 1); i--) {
-                    const kindKey = `kinds/kind-${kind}:${i}`;
-                    const eventUrl = `https://${r2BucketDomain}/${kindKey}`;
-                    eventPromises.push(
-                        fetch(eventUrl).then((response) => {
-                            if (response.ok) {
-                                return response.text().then((data) => {
-                                    try {
-                                        return JSON.parse(data);
-                                    } catch (error) {
-                                        console.error(`Malformed JSON for event with kind ${kind}:`, error);
-                                        return null;
-                                    }
-                                });
-                            } else if (response.status === 404) {
-                                return null;
-                            } else {
-                                response.body.cancel();
-                                throw new Error(`Error fetching event for kind ${kind} from URL: ${eventUrl}. Status: ${response.status}`);
-                            }
-                        }).catch((error) => {
-                            console.error(`Error fetching event for kind ${kind} from URL: ${eventUrl}.`, error);
-                            return null;
-                        })
-                    );
-                }
-            }
+            eventPromises.push(...await fetchEventsByKind(filters.kinds));
         }
         if (filters.authors) {
-            for (const author of filters.authors) {
-                const pubkeyCountKey = `counts/pubkey_count_${author}`;
-                const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-                const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
-                const pubkeyCount = parseInt(pubkeyCountValue, 10);
-                for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - 25 + 1); i--) {
-                    const pubkeyKey = `pubkeys/pubkey-${author}:${i}`;
-                    const eventUrl = `https://${r2BucketDomain}/${pubkeyKey}`;
-                    eventPromises.push(
-                        fetch(eventUrl).then((response) => {
-                            if (response.ok) {
-                                return response.text().then((data) => {
-                                    try {
-                                        return JSON.parse(data);
-                                    } catch (error) {
-                                        console.error(`Malformed JSON for event with author ${author}:`, error);
-                                        return null;
-                                    }
-                                });
-                            } else if (response.status === 404) {
-                                return null;
-                            } else {
-                                response.body.cancel();
-                                throw new Error(`Error fetching event for author ${author} from URL: ${eventUrl}. Status: ${response.status}`);
-                            }
-                        }).catch((error) => {
-                            console.error(`Error fetching event for author ${author} from URL: ${eventUrl}.`, error);
-                            return null;
-                        })
-                    );
-                }
-            }
+            eventPromises.push(...await fetchEventsByAuthor(filters.authors));
         }
-        const tagQueries = Array.from({ length: 26 }, (_, i) => ({
-            key: String.fromCharCode(97 + i),
-            label: String.fromCharCode(97 + i),
-        })).concat(
-            Array.from({ length: 26 }, (_, i) => ({
-                key: String.fromCharCode(65 + i),
-                label: String.fromCharCode(65 + i),
-            }))
-        );
-        for (const query of tagQueries) {
-            if (filters[`#${query.key}`]) {
-                for (const tag of filters[`#${query.key}`]) {
-                    const tagCountKey = `counts/${query.label}_count_${tag}`;
-                    const tagCountResponse = await relayDb.get(tagCountKey);
-                    const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
-                    const tagCount = parseInt(tagCountValue, 10);
-                    for (let i = tagCount; i >= Math.max(1, tagCount - 25 + 1); i--) {
-                        const tagKey = `tags/${query.label}-${tag}:${i}`;
-                        const eventUrl = `https://${r2BucketDomain}/${tagKey}`;
-                        eventPromises.push(
-                            fetch(eventUrl).then((response) => {
-                                if (response.ok) {
-                                    return response.text().then((data) => {
-                                        try {
-                                            return JSON.parse(data);
-                                        } catch (error) {
-                                            console.error(`Malformed JSON for event with ${query.label} tag ${tag}:`, error);
-                                            return null;
-                                        }
-                                    });
-                                } else if (response.status === 404) {
-                                    return null;
-                                } else {
-                                    response.body.cancel();
-                                    throw new Error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}. Status: ${response.status}`);
-                                }
-                            }).catch((error) => {
-                                console.error(`Error fetching event for ${query.label} tag ${tag} from URL: ${eventUrl}.`, error);
-                                return null;
-                            })
-                        );
-                    }
-                }
-            }
-        }
+
         const fetchedEvents = await Promise.all(eventPromises);
-        events = fetchedEvents.filter((event) => event !== null);
-        events = events.filter((event) => {
-            const includeEvent = (!filters.ids || filters.ids.includes(event.id)) &&
-                (!filters.kinds || filters.kinds.includes(event.kind)) &&
-                (!filters.authors || filters.authors.includes(event.pubkey)) &&
-                (!filters.since || event.created_at >= filters.since) &&
-                (!filters.until || event.created_at <= filters.until);
-            const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith('#'));
-            for (const [tagKey, tagValues] of tagFilters) {
-                const tagName = tagKey.slice(1);
-                const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
-                if (!tagValues.some((value) => eventTags.includes(value))) {
-                    return false;
-                }
-            }
-            return includeEvent;
-        });
+        events = filterEvents(fetchedEvents.filter(event => event !== null), filters);
     } catch (error) {
         console.error(`Error retrieving events from R2:`, error);
-        events = [];
     }
+
     return events;
+}
+
+// Validate event IDs
+function validateIds(ids) {
+    for (const id of ids) {
+        if (!/^[a-f0-9]{64}$/.test(id)) {
+            throw new Error(`Invalid event ID format: ${id}`);
+        }
+    }
+}
+
+// Validate author public keys
+function validateAuthors(authors) {
+    for (const author of authors) {
+        if (!/^[a-f0-9]{64}$/.test(author)) {
+            throw new Error(`Invalid author pubkey format: ${author}`);
+        }
+    }
+}
+
+// Fetch events by IDs in batches
+function fetchEventsById(ids, batchSize = 10) {
+    const batches = [];
+    for (let i = 0; i < ids.length; i += batchSize) {
+        const batch = ids.slice(i, i + batchSize);
+        batches.push(...batch.map(id => fetchEventById(id)));
+    }
+    return batches;
+}
+
+// Fetch a single event by ID
+async function fetchEventById(id) {
+    const idKey = `events/event:${id}`;
+    const eventUrl = `https://${r2BucketDomain}/${idKey}`;
+    try {
+        const response = await fetch(eventUrl);
+        if (!response.ok) return null;
+        const data = await response.text();
+        return JSON.parse(data);
+    } catch (error) {
+        console.error(`Error fetching event with ID ${id}:`, error);
+        return null;
+    }
+}
+
+// Fetch events by kind in batches
+async function fetchEventsByKind(kinds, limit = 25) {
+    const promises = [];
+    for (const kind of kinds) {
+        const kindCountKey = `counts/kind_count_${kind}`;
+        const kindCountResponse = await relayDb.get(kindCountKey);
+        const kindCountValue = kindCountResponse ? await kindCountResponse.text() : '0';
+        const kindCount = parseInt(kindCountValue, 10);
+        for (let i = kindCount; i >= Math.max(1, kindCount - limit + 1); i--) {
+            const kindKey = `kinds/kind-${kind}:${i}`;
+            promises.push(fetchEventByKey(kindKey));
+        }
+    }
+    return promises;
+}
+
+// Fetch events by author in batches
+async function fetchEventsByAuthor(authors, limit = 25) {
+    const promises = [];
+    for (const author of authors) {
+        const pubkeyCountKey = `counts/pubkey_count_${author}`;
+        const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+        const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : '0';
+        const pubkeyCount = parseInt(pubkeyCountValue, 10);
+        for (let i = pubkeyCount; i >= Math.max(1, pubkeyCount - limit + 1); i--) {
+            const pubkeyKey = `pubkeys/pubkey-${author}:${i}`;
+            promises.push(fetchEventByKey(pubkeyKey));
+        }
+    }
+    return promises;
+}
+
+// Fetch event by key (common for kind, author, etc.)
+async function fetchEventByKey(eventKey) {
+    const eventUrl = `https://${r2BucketDomain}/${eventKey}`;
+    try {
+        const response = await fetch(eventUrl);
+        if (!response.ok) return null;
+        const data = await response.text();
+        return JSON.parse(data);
+    } catch (error) {
+        console.error(`Error fetching event with key ${eventKey}:`, error);
+        return null;
+    }
+}
+
+// Filter events based on additional filters
+function filterEvents(events, filters) {
+    return events.filter(event => {
+        const includeEvent = (!filters.ids || filters.ids.includes(event.id)) &&
+            (!filters.kinds || filters.kinds.includes(event.kind)) &&
+            (!filters.authors || filters.authors.includes(event.pubkey)) &&
+            (!filters.since || event.created_at >= filters.since) &&
+            (!filters.until || event.created_at <= filters.until);
+        const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith('#'));
+        for (const [tagKey, tagValues] of tagFilters) {
+            const tagName = tagKey.slice(1);
+            const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
+            if (!tagValues.some(value => eventTags.includes(value))) {
+                return false;
+            }
+        }
+        return includeEvent;
+    });
 }

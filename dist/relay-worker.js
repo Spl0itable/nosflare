@@ -2159,10 +2159,8 @@ async function handleNIP05Request(url) {
 }
 var relayCache = {
   _cache: {},
-  // In-memory cache for events
   _subscriptions: {},
-  // Subscriptions will be stored in R2
-  // In-memory caching for short-term event storage
+  // Store subscriptions
   get(key) {
     const item = this._cache[key];
     if (item && item.expires > Date.now()) {
@@ -2179,43 +2177,22 @@ var relayCache = {
   delete(key) {
     delete this._cache[key];
   },
-  // R2-based subscription management
-  async getSubscription(wsId, subscriptionId) {
-    const key = `subscriptions/${wsId}/${subscriptionId}`;
-    try {
-      const object = await relayDb.get(key);
-      if (object) {
-        return await object.json();
-      }
-    } catch (error) {
-      console.error(`Error fetching subscription from R2: ${error.message}`);
+  addSubscription(wsId, subscriptionId, filters) {
+    if (!this._subscriptions[wsId]) {
+      this._subscriptions[wsId] = {};
     }
-    return null;
+    this._subscriptions[wsId][subscriptionId] = filters;
   },
-  async addSubscription(wsId, subscriptionId, filters) {
-    const key = `subscriptions/${wsId}/${subscriptionId}`;
-    try {
-      await relayDb.put(key, JSON.stringify(filters));
-    } catch (error) {
-      console.error(`Error storing subscription in R2: ${error.message}`);
+  getSubscription(wsId, subscriptionId) {
+    return this._subscriptions[wsId]?.[subscriptionId] || null;
+  },
+  deleteSubscription(wsId, subscriptionId) {
+    if (this._subscriptions[wsId]) {
+      delete this._subscriptions[wsId][subscriptionId];
     }
   },
-  async deleteSubscription(wsId, subscriptionId) {
-    const key = `subscriptions/${wsId}/${subscriptionId}`;
-    try {
-      await relayDb.delete(key);
-    } catch (error) {
-      console.error(`Error deleting subscription from R2: ${error.message}`);
-    }
-  },
-  async clearSubscriptions(wsId) {
-    try {
-      const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
-      const deletePromises = listResponse.objects.map((object) => relayDb.delete(object.key));
-      await Promise.all(deletePromises);
-    } catch (error) {
-      console.error(`Error clearing subscriptions for ${wsId}: ${error.message}`);
-    }
+  clearSubscriptions(wsId) {
+    delete this._subscriptions[wsId];
   }
 };
 var rateLimiter = class {
@@ -2319,18 +2296,28 @@ async function processEvent(event, server) {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
       return;
     }
-    relayCache.set(cacheKey, event);
+    relayCache.set(cacheKey, event, 6e4);
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
-    const listResponse = await relayDb.list({ prefix: `subscriptions/${wsId}/` });
-    const subscriptionPromises = listResponse.objects.map((object) => relayCache.getSubscription(wsId, object.key.split("/").pop()));
-    const subscriptions = await Promise.all(subscriptionPromises);
-    for (const [subscriptionId, filters] of subscriptions.filter(Boolean)) {
-      if (matchesFilters(event, filters)) {
-        server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+    const subscriptions = relayCache._subscriptions[wsId];
+    if (subscriptions) {
+      for (const [subscriptionId, filters] of Object.entries(subscriptions)) {
+        if (matchesFilters(event, filters)) {
+          server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+        }
       }
     }
-    await sendEventToHelper(event, server, event.id);
+    for (const [wsId2, wsSubscriptions] of Object.entries(relayCache._subscriptions)) {
+      for (const [subscriptionId, filters] of Object.entries(wsSubscriptions)) {
+        if (matchesFilters(event, filters)) {
+          const cacheKey2 = `req:${JSON.stringify(filters)}`;
+          const cachedEvents = relayCache.get(cacheKey2) || [];
+          cachedEvents.push(event);
+          relayCache.set(cacheKey2, cachedEvents, 6e4);
+        }
+      }
+    }
     sendOK(server, event.id, true, "Event received successfully for processing.");
+    await sendEventToHelper(event, server, event.id);
   } catch (error) {
     console.error("Error in EVENT processing:", error);
     sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
@@ -2340,7 +2327,7 @@ async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
-  await relayCache.addSubscription(wsId, subscriptionId, filters);
+  relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents && cachedEvents.length > 0) {
@@ -2376,7 +2363,7 @@ async function processReq(message, server) {
 }
 async function closeSubscription(subscriptionId, server) {
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
-  await relayCache.deleteSubscription(wsId, subscriptionId);
+  relayCache.deleteSubscription(wsId, subscriptionId);
   server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
 }
 async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
@@ -2396,7 +2383,21 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
       body: JSON.stringify({ type: "REQ", subscriptionId, filters })
     });
     if (response.ok) {
-      const events = await response.json();
+      const contentType = response.headers.get("Content-Type");
+      let events;
+      if (contentType && contentType.includes("application/json")) {
+        events = await response.json();
+      } else {
+        const arrayBuffer = await response.arrayBuffer();
+        const textDecoder = new TextDecoder("utf-8");
+        const jsonString = textDecoder.decode(arrayBuffer);
+        try {
+          events = JSON.parse(jsonString);
+        } catch (error) {
+          console.error("Error parsing ArrayBuffer to JSON:", error);
+          throw new Error("Failed to parse response as JSON.");
+        }
+      }
       console.log(`Successfully retrieved events from helper worker`, {
         ...logContext,
         eventCount: events.length
