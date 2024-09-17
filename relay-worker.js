@@ -95,6 +95,18 @@ function containsBlockedContent(event) {
     return false;
 }
 
+// Blocked NIP-05 domains
+const blockedNip05Domains = new Set([
+    // Add domains that are explicitly blocked
+    // "primal.net"
+]);
+
+// Allowed NIP-05 domains
+const allowedNip05Domains = new Set([
+    // Add domains that are explicitly allowed
+    // Leave empty to allow all domains (unless blocked)
+]);
+
 // Blocked tags
 // Add comma-separated tags Ex: t, e, p
 const blockedTags = new Set([
@@ -553,8 +565,6 @@ async function validateNIP05FromKind0(pubkey) {
     }
 }
 
-
-
 // Fetch kind 0 event for pubkey
 async function fetchKind0EventForPubkey(pubkey) {
     try {
@@ -591,6 +601,18 @@ async function validateNIP05(nip05Address, pubkey) {
 
         if (!domain) {
             throw new Error(`Invalid NIP-05 address format: ${nip05Address}`);
+        }
+
+        // Check if the domain is in the blocked list
+        if (blockedNip05Domains.has(domain)) {
+            console.error(`NIP-05 domain is blocked: ${domain}`);
+            return false;
+        }
+
+        // If allowed domains are defined, check if the domain is in the allowed list
+        if (allowedNip05Domains.size > 0 && !allowedNip05Domains.has(domain)) {
+            console.error(`NIP-05 domain is not allowed: ${domain}`);
+            return false;
         }
 
         // Fetch the NIP-05 .well-known/nostr.json file

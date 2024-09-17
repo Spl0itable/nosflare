@@ -2083,6 +2083,14 @@ function containsBlockedContent(event) {
   }
   return false;
 }
+var blockedNip05Domains = /* @__PURE__ */ new Set([
+  // Add domains that are explicitly blocked
+  // "primal.net"
+]);
+var allowedNip05Domains = /* @__PURE__ */ new Set([
+  // Add domains that are explicitly allowed
+  // Leave empty to allow all domains (unless blocked)
+]);
 var blockedTags = /* @__PURE__ */ new Set([
   // ... tags that are explicitly blocked
 ]);
@@ -2469,6 +2477,14 @@ async function validateNIP05(nip05Address, pubkey) {
     const [name, domain] = nip05Address.split("@");
     if (!domain) {
       throw new Error(`Invalid NIP-05 address format: ${nip05Address}`);
+    }
+    if (blockedNip05Domains.has(domain)) {
+      console.error(`NIP-05 domain is blocked: ${domain}`);
+      return false;
+    }
+    if (allowedNip05Domains.size > 0 && !allowedNip05Domains.has(domain)) {
+      console.error(`NIP-05 domain is not allowed: ${domain}`);
+      return false;
     }
     const url = `https://${domain}/.well-known/nostr.json?name=${name}`;
     const response = await fetch(url);

@@ -44,7 +44,7 @@ Clone this repo to your machine, then `cd` into its directory, and open `relay-w
 ***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
 *Optional:*
-- In the `relay-worker.js` file: Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags.
+- In the `relay-worker.js` file: Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
@@ -53,7 +53,9 @@ How blocklisting and allowlisting works:
 
 *Spam filtering:*
 
-Nosflare has two optional robust spam filtering mechanisms: NIP-05 Nostr address validation and deriving hashes of event content. The NIP-05 validation is enabled by default and is located within the `processEventInBackground` function in the `relay-worker.js` file. There you will see the code block for "NIP-05 validation", which you can either leave intact or remove/comment to disable validating NIP-05 address.
+Nosflare has two optional robust spam filtering mechanisms: NIP-05 Nostr address validation and deriving hashes of event content. 
+
+The NIP-05 validation is enabled by default and is located within the `processEventInBackground` function in the `relay-worker.js` file. There you will see the code block for "NIP-05 validation", which you can either leave intact or remove/comment to disable validating NIP-05 address. Furthermore, within the `relay-worker.js` file you can explicitly list domains you'd like to allow or block from publishing events.
 
 Additionally, each event submitted to the relay generates a hash based on the author's pubkey and the content of the event, which is stored within the "hashes" directory of the R2 bucket. By default, in the `event-worker.js` file it is set to bypass all event kinds (effectively disabled). However, it can be configured to remove specific events kinds from being bypassed, which would allow only 1 of the same hash per pubkey. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note.
 
