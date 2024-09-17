@@ -1,3 +1,7 @@
+## v4.22.25 - 2024-09-17
+
+- New: only allow events from pubkey's with valid NIP-05 address
+
 ## v4.21.25 - 2024-09-17
 
 - Hotfix: added missing 't' tag

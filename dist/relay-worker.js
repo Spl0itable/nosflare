@@ -4,7 +4,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../../../node_modules/@noble/hashes/esm/_assert.js
+// ../../node_modules/@noble/hashes/esm/_assert.js
 function number(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error(`positive integer expected, not ${n}`);
@@ -38,10 +38,10 @@ function output(out, instance) {
   }
 }
 
-// ../../../node_modules/@noble/hashes/esm/crypto.js
+// ../../node_modules/@noble/hashes/esm/crypto.js
 var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
 
-// ../../../node_modules/@noble/hashes/esm/utils.js
+// ../../node_modules/@noble/hashes/esm/utils.js
 var createView = (arr) => new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 var rotr = (word, shift) => word << 32 - shift | word >>> shift;
 var isLE = new Uint8Array(new Uint32Array([287454020]).buffer)[0] === 68;
@@ -93,7 +93,7 @@ function randomBytes(bytesLength = 32) {
   throw new Error("crypto.getRandomValues must be defined");
 }
 
-// ../../../node_modules/@noble/hashes/esm/_md.js
+// ../../node_modules/@noble/hashes/esm/_md.js
 function setBigUint64(view, byteOffset, value, isLE2) {
   if (typeof view.setBigUint64 === "function")
     return view.setBigUint64(byteOffset, value, isLE2);
@@ -195,7 +195,7 @@ var HashMD = class extends Hash {
   }
 };
 
-// ../../../node_modules/@noble/hashes/esm/sha256.js
+// ../../node_modules/@noble/hashes/esm/sha256.js
 var SHA256_K = /* @__PURE__ */ new Uint32Array([
   1116352408,
   1899447441,
@@ -345,7 +345,7 @@ var SHA256 = class extends HashMD {
 };
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// ../../../node_modules/@noble/curves/esm/abstract/utils.js
+// ../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
   abytes: () => abytes,
@@ -582,7 +582,7 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/modular.js
+// ../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
 var _1n2 = BigInt(1);
 var _2n2 = BigInt(2);
@@ -848,7 +848,7 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/curve.js
+// ../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
 function wNAF(c, bits) {
@@ -966,7 +966,7 @@ function validateBasic(curve) {
   });
 }
 
-// ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
+// ../../node_modules/@noble/curves/esm/abstract/weierstrass.js
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1763,7 +1763,7 @@ function weierstrass(curveDef) {
   };
 }
 
-// ../../../node_modules/@noble/hashes/esm/hmac.js
+// ../../node_modules/@noble/hashes/esm/hmac.js
 var HMAC = class extends Hash {
   constructor(hash2, _key) {
     super();
@@ -1828,7 +1828,7 @@ var HMAC = class extends Hash {
 var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
 hmac.create = (hash2, key) => new HMAC(hash2, key);
 
-// ../../../node_modules/@noble/curves/esm/_shortw_utils.js
+// ../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
   return {
     hash: hash2,
@@ -1841,7 +1841,7 @@ function createCurve(curveDef, defHash) {
   return Object.freeze({ ...create(defHash), create });
 }
 
-// ../../../node_modules/@noble/curves/esm/secp256k1.js
+// ../../node_modules/@noble/curves/esm/secp256k1.js
 var secp256k1P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
 var secp256k1N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
 var _1n5 = BigInt(1);
@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.21.25"
+  version: "4.22.25"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2317,6 +2317,12 @@ async function processEventInBackground(event, server) {
         return `Denied. Tag '${tagKey}' is blocked.`;
       }
     }
+    if (event.kind !== 0) {
+      const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
+      if (!isValidNIP05) {
+        return `Denied. NIP-05 validation failed for pubkey ${event.pubkey}.`;
+      }
+    }
     if (!excludedRateLimitKinds.includes(event.kind)) {
       if (!pubkeyRateLimiter.removeToken()) {
         return "Rate limit exceeded. Please try again later.";
@@ -2413,6 +2419,139 @@ async function closeSubscription(subscriptionId, server) {
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
   relayCache.deleteSubscription(wsId, subscriptionId);
   server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
+}
+async function validateNIP05FromKind0(pubkey) {
+  try {
+    let metadataEvent = relayCache.get(`metadata:${pubkey}`);
+    if (!metadataEvent) {
+      metadataEvent = await fetchKind0EventForPubkey(pubkey);
+      if (!metadataEvent) {
+        console.error(`No kind 0 metadata event found for pubkey: ${pubkey}`);
+        return false;
+      }
+      relayCache.set(`metadata:${pubkey}`, metadataEvent, 36e5);
+    }
+    const metadata = JSON.parse(metadataEvent.content);
+    const nip05Address = metadata.nip05;
+    if (!nip05Address) {
+      console.error(`No NIP-05 address found in kind 0 for pubkey: ${pubkey}`);
+      return false;
+    }
+    const isValid = await validateNIP05(nip05Address, pubkey);
+    return isValid;
+  } catch (error) {
+    console.error(`Error validating NIP-05 for pubkey ${pubkey}: ${error.message}`);
+    return false;
+  }
+}
+async function fetchKind0EventForPubkey(pubkey) {
+  try {
+    const shuffledHelpers = shuffleArray([...reqHelpers]);
+    const filters = { kinds: [0], authors: [pubkey], limit: 1 };
+    for (const helper of shuffledHelpers) {
+      const events = await fetchEventsFromHelper(helper, null, filters);
+      if (events && events.length > 0) {
+        return events[0];
+      }
+    }
+    console.log(`No kind 0 event found from helpers, trying fallback relay: wss://relay.nostr.band`);
+    const fallbackEvent = await fetchEventFromFallbackRelay(pubkey);
+    if (fallbackEvent) {
+      return fallbackEvent;
+    }
+  } catch (error) {
+    console.error(`Error fetching kind 0 event for pubkey ${pubkey}: ${error.message}`);
+  }
+  return null;
+}
+async function validateNIP05(nip05Address, pubkey) {
+  try {
+    const [name, domain] = nip05Address.split("@");
+    if (!domain) {
+      throw new Error(`Invalid NIP-05 address format: ${nip05Address}`);
+    }
+    const url = `https://${domain}/.well-known/nostr.json?name=${name}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
+      return false;
+    }
+    const nip05Data = await response.json();
+    if (!nip05Data.names || !nip05Data.names[name]) {
+      console.error(`NIP-05 data does not contain a matching public key for ${name}`);
+      return false;
+    }
+    const nip05Pubkey = nip05Data.names[name];
+    return nip05Pubkey === pubkey;
+  } catch (error) {
+    console.error(`Error validating NIP-05 address: ${error.message}`);
+    return false;
+  }
+}
+async function fetchEventFromFallbackRelay(pubkey) {
+  return new Promise((resolve, reject) => {
+    const fallbackRelayUrl = "wss://relay.nostr.band";
+    const ws = new WebSocket(fallbackRelayUrl);
+    let hasClosed = false;
+    const closeWebSocket = (subscriptionId) => {
+      if (!hasClosed && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(["CLOSE", subscriptionId]));
+        ws.close();
+        hasClosed = true;
+        console.log("WebSocket connection to fallback relay closed");
+      }
+    };
+    ws.onopen = () => {
+      console.log("WebSocket connection to fallback relay opened.");
+      const subscriptionId = Math.random().toString(36).substr(2, 9);
+      const filters = {
+        kinds: [0],
+        authors: [pubkey],
+        // Only for the specified pubkey
+        limit: 1
+        // We only need one event (the latest kind 0 event)
+      };
+      const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
+      ws.send(reqMessage);
+    };
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message[0] === "EVENT" && message[1]) {
+          const eventData = message[2];
+          if (eventData.kind === 0 && eventData.pubkey === pubkey) {
+            console.log("Received kind 0 event from fallback relay.");
+            closeWebSocket(message[1]);
+            resolve(eventData);
+          }
+        } else if (message[0] === "EOSE") {
+          console.log("EOSE received from fallback relay, no kind 0 event found.");
+          closeWebSocket(message[1]);
+          resolve(null);
+        }
+      } catch (error) {
+        console.error(`Error processing fallback relay event for pubkey ${pubkey}: ${error.message}`);
+        reject(error);
+      }
+    };
+    ws.onerror = (error) => {
+      console.error(`WebSocket error with fallback relay: ${error.message}`);
+      ws.close();
+      hasClosed = true;
+      reject(error);
+    };
+    ws.onclose = () => {
+      hasClosed = true;
+      console.log("Fallback relay WebSocket connection closed.");
+    };
+    setTimeout(() => {
+      if (!hasClosed) {
+        console.log("Timeout reached. Closing WebSocket connection to fallback relay.");
+        closeWebSocket(null);
+        reject(new Error(`No response from fallback relay for pubkey ${pubkey}`));
+      }
+    }, 1e4);
+  });
 }
 async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
   const logContext = {
@@ -2539,16 +2678,11 @@ function splitFilters(filters, numChunks) {
   return filterChunks;
 }
 function matchesFilters(event, filters) {
-  if (filters.ids && !filters.ids.includes(event.id))
-    return false;
-  if (filters.authors && !filters.authors.includes(event.pubkey))
-    return false;
-  if (filters.kinds && !filters.kinds.includes(event.kind))
-    return false;
-  if (filters.since && event.created_at < filters.since)
-    return false;
-  if (filters.until && event.created_at > filters.until)
-    return false;
+  if (filters.ids && !filters.ids.includes(event.id)) return false;
+  if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
+  if (filters.kinds && !filters.kinds.includes(event.kind)) return false;
+  if (filters.since && event.created_at < filters.since) return false;
+  if (filters.until && event.created_at > filters.until) return false;
   for (const [filterKey, filterValues] of Object.entries(filters)) {
     if (filterKey.startsWith("#")) {
       const tagKey = filterKey.slice(1);
@@ -2600,8 +2734,7 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0)
-    throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);

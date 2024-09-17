@@ -344,10 +344,8 @@ async function processDeletionEvent(deletionEvent) {
                 ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
               ].filter((key) => key !== void 0);
               await relayDb.delete(idKey);
-              if (event.kindKey)
-                await relayDb.delete(event.kindKey);
-              if (event.pubkeyKey)
-                await relayDb.delete(event.pubkeyKey);
+              if (event.kindKey) await relayDb.delete(event.kindKey);
+              if (event.pubkeyKey) await relayDb.delete(event.pubkeyKey);
               for (const key of relatedDataKeys) {
                 await relayDb.delete(key);
               }

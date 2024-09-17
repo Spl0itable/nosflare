@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.21.25",
+    version: "4.22.25",
 };
 
 // Relay favicon
@@ -354,7 +354,7 @@ async function processEventInBackground(event, server) {
 
         // Check if the tags are allowed or blocked
         for (const tag of event.tags) {
-            const tagKey = tag[0]; 
+            const tagKey = tag[0];
             const tagValue = tag[1] || "";
 
             // If the tag is not allowed, reject the event
@@ -365,6 +365,14 @@ async function processEventInBackground(event, server) {
             // If the tag is blocked, reject the event
             if (blockedTags.has(tagKey)) {
                 return `Denied. Tag '${tagKey}' is blocked.`;
+            }
+        }
+
+        // NIP-05 validation
+        if (event.kind !== 0) {
+            const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
+            if (!isValidNIP05) {
+                return `Denied. NIP-05 validation failed for pubkey ${event.pubkey}.`;
             }
         }
 
@@ -505,6 +513,187 @@ async function closeSubscription(subscriptionId, server) {
 
     // Notify the client that the subscription is closed
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
+}
+
+// Fetches NIP-05 from kind 0 event
+async function validateNIP05FromKind0(pubkey) {
+    try {
+        // Check if we have a kind 0 event cached for the pubkey
+        let metadataEvent = relayCache.get(`metadata:${pubkey}`);
+
+        if (!metadataEvent) {
+            // If not cached, fetch the kind 0 event from the helper or fallback relay
+            metadataEvent = await fetchKind0EventForPubkey(pubkey);
+
+            if (!metadataEvent) {
+                console.error(`No kind 0 metadata event found for pubkey: ${pubkey}`);
+                return false;
+            }
+
+            // Cache the event for future reference
+            relayCache.set(`metadata:${pubkey}`, metadataEvent, 3600000); // Cache for 1 hour
+        }
+
+        // Parse the content field of the kind 0 event
+        const metadata = JSON.parse(metadataEvent.content);
+        const nip05Address = metadata.nip05;
+
+        if (!nip05Address) {
+            console.error(`No NIP-05 address found in kind 0 for pubkey: ${pubkey}`);
+            return false;
+        }
+
+        // Validate the NIP-05 address
+        const isValid = await validateNIP05(nip05Address, pubkey);
+        return isValid;
+
+    } catch (error) {
+        console.error(`Error validating NIP-05 for pubkey ${pubkey}: ${error.message}`);
+        return false;
+    }
+}
+
+
+
+// Fetch kind 0 event for pubkey
+async function fetchKind0EventForPubkey(pubkey) {
+    try {
+        // Shuffle helpers and distribute the request to fetch kind 0
+        const shuffledHelpers = shuffleArray([...reqHelpers]);
+        const filters = { kinds: [0], authors: [pubkey], limit: 1 };
+
+        // Try fetching from helper workers first
+        for (const helper of shuffledHelpers) {
+            const events = await fetchEventsFromHelper(helper, null, filters);
+            if (events && events.length > 0) {
+                return events[0];
+            }
+        }
+
+        // If no event found from helpers, use fallback relay
+        console.log(`No kind 0 event found from helpers, trying fallback relay: wss://relay.nostr.band`);
+        const fallbackEvent = await fetchEventFromFallbackRelay(pubkey);
+        if (fallbackEvent) {
+            return fallbackEvent;
+        }
+    } catch (error) {
+        console.error(`Error fetching kind 0 event for pubkey ${pubkey}: ${error.message}`);
+    }
+
+    return null;
+}
+
+// Checks if NIP-05 is valid
+async function validateNIP05(nip05Address, pubkey) {
+    try {
+        // Extract the domain and username
+        const [name, domain] = nip05Address.split('@');
+
+        if (!domain) {
+            throw new Error(`Invalid NIP-05 address format: ${nip05Address}`);
+        }
+
+        // Fetch the NIP-05 .well-known/nostr.json file
+        const url = `https://${domain}/.well-known/nostr.json?name=${name}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            console.error(`Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
+            return false;
+        }
+
+        const nip05Data = await response.json();
+
+        if (!nip05Data.names || !nip05Data.names[name]) {
+            console.error(`NIP-05 data does not contain a matching public key for ${name}`);
+            return false;
+        }
+
+        // Compare the pubkey from NIP-05 with the event's pubkey
+        const nip05Pubkey = nip05Data.names[name];
+        return nip05Pubkey === pubkey;
+
+    } catch (error) {
+        console.error(`Error validating NIP-05 address: ${error.message}`);
+        return false;
+    }
+}
+
+// Fetches kind 0 event from other relay
+async function fetchEventFromFallbackRelay(pubkey) {
+    return new Promise((resolve, reject) => {
+        const fallbackRelayUrl = 'wss://relay.nostr.band';
+        const ws = new WebSocket(fallbackRelayUrl);
+        let hasClosed = false;
+
+        const closeWebSocket = (subscriptionId) => {
+            if (!hasClosed && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(["CLOSE", subscriptionId]));
+                ws.close();
+                hasClosed = true;
+                console.log('WebSocket connection to fallback relay closed');
+            }
+        };
+
+        ws.onopen = () => {
+            console.log("WebSocket connection to fallback relay opened.");
+            const subscriptionId = Math.random().toString(36).substr(2, 9);
+            const filters = {
+                kinds: [0],
+                authors: [pubkey], // Only for the specified pubkey
+                limit: 1 // We only need one event (the latest kind 0 event)
+            };
+            const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
+            ws.send(reqMessage);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+
+                // Handle EVENT message
+                if (message[0] === "EVENT" && message[1]) {
+                    const eventData = message[2];
+                    if (eventData.kind === 0 && eventData.pubkey === pubkey) {
+                        console.log("Received kind 0 event from fallback relay.");
+                        closeWebSocket(message[1]);
+                        resolve(eventData);
+                    }
+                }
+
+                // Handle EOSE message
+                else if (message[0] === "EOSE") {
+                    console.log("EOSE received from fallback relay, no kind 0 event found.");
+                    closeWebSocket(message[1]); // Close WebSocket after receiving EOSE
+                    resolve(null); // Resolve with null if no event is found
+                }
+            } catch (error) {
+                console.error(`Error processing fallback relay event for pubkey ${pubkey}: ${error.message}`);
+                reject(error);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error(`WebSocket error with fallback relay: ${error.message}`);
+            ws.close();
+            hasClosed = true;
+            reject(error);
+        };
+
+        ws.onclose = () => {
+            hasClosed = true;
+            console.log('Fallback relay WebSocket connection closed.');
+        };
+
+        // Timeout if no response is received within 10 seconds
+        setTimeout(() => {
+            if (!hasClosed) {
+                console.log('Timeout reached. Closing WebSocket connection to fallback relay.');
+                closeWebSocket(null);
+                reject(new Error(`No response from fallback relay for pubkey ${pubkey}`));
+            }
+        }, 10000);
+    });
 }
 
 // Handles requesting events from helper workers
