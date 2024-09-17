@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.20.24"
+  version: "4.21.24"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2076,11 +2076,26 @@ function containsBlockedContent(event) {
   const lowercaseContent = (event.content || "").toLowerCase();
   const lowercaseTags = event.tags.map((tag) => tag.join("").toLowerCase());
   for (const blocked of blockedContent) {
-    if (lowercaseContent.includes(blocked) || lowercaseTags.some((tag) => tag.includes(blocked))) {
+    const blockedLower = blocked.toLowerCase();
+    if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
       return true;
     }
   }
   return false;
+}
+var blockedTags = /* @__PURE__ */ new Set([
+  // ... tags that are explicitly blocked
+]);
+var allowedTags = /* @__PURE__ */ new Set([
+  "p",
+  "e"
+  // ... tags that are explicitly allowed
+]);
+function isTagAllowed(tag) {
+  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
+    return false;
+  }
+  return !blockedTags.has(tag);
 }
 addEventListener("fetch", (event) => {
   const { request } = event;
@@ -2218,9 +2233,9 @@ var rateLimiter = class {
     this.lastRefillTime = now;
   }
 };
-var messageRateLimiter = new rateLimiter(100 / 6e4, 100);
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
 var excludedRateLimitKinds = [];
+var reqRateLimiter = new rateLimiter(10 / 6e4, 10);
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -2228,10 +2243,6 @@ async function handleWebSocket(event, request) {
     event.waitUntil(
       (async () => {
         try {
-          if (!messageRateLimiter.removeToken()) {
-            sendError(server, "Rate limit exceeded. Please try again later.");
-            return;
-          }
           const message = JSON.parse(messageEvent.data);
           const messageType = message[0];
           switch (messageType) {
@@ -2267,24 +2278,6 @@ async function handleWebSocket(event, request) {
 }
 async function processEvent(event, server) {
   try {
-    if (!isPubkeyAllowed(event.pubkey)) {
-      sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
-      return;
-    }
-    if (!isEventKindAllowed(event.kind)) {
-      sendOK(server, event.id, false, `Denied. Event kind ${event.kind} is not allowed.`);
-      return;
-    }
-    if (containsBlockedContent(event)) {
-      sendOK(server, event.id, false, "Denied. The event contains blocked content.");
-      return;
-    }
-    if (!excludedRateLimitKinds.includes(event.kind)) {
-      if (!pubkeyRateLimiter.removeToken()) {
-        sendOK(server, event.id, false, "Rate limit exceeded. Please try again later.");
-        return;
-      }
-    }
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
@@ -2297,6 +2290,39 @@ async function processEvent(event, server) {
       return;
     }
     relayCache.set(cacheKey, event, 6e4);
+    sendOK(server, event.id, true, "Event received successfully for processing.");
+    processEventInBackground(event, server);
+  } catch (error) {
+    console.error("Error in EVENT processing:", error);
+    sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
+  }
+}
+async function processEventInBackground(event, server) {
+  try {
+    if (!isPubkeyAllowed(event.pubkey)) {
+      return "Denied. The pubkey is not allowed.";
+    }
+    if (!isEventKindAllowed(event.kind)) {
+      return `Denied. Event kind ${event.kind} is not allowed.`;
+    }
+    if (containsBlockedContent(event)) {
+      return "Denied. The event contains blocked content.";
+    }
+    for (const tag of event.tags) {
+      const tagKey = tag[0];
+      const tagValue = tag[1] || "";
+      if (!isTagAllowed(tagKey)) {
+        return `Denied. Tag '${tagKey}' is not allowed.`;
+      }
+      if (blockedTags.has(tagKey)) {
+        return `Denied. Tag '${tagKey}' is blocked.`;
+      }
+    }
+    if (!excludedRateLimitKinds.includes(event.kind)) {
+      if (!pubkeyRateLimiter.removeToken()) {
+        return "Rate limit exceeded. Please try again later.";
+      }
+    }
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
     const subscriptions = relayCache._subscriptions[wsId];
     if (subscriptions) {
@@ -2309,32 +2335,54 @@ async function processEvent(event, server) {
     for (const [wsId2, wsSubscriptions] of Object.entries(relayCache._subscriptions)) {
       for (const [subscriptionId, filters] of Object.entries(wsSubscriptions)) {
         if (matchesFilters(event, filters)) {
-          const cacheKey2 = `req:${JSON.stringify(filters)}`;
-          const cachedEvents = relayCache.get(cacheKey2) || [];
+          const cacheKey = `req:${JSON.stringify(filters)}`;
+          const cachedEvents = relayCache.get(cacheKey) || [];
           cachedEvents.push(event);
-          relayCache.set(cacheKey2, cachedEvents, 6e4);
+          relayCache.set(cacheKey, cachedEvents, 6e4);
         }
       }
     }
-    sendOK(server, event.id, true, "Event received successfully for processing.");
     await sendEventToHelper(event, server, event.id);
   } catch (error) {
-    console.error("Error in EVENT processing:", error);
-    sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
+    console.error("Error in background event processing:", error);
   }
 }
 async function processReq(message, server) {
   const subscriptionId = message[1];
   const filters = message[2] || {};
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
+  if (!reqRateLimiter.removeToken()) {
+    sendError(server, "REQ message rate limit exceeded. Please slow down.");
+    sendEOSE(server, subscriptionId);
+    return;
+  }
+  if (filters.kinds) {
+    const invalidKinds = filters.kinds.filter((kind) => !isEventKindAllowed(kind));
+    if (invalidKinds.length > 0) {
+      sendError(server, `Blocked kinds in request: ${invalidKinds.join(", ")}`);
+      sendEOSE(server, subscriptionId);
+      return;
+    }
+  }
+  if (filters.ids && filters.ids.length > 50) {
+    sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
+    sendEOSE(server, subscriptionId);
+    return;
+  }
+  if (filters.limit && filters.limit > 50) {
+    sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
+    sendEOSE(server, subscriptionId);
+    return;
+  }
+  filters.limit = filters.limit || 50;
   relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents && cachedEvents.length > 0) {
-    for (const event of cachedEvents) {
+    for (const event of cachedEvents.slice(0, filters.limit)) {
       server.send(JSON.stringify(["EVENT", subscriptionId, event]));
     }
-    server.send(JSON.stringify(["EOSE", subscriptionId]));
+    sendEOSE(server, subscriptionId);
     return;
   }
   try {
@@ -2352,13 +2400,14 @@ async function processReq(message, server) {
     if (events.length > 0) {
       relayCache.set(cacheKey, events, 6e4);
     }
-    for (const event of events) {
+    for (const event of events.slice(0, filters.limit)) {
       server.send(JSON.stringify(["EVENT", subscriptionId, event]));
     }
-    server.send(JSON.stringify(["EOSE", subscriptionId]));
+    sendEOSE(server, subscriptionId);
   } catch (error) {
     console.error("Error fetching events:", error);
     sendError(server, `Error fetching events: ${error.message}`);
+    sendEOSE(server, subscriptionId);
   }
 }
 async function closeSubscription(subscriptionId, server) {
@@ -2559,6 +2608,9 @@ function sendOK(server, eventId, status, message) {
 }
 function sendError(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
+}
+function sendEOSE(server, subscriptionId) {
+  server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
 /*! Bundled license information:
 

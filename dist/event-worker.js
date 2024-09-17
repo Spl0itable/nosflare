@@ -28,28 +28,136 @@ async function handlePostRequest(request) {
 var enableGlobalDuplicateCheck = false;
 var bypassDuplicateKinds = /* @__PURE__ */ new Set([
   0,
-  3
-  // Kinds 0, 3 are for metadata and should not be checked for duplicates
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  16,
+  17,
+  40,
+  41,
+  42,
+  43,
+  44,
+  64,
+  818,
+  1021,
+  1022,
+  1040,
+  1059,
+  1063,
+  1311,
+  1617,
+  1621,
+  1622,
+  1630,
+  1633,
+  1971,
+  1984,
+  1985,
+  1986,
+  1987,
+  2003,
+  2004,
+  2022,
+  4550,
+  5e3,
+  5999,
+  6e3,
+  6999,
+  7e3,
+  9e3,
+  9030,
+  9041,
+  9467,
+  9734,
+  9735,
+  9802,
+  1e4,
+  10001,
+  10002,
+  10003,
+  10004,
+  10005,
+  10006,
+  10007,
+  10009,
+  10015,
+  10030,
+  10050,
+  10063,
+  10096,
+  13194,
+  21e3,
+  22242,
+  23194,
+  23195,
+  24133,
+  24242,
+  27235,
+  3e4,
+  30001,
+  30002,
+  30003,
+  30004,
+  30005,
+  30007,
+  30008,
+  30009,
+  30015,
+  30017,
+  30018,
+  30019,
+  30020,
+  30023,
+  30024,
+  30030,
+  30040,
+  30041,
+  30063,
+  30078,
+  30311,
+  30315,
+  30402,
+  30403,
+  30617,
+  30618,
+  30818,
+  30819,
+  31890,
+  31922,
+  31923,
+  31924,
+  31925,
+  31989,
+  31990,
+  34235,
+  34236,
+  34237,
+  34550,
+  39e3,
+  39001,
+  39002,
+  39003,
+  39004,
+  39005,
+  39006,
+  39007,
+  39008,
+  39009
 ]);
 function isDuplicateBypassed(kind) {
   return bypassDuplicateKinds.has(kind);
-}
-var blockedTags = /* @__PURE__ */ new Set([
-  // ... tags that are explicitly blocked
-]);
-var allowedTags = /* @__PURE__ */ new Set([
-  "p",
-  "e"
-  // ... tags that are explicitly allowed
-]);
-function isTagAllowed(tag) {
-  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
-    return false;
-  }
-  return !blockedTags.has(tag);
-}
-function isTagBlocked(tag) {
-  return blockedTags.has(tag);
 }
 var rateLimiter = class {
   constructor(rate, capacity) {
@@ -156,7 +264,7 @@ async function saveEventToR2(event) {
     for (const tag of event.tags) {
       const tagName = tag[0];
       const tagValue = tag[1];
-      if (tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName)) {
+      if (tagName && tagValue) {
         const tagCountKey = `counts/${tagName}_count_${tagValue}`;
         const tagCountResponse = await relayDb.get(tagCountKey);
         const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
@@ -179,7 +287,7 @@ async function saveEventToR2(event) {
     }
     eventWithCountRef.tags = event.tags.filter((tag) => {
       const [tagName, tagValue] = tag;
-      return tagName && tagValue && isTagAllowed(tagName) && !isTagBlocked(tagName);
+      return tagName && tagValue;
     }).map((tag) => {
       const [tagName, tagValue] = tag;
       return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];

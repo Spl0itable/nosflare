@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.20.24",
+    version: "4.21.24",
 };
 
 // Relay favicon
@@ -82,15 +82,35 @@ const blockedContent = new Set([
 function containsBlockedContent(event) {
     const lowercaseContent = (event.content || "").toLowerCase();
     const lowercaseTags = event.tags.map(tag => tag.join("").toLowerCase());
+
     for (const blocked of blockedContent) {
+        const blockedLower = blocked.toLowerCase(); // Checks case-insensitively
         if (
-            lowercaseContent.includes(blocked) ||
-            lowercaseTags.some(tag => tag.includes(blocked))
+            lowercaseContent.includes(blockedLower) ||
+            lowercaseTags.some(tag => tag.includes(blockedLower))
         ) {
             return true;
         }
     }
     return false;
+}
+
+// Blocked tags
+// Add comma-separated tags Ex: t, e, p
+const blockedTags = new Set([
+    // ... tags that are explicitly blocked
+]);
+// Allowed tags
+// Add comma-separated tags Ex: p, e, t
+const allowedTags = new Set([
+    "p", "e"
+    // ... tags that are explicitly allowed
+]);
+function isTagAllowed(tag) {
+    if (allowedTags.size > 0 && !allowedTags.has(tag)) {
+        return false;
+    }
+    return !blockedTags.has(tag);
 }
 
 // Handles upgrading to websocket and serving relay info
@@ -234,9 +254,9 @@ class rateLimiter {
         this.lastRefillTime = now;
     }
 }
-const messageRateLimiter = new rateLimiter(100 / 60000, 100); // 100 messages per min
-const pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 events per min
-const excludedRateLimitKinds = []; // kinds to exclude from rate limiting Ex: 1, 2, 3
+const pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 EVENT messages per min
+const excludedRateLimitKinds = []; // kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
+const reqRateLimiter = new rateLimiter(10 / 60000, 10);  // 10 REQ messages per min
 
 // Handles websocket messages
 async function handleWebSocket(event, request) {
@@ -246,10 +266,6 @@ async function handleWebSocket(event, request) {
         event.waitUntil(
             (async () => {
                 try {
-                    if (!messageRateLimiter.removeToken()) {
-                        sendError(server, "Rate limit exceeded. Please try again later.");
-                        return;
-                    }
                     const message = JSON.parse(messageEvent.data);
                     const messageType = message[0];
                     switch (messageType) {
@@ -288,29 +304,6 @@ async function handleWebSocket(event, request) {
 // Handles EVENT messages
 async function processEvent(event, server) {
     try {
-        // Check if the pubkey is allowed
-        if (!isPubkeyAllowed(event.pubkey)) {
-            sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
-            return;
-        }
-        // Check if the event kind is allowed
-        if (!isEventKindAllowed(event.kind)) {
-            sendOK(server, event.id, false, `Denied. Event kind ${event.kind} is not allowed.`);
-            return;
-        }
-        // Check for blocked content
-        if (containsBlockedContent(event)) {
-            sendOK(server, event.id, false, "Denied. The event contains blocked content.");
-            return;
-        }
-        // Rate limit all event kinds except excluded
-        if (!excludedRateLimitKinds.includes(event.kind)) {
-            if (!pubkeyRateLimiter.removeToken()) {
-                sendOK(server, event.id, false, "Rate limit exceeded. Please try again later.");
-                return;
-            }
-        }
-
         // Check cache for duplicate event ID
         const cacheKey = `event:${event.id}`;
         const cachedEvent = relayCache.get(cacheKey);
@@ -328,6 +321,59 @@ async function processEvent(event, server) {
 
         // Add event to cache with a TTL of 60 seconds (or more, as needed)
         relayCache.set(cacheKey, event, 60000);
+
+        // Acknowledge the event to the client (send OK after basic validation)
+        sendOK(server, event.id, true, "Event received successfully for processing.");
+
+        // Process the event asynchronously without blocking the WebSocket
+        processEventInBackground(event, server);
+
+    } catch (error) {
+        console.error("Error in EVENT processing:", error);
+        sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
+    }
+}
+
+// Process the event asynchronously in the background
+async function processEventInBackground(event, server) {
+    try {
+        // Check if the pubkey is allowed
+        if (!isPubkeyAllowed(event.pubkey)) {
+            return "Denied. The pubkey is not allowed.";
+        }
+
+        // Check if the event kind is allowed
+        if (!isEventKindAllowed(event.kind)) {
+            return `Denied. Event kind ${event.kind} is not allowed.`;
+        }
+
+        // Check for blocked content
+        if (containsBlockedContent(event)) {
+            return "Denied. The event contains blocked content.";
+        }
+
+        // Check if the tags are allowed or blocked
+        for (const tag of event.tags) {
+            const tagKey = tag[0]; 
+            const tagValue = tag[1] || "";
+
+            // If the tag is not allowed, reject the event
+            if (!isTagAllowed(tagKey)) {
+                return `Denied. Tag '${tagKey}' is not allowed.`;
+            }
+
+            // If the tag is blocked, reject the event
+            if (blockedTags.has(tagKey)) {
+                return `Denied. Tag '${tagKey}' is blocked.`;
+            }
+        }
+
+        // Rate limit all event kinds except excluded kinds
+        if (!excludedRateLimitKinds.includes(event.kind)) {
+            if (!pubkeyRateLimiter.removeToken()) {
+                return "Rate limit exceeded. Please try again later.";
+            }
+        }
 
         // Send event to matching subscriptions
         const wsId = server.id || Math.random().toString(36).substr(2, 9);
@@ -353,14 +399,11 @@ async function processEvent(event, server) {
             }
         }
 
-        // Acknowledge the event
-        sendOK(server, event.id, true, "Event received successfully for processing.");
-
         // Forward the event to helper workers
         await sendEventToHelper(event, server, event.id);
+
     } catch (error) {
-        console.error("Error in EVENT processing:", error);
-        sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
+        console.error("Error in background event processing:", error);
     }
 }
 
@@ -369,8 +412,41 @@ async function processReq(message, server) {
     const subscriptionId = message[1];
     const filters = message[2] || {};
 
-    // Generate a unique WebSocket ID for this connection
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
+
+    // Check the REQ rate limiter
+    if (!reqRateLimiter.removeToken()) {
+        sendError(server, "REQ message rate limit exceeded. Please slow down.");
+        sendEOSE(server, subscriptionId);
+        return;
+    }
+
+    // Check if event kinds allowed
+    if (filters.kinds) {
+        const invalidKinds = filters.kinds.filter(kind => !isEventKindAllowed(kind));
+        if (invalidKinds.length > 0) {
+            sendError(server, `Blocked kinds in request: ${invalidKinds.join(', ')}`);
+            sendEOSE(server, subscriptionId);
+            return;
+        }
+    }
+
+    // Allow up to 50 event IDs
+    if (filters.ids && filters.ids.length > 50) {
+        sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
+        sendEOSE(server, subscriptionId);
+        return;
+    }
+
+    // Allow up to limit of 50 events
+    if (filters.limit && filters.limit > 50) {
+        sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
+        sendEOSE(server, subscriptionId);
+        return;
+    }
+
+    // If no limit is provided, set it to 50
+    filters.limit = filters.limit || 50;
 
     // Store the subscription in the relayCache for future reference
     relayCache.addSubscription(wsId, subscriptionId, filters);
@@ -381,10 +457,10 @@ async function processReq(message, server) {
 
     if (cachedEvents && cachedEvents.length > 0) {
         // If cached events exist and are non-empty, return them immediately
-        for (const event of cachedEvents) {
+        for (const event of cachedEvents.slice(0, filters.limit)) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId]));
+        sendEOSE(server, subscriptionId);
         return;
     }
 
@@ -410,14 +486,15 @@ async function processReq(message, server) {
             relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
         }
 
-        // Send the events to the client
-        for (const event of events) {
+        // Send the events to the client (respecting the limit)
+        for (const event of events.slice(0, filters.limit)) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
-        server.send(JSON.stringify(["EOSE", subscriptionId]));
+        sendEOSE(server, subscriptionId);
     } catch (error) {
         console.error("Error fetching events:", error);
         sendError(server, `Error fetching events: ${error.message}`);
+        sendEOSE(server, subscriptionId);
     }
 }
 
@@ -659,4 +736,7 @@ function sendOK(server, eventId, status, message) {
 }
 function sendError(server, message) {
     server.send(JSON.stringify(["NOTICE", message]));
-} 
+}
+function sendEOSE(server, subscriptionId) {
+    server.send(JSON.stringify(["EOSE", subscriptionId]));
+}

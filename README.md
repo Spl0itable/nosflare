@@ -44,8 +44,7 @@ Clone this repo to your machine, then `cd` into its directory, and open `relay-w
 ***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
 *Optional:*
-- In the `relay-worker.js` file: Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting.
-- In the `event-worker.js` file: Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags.
+- In the `relay-worker.js` file: Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags.
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
@@ -54,9 +53,9 @@ How blocklisting and allowlisting works:
 
 *Spam filtering:*
 
-Nosflare has a robust spam filtering mechanism. Each event submitted to the relay generates a hash based on the author's pubkey and the content of the event, which is stored within the "hashes" directory of the R2 bucket. By default, in the `event-worker.js` file it is set to only allow 1 of the same hash per pubkey. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note. However, by default kinds 0 and 3 are set to be bypassed, as they are used for metadata. 
+Nosflare has an optional robust spam filtering mechanism. Each event submitted to the relay generates a hash based on the author's pubkey and the content of the event, which is stored within the "hashes" directory of the R2 bucket. By default, in the `event-worker.js` file it is set to bypass all event kinds. However, it can be configured to remove specific events kinds from being bypassed, which would allow only 1 of the same hash per pubkey. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note.
 
-You can also change which event kinds are subjected to checking for duplicate hashes in the `bypassDuplicateKinds` and `duplicateCheckedKinds` arrays in the `event-worker.js` file. There you can have more granular control over what event kinds are subjected to the spam filtering. Similar allowlisting/blocklisting logic as explained further above is also relevant here. Effectively, these sections are where you can enable or disable the spam filtering.
+As briefly mentioned above, you can change which event kinds are subjected to checking for duplicate hashes in the `bypassDuplicateKinds` and `duplicateCheckedKinds` arrays in the `event-worker.js` file. There you can have more granular control over what event kinds are subjected to the spam filtering. Similar allowlisting/blocklisting logic as explained further above is also relevant here. Effectively, these sections are where you can enable or disable the spam filtering.
 
 Furthermore, you can have even further granular control over the spam filtering by changing the value of `enableGlobalDuplicateCheck` in the `event-worker.js` file. By default, this option is set to `false` value, which means each event submitted to the relay is hashed with the author's pubkey. If set to `true` value it globally hashes the event content. As with the example given earlier, if one person were to write "Hey whatsup" and the value of `enableGlobalDuplicateCheck` is set to `true` then no other person can also write a note with "Hey whatsup" as the hash will already exist and any subsequent events would be dropped. This is particularly useful if your relay is under spam attack and the attackers are using disposable pubkeys, but the content of the spam notes are the same for each (such as the attack by "ReplyGuy").
 
@@ -94,7 +93,6 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 
 The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
-- Event streaming
 - "Pay-to-relay" (charging sats for access)
 - Client authorization (NIP-42)
 - Encrypted DMs (NIP-44)

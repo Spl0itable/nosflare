@@ -1,3 +1,12 @@
+## v4.21.24 - 2024-09-17
+
+- Hotfix: improved rate limiting
+- Hotfix: blocked content was not checked properly
+- Tweak: moved tag blocking logic to main relay worker
+- Tweak: backgrounded event processing
+- Tweak: integrated event kind blocking logic into REQ handling
+- Tweak: set hardcoded REQ limit to 50 events and/or ids
+
 ## v4.20.24 - 2024-09-15
 
 - Hotfix: improved subscription management
