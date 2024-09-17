@@ -58,8 +58,10 @@ async function processReq(subscriptionId, filters) {
   }
   let events = [];
   const eventPromises = [];
-  if (filters.ids) validateIds(filters.ids);
-  if (filters.authors) validateAuthors(filters.authors);
+  if (filters.ids)
+    validateIds(filters.ids);
+  if (filters.authors)
+    validateAuthors(filters.authors);
   try {
     if (filters.ids) {
       eventPromises.push(...fetchEventsById(filters.ids));
@@ -104,7 +106,8 @@ async function fetchEventById(id) {
   const eventUrl = `https://${r2BucketDomain}/${idKey}`;
   try {
     const response = await fetch(eventUrl);
-    if (!response.ok) return null;
+    if (!response.ok)
+      return null;
     const data = await response.text();
     return JSON.parse(data);
   } catch (error) {
@@ -144,7 +147,8 @@ async function fetchEventByKey(eventKey) {
   const eventUrl = `https://${r2BucketDomain}/${eventKey}`;
   try {
     const response = await fetch(eventUrl);
-    if (!response.ok) return null;
+    if (!response.ok)
+      return null;
     const data = await response.text();
     return JSON.parse(data);
   } catch (error) {

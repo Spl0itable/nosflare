@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.21.24",
+    version: "4.21.25",
 };
 
 // Relay favicon
@@ -103,7 +103,7 @@ const blockedTags = new Set([
 // Allowed tags
 // Add comma-separated tags Ex: p, e, t
 const allowedTags = new Set([
-    "p", "e"
+    "p", "e", "t"
     // ... tags that are explicitly allowed
 ]);
 function isTagAllowed(tag) {

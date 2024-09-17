@@ -1,3 +1,7 @@
+## v4.21.25 - 2024-09-17
+
+- Hotfix: added missing 't' tag
+
 ## v4.21.24 - 2024-09-17
 
 - Hotfix: improved rate limiting
