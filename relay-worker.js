@@ -103,7 +103,7 @@ const blockedTags = new Set([
 // Allowed tags
 // Add comma-separated tags Ex: p, e, t
 const allowedTags = new Set([
-    "p", "e", "t"
+    // "p", "e", "t"
     // ... tags that are explicitly allowed
 ]);
 function isTagAllowed(tag) {

@@ -2087,9 +2087,7 @@ var blockedTags = /* @__PURE__ */ new Set([
   // ... tags that are explicitly blocked
 ]);
 var allowedTags = /* @__PURE__ */ new Set([
-  "p",
-  "e",
-  "t"
+  // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
 function isTagAllowed(tag) {
