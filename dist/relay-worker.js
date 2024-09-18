@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.22.27"
+  version: "4.22.28"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2298,39 +2298,51 @@ async function handleWebSocket(event, request) {
 }
 async function processEvent(event, server) {
   try {
+    console.log(`Processing event ${event.id}`);
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
+      console.log(`Duplicate event detected: ${event.id}. Dropping event.`);
       sendOK(server, event.id, false, "Duplicate. Event dropped.");
       return;
     }
     const isValidSignature = await verifyEventSignature(event);
     if (!isValidSignature) {
+      console.error(`Signature verification failed for event ${event.id}`);
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
       return;
+    } else {
+      console.log(`Signature verification passed for event ${event.id}`);
     }
     if (!isPubkeyAllowed(event.pubkey)) {
+      console.error(`Pubkey not allowed: ${event.pubkey} for event ${event.id}`);
       sendOK(server, event.id, false, `Invalid: pubkey ${event.pubkey} is not allowed.`);
       return;
     }
     if (!isEventKindAllowed(event.kind)) {
+      console.error(`Event kind ${event.kind} is not allowed for event ${event.id}`);
       sendOK(server, event.id, false, `Invalid: event kind ${event.kind} is not allowed.`);
       return;
     }
     if (containsBlockedContent(event)) {
+      console.error(`Event ${event.id} contains blocked content.`);
       sendOK(server, event.id, false, "Invalid: event contains blocked content.");
       return;
     }
     relayCache.set(cacheKey, event, 6e4);
+    console.log(`Event ${event.id} cached with a TTL of 60 seconds`);
     sendOK(server, event.id, true, "Event received successfully for processing.");
+    console.log(`Event ${event.id} acknowledged to the client`);
+    console.log(`Processing event ${event.id} asynchronously in background`);
     processEventInBackground(event, server);
   } catch (error) {
-    console.error("Error in EVENT processing:", error);
+    console.error(`Error in processing event ${event.id}:`, error);
     sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
   }
 }
 async function processEventInBackground(event, server) {
   try {
+    console.log(`Processing event ${event.id} in the background`);
     if (typeof event !== "object" || event === null || Array.isArray(event)) {
       console.error("Invalid JSON format. Expected a JSON object.");
       return { success: false, error: "Invalid JSON format. Expected a JSON object." };
@@ -2374,10 +2386,16 @@ async function processEventInBackground(event, server) {
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
     const subscriptions = relayCache._subscriptions[wsId];
     if (subscriptions) {
+      let matched = false;
       for (const [subscriptionId, filters] of Object.entries(subscriptions)) {
         if (matchesFilters(event, filters)) {
+          matched = true;
+          console.log(`Event ${event.id} matched subscription ${subscriptionId}`);
           server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
+      }
+      if (!matched) {
+        console.log(`Event ${event.id} did not match any subscriptions for wsId: ${wsId}`);
       }
     }
     for (const [wsId2, wsSubscriptions] of Object.entries(relayCache._subscriptions)) {
@@ -2386,10 +2404,12 @@ async function processEventInBackground(event, server) {
           const cacheKey = `req:${JSON.stringify(filters)}`;
           const cachedEvents = relayCache.get(cacheKey) || [];
           cachedEvents.push(event);
+          console.log(`Event ${event.id} added to cache for subscription ${subscriptionId}`);
           relayCache.set(cacheKey, cachedEvents, 6e4);
         }
       }
     }
+    console.log(`Forwarding event ${event.id} to helper workers`);
     await sendEventToHelper(event, server, event.id);
   } catch (error) {
     console.error("Error in background event processing:", error);
@@ -2401,15 +2421,26 @@ async function processReq(message, server) {
   const filters = message[2] || {};
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
   if (!reqRateLimiter.removeToken()) {
+    console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
     sendError(server, "REQ message rate limit exceeded. Please slow down.");
     sendEOSE(server, subscriptionId);
     return;
+  }
+  const unsupportedFilters = ["since", "until"];
+  for (const filter of unsupportedFilters) {
+    if (filters[filter]) {
+      console.error(`Unsupported filter '${filter}' used in subscriptionId: ${subscriptionId}`);
+      sendError(server, `Unsupported filter: '${filter}'`);
+      sendEOSE(server, subscriptionId);
+      return;
+    }
   }
   try {
     if (filters.ids) {
       validateIds(filters.ids);
     }
   } catch (error) {
+    console.error(`Invalid event ID format in subscriptionId: ${subscriptionId} - ${error.message}`);
     sendError(server, `Invalid event ID format: ${error.message}`);
     sendEOSE(server, subscriptionId);
     return;
@@ -2419,6 +2450,7 @@ async function processReq(message, server) {
       validateAuthors(filters.authors);
     }
   } catch (error) {
+    console.error(`Invalid author public key format in subscriptionId: ${subscriptionId} - ${error.message}`);
     sendError(server, `Invalid author public key format: ${error.message}`);
     sendEOSE(server, subscriptionId);
     return;
@@ -2426,17 +2458,20 @@ async function processReq(message, server) {
   if (filters.kinds) {
     const invalidKinds = filters.kinds.filter((kind) => !isEventKindAllowed(kind));
     if (invalidKinds.length > 0) {
+      console.error(`Blocked kinds in subscriptionId: ${subscriptionId} - ${invalidKinds.join(", ")}`);
       sendError(server, `Blocked kinds in request: ${invalidKinds.join(", ")}`);
       sendEOSE(server, subscriptionId);
       return;
     }
   }
   if (filters.ids && filters.ids.length > 50) {
+    console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 50`);
     sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
     sendEOSE(server, subscriptionId);
     return;
   }
   if (filters.limit && filters.limit > 50) {
+    console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 50`);
     sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
     sendEOSE(server, subscriptionId);
     return;
@@ -2446,34 +2481,57 @@ async function processReq(message, server) {
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents && cachedEvents.length > 0) {
-    for (const event of cachedEvents.slice(0, filters.limit)) {
-      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-    }
+    console.log(`Serving cached events for subscriptionId: ${subscriptionId}`);
+    sendEventsToClient(server, subscriptionId, cachedEvents.slice(0, filters.limit));
     sendEOSE(server, subscriptionId);
     return;
   }
   try {
     const shuffledHelpers = shuffleArray([...reqHelpers]);
     const numHelpers = Math.min(shuffledHelpers.length, 6);
-    const filterPromises = [];
     const filterChunks = splitFilters(filters, numHelpers);
-    for (let i = 0; i < numHelpers; i++) {
-      const helperFilters = filterChunks[i];
+    const allEvents = [];
+    const TIMEOUT_MS = 5e3;
+    let eoseSent2 = false;
+    const eoseTimeout = setTimeout(() => {
+      if (!eoseSent2) {
+        console.log(`Sending EOSE due to timeout for subscriptionId: ${subscriptionId}`);
+        sendEOSE(server, subscriptionId);
+        eoseSent2 = true;
+      }
+    }, TIMEOUT_MS);
+    const helperPromises = filterChunks.map((helperFilters, i) => {
       const helper = shuffledHelpers[i];
-      filterPromises.push(fetchEventsFromHelper(helper, subscriptionId, helperFilters, server));
-    }
-    const fetchedEvents = await Promise.all(filterPromises);
-    const events = fetchedEvents.flat();
-    if (events.length > 0) {
-      relayCache.set(cacheKey, events, 6e4);
-    }
-    for (const event of events.slice(0, filters.limit)) {
-      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-    }
-    sendEOSE(server, subscriptionId);
+      return withConnectionLimit(
+        () => fetchEventsFromHelper(helper, subscriptionId, helperFilters, server).then((events) => {
+          if (events.length > 0) {
+            console.log(`Received ${events.length} events from ${helper} for subscriptionId: ${subscriptionId}`);
+            const cachedEvents2 = relayCache.get(cacheKey) || [];
+            relayCache.set(cacheKey, [...cachedEvents2, ...events], 6e4);
+            sendEventsToClient(server, subscriptionId, events.slice(0, filters.limit));
+          } else {
+            console.log(`No events returned from ${helper} for subscriptionId: ${subscriptionId}`);
+          }
+        }).catch((error) => {
+          console.error(`Error fetching events from helper ${helper} for subscriptionId: ${subscriptionId} - ${error.message}`);
+        })
+      );
+    });
+    Promise.allSettled(helperPromises).then(() => {
+      clearTimeout(eoseTimeout);
+      if (!eoseSent2) {
+        console.log(`Sending EOSE after all helper requests completed for subscriptionId: ${subscriptionId}`);
+        sendEOSE(server, subscriptionId);
+        eoseSent2 = true;
+      }
+    });
   } catch (error) {
+    console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
     sendError(server, `Error fetching events: ${error.message}`);
-    sendEOSE(server, subscriptionId);
+    if (!eoseSent) {
+      sendEOSE(server, subscriptionId);
+      eoseSent = true;
+    }
   }
 }
 async function closeSubscription(subscriptionId, server) {
@@ -2708,6 +2766,9 @@ function splitFilters(filters, numChunks) {
       baseFilters[key] = filters[key];
     }
   }
+  if (arrayFilters.kinds && arrayFilters.kinds.length <= 1 && (!arrayFilters.authors || arrayFilters.authors.length <= 1)) {
+    return [filters];
+  }
   const filterChunks = Array(numChunks).fill().map(() => ({ ...baseFilters }));
   const arrayKeys = Object.keys(arrayFilters);
   if (arrayKeys.length === 1) {
@@ -2817,6 +2878,11 @@ function hexToBytes2(hexString) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
   }
   return bytes2;
+}
+function sendEventsToClient(server, subscriptionId, events) {
+  for (const event of events) {
+    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+  }
 }
 function sendOK(server, eventId, status, message) {
   server.send(JSON.stringify(["OK", eventId, status, message]));

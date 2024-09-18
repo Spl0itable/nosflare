@@ -1,3 +1,8 @@
+## v4.22.28 - 2024-09-18
+
+- Hotfix: splitting req messages into chunks
+- Tweak: better logging and error handling
+
 ## v4.22.27 - 2024-09-18
 
 - Hotfix: event and req workers simultaneous connection management
