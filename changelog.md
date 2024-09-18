@@ -1,3 +1,7 @@
+## v4.22.27 - 2024-09-18
+
+- Hotfix: event and req workers simultaneous connection management
+
 ## v4.22.26 - 2024-09-18
 
 - Hotfix: sending REQ for tags

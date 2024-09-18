@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.22.26"
+  version: "4.22.27"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2243,6 +2243,19 @@ var rateLimiter = class {
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
 var excludedRateLimitKinds = [];
 var reqRateLimiter = new rateLimiter(10 / 6e4, 10);
+var MAX_CONCURRENT_CONNECTIONS = 6;
+var activeConnections = 0;
+async function withConnectionLimit(promiseFunction) {
+  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  activeConnections += 1;
+  try {
+    return await promiseFunction();
+  } finally {
+    activeConnections -= 1;
+  }
+}
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -2296,6 +2309,18 @@ async function processEvent(event, server) {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
       return;
     }
+    if (!isPubkeyAllowed(event.pubkey)) {
+      sendOK(server, event.id, false, `Invalid: pubkey ${event.pubkey} is not allowed.`);
+      return;
+    }
+    if (!isEventKindAllowed(event.kind)) {
+      sendOK(server, event.id, false, `Invalid: event kind ${event.kind} is not allowed.`);
+      return;
+    }
+    if (containsBlockedContent(event)) {
+      sendOK(server, event.id, false, "Invalid: event contains blocked content.");
+      return;
+    }
     relayCache.set(cacheKey, event, 6e4);
     sendOK(server, event.id, true, "Event received successfully for processing.");
     processEventInBackground(event, server);
@@ -2306,34 +2331,44 @@ async function processEvent(event, server) {
 }
 async function processEventInBackground(event, server) {
   try {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      console.error("Invalid JSON format. Expected a JSON object.");
+      return { success: false, error: "Invalid JSON format. Expected a JSON object." };
+    }
     if (!isPubkeyAllowed(event.pubkey)) {
-      return "Denied. The pubkey is not allowed.";
+      console.error(`Event denied. Pubkey ${event.pubkey} is not allowed.`);
+      return { success: false, error: `Pubkey ${event.pubkey} is not allowed.` };
     }
     if (!isEventKindAllowed(event.kind)) {
-      return `Denied. Event kind ${event.kind} is not allowed.`;
+      console.error(`Event denied. Event kind ${event.kind} is not allowed.`);
+      return { success: false, error: `Event kind ${event.kind} is not allowed.` };
     }
     if (containsBlockedContent(event)) {
-      return "Denied. The event contains blocked content.";
+      console.error(`Event denied. Content contains blocked phrases.`);
+      return { success: false, error: "Event contains blocked content." };
     }
     for (const tag of event.tags) {
       const tagKey = tag[0];
-      const tagValue = tag[1] || "";
       if (!isTagAllowed(tagKey)) {
-        return `Denied. Tag '${tagKey}' is not allowed.`;
+        console.error(`Event denied. Tag '${tagKey}' is not allowed.`);
+        return { success: false, error: `Tag '${tagKey}' is not allowed.` };
       }
       if (blockedTags.has(tagKey)) {
-        return `Denied. Tag '${tagKey}' is blocked.`;
+        console.error(`Event denied. Tag '${tagKey}' is blocked.`);
+        return { success: false, error: `Tag '${tagKey}' is blocked.` };
       }
     }
     if (event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
       if (!isValidNIP05) {
-        return `Denied. NIP-05 validation failed for pubkey ${event.pubkey}.`;
+        console.error(`Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
+        return { success: false, error: `NIP-05 validation failed for pubkey ${event.pubkey}.` };
       }
     }
     if (!excludedRateLimitKinds.includes(event.kind)) {
       if (!pubkeyRateLimiter.removeToken()) {
-        return "Rate limit exceeded. Please try again later.";
+        console.error(`Event denied. Rate limit exceeded for pubkey ${event.pubkey}.`);
+        return { success: false, error: "Rate limit exceeded. Please try again later." };
       }
     }
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
@@ -2358,6 +2393,7 @@ async function processEventInBackground(event, server) {
     await sendEventToHelper(event, server, event.id);
   } catch (error) {
     console.error("Error in background event processing:", error);
+    return { success: false, error: `Error: ${error.message}` };
   }
 }
 async function processReq(message, server) {
@@ -2366,6 +2402,24 @@ async function processReq(message, server) {
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
   if (!reqRateLimiter.removeToken()) {
     sendError(server, "REQ message rate limit exceeded. Please slow down.");
+    sendEOSE(server, subscriptionId);
+    return;
+  }
+  try {
+    if (filters.ids) {
+      validateIds(filters.ids);
+    }
+  } catch (error) {
+    sendError(server, `Invalid event ID format: ${error.message}`);
+    sendEOSE(server, subscriptionId);
+    return;
+  }
+  try {
+    if (filters.authors) {
+      validateAuthors(filters.authors);
+    }
+  } catch (error) {
+    sendError(server, `Invalid author public key format: ${error.message}`);
     sendEOSE(server, subscriptionId);
     return;
   }
@@ -2418,7 +2472,6 @@ async function processReq(message, server) {
     }
     sendEOSE(server, subscriptionId);
   } catch (error) {
-    console.error("Error fetching events:", error);
     sendError(server, `Error fetching events: ${error.message}`);
     sendEOSE(server, subscriptionId);
   }
@@ -2577,14 +2630,14 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
   };
   try {
     console.log(`Requesting events from helper worker`, logContext);
-    const response = await fetch(helper, {
+    const response = await withConnectionLimit(() => fetch(helper, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${authToken}`
       },
       body: JSON.stringify({ type: "REQ", subscriptionId, filters })
-    });
+    }));
     if (response.ok) {
       const contentType = response.headers.get("Content-Type");
       let events;
@@ -2601,26 +2654,14 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
           throw new Error("Failed to parse response as JSON.");
         }
       }
-      console.log(`Successfully retrieved events from helper worker`, {
-        ...logContext,
-        eventCount: events.length
-      });
+      console.log(`Successfully retrieved events from helper worker`, { ...logContext, eventCount: events.length });
       return events;
     } else {
-      console.error(`Error fetching events from helper worker`, {
-        ...logContext,
-        status: response.status,
-        statusText: response.statusText
-      });
-      throw new Error(
-        `Failed to fetch events: ${response.status} - ${response.statusText}`
-      );
+      console.error(`Error fetching events from helper worker`, { ...logContext, status: response.status, statusText: response.statusText });
+      throw new Error(`Failed to fetch events: ${response.status} - ${response.statusText}`);
     }
   } catch (error) {
-    console.error(`Error in fetchEventsFromHelper`, {
-      ...logContext,
-      error: error.message
-    });
+    console.error(`Error in fetchEventsFromHelper`, { ...logContext, error: error.message });
     throw error;
   }
 }
@@ -2633,14 +2674,14 @@ async function sendEventToHelper(event, server, eventId) {
   };
   try {
     console.log(`Sending event to helper worker`, logContext);
-    const response = await fetch(randomHelper, {
+    const response = await withConnectionLimit(() => fetch(randomHelper, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${authToken}`
       },
       body: JSON.stringify({ type: "EVENT", event })
-    });
+    }));
     if (response.ok) {
       console.log(`Successfully sent event to helper worker`, logContext);
     } else {
@@ -2725,6 +2766,20 @@ function shuffleArray(array) {
     [array[i], array[j]] = [array[j], array[i]];
   }
   return array;
+}
+function validateIds(ids) {
+  for (const id of ids) {
+    if (!/^[a-f0-9]{64}$/.test(id)) {
+      throw new Error(`Invalid event ID format: ${id}`);
+    }
+  }
+}
+function validateAuthors(authors) {
+  for (const author of authors) {
+    if (!/^[a-f0-9]{64}$/.test(author)) {
+      throw new Error(`Invalid author pubkey format: ${author}`);
+    }
+  }
 }
 async function verifyEventSignature(event) {
   try {

@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@censorship.rip",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.22.26",
+    version: "4.22.27",
 };
 
 // Relay favicon
@@ -270,6 +270,25 @@ const pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 EVENT messages 
 const excludedRateLimitKinds = []; // kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 const reqRateLimiter = new rateLimiter(10 / 60000, 10);  // 10 REQ messages per min
 
+// Controls concurrent connections
+const MAX_CONCURRENT_CONNECTIONS = 6;
+let activeConnections = 0;
+
+// Controls number of active connections
+async function withConnectionLimit(promiseFunction) {
+  // Wait if too many connections are active
+  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  activeConnections += 1;
+  try {
+    return await promiseFunction();
+  } finally {
+    activeConnections -= 1;
+  }
+}
+
 // Handles websocket messages
 async function handleWebSocket(event, request) {
     const { 0: client, 1: server } = new WebSocketPair();
@@ -331,10 +350,28 @@ async function processEvent(event, server) {
             return;
         }
 
-        // Add event to cache with a TTL of 60 seconds (or more, as needed)
+        // Check if the pubkey is allowed
+        if (!isPubkeyAllowed(event.pubkey)) {
+            sendOK(server, event.id, false, `Invalid: pubkey ${event.pubkey} is not allowed.`);
+            return;
+        }
+
+        // Check if the event kind is allowed
+        if (!isEventKindAllowed(event.kind)) {
+            sendOK(server, event.id, false, `Invalid: event kind ${event.kind} is not allowed.`);
+            return;
+        }
+
+        // Check for blocked content
+        if (containsBlockedContent(event)) {
+            sendOK(server, event.id, false, "Invalid: event contains blocked content.");
+            return;
+        }
+
+        // Add event to cache with a TTL of 60 seconds
         relayCache.set(cacheKey, event, 60000);
 
-        // Acknowledge the event to the client (send OK after basic validation)
+        // Acknowledge the event to the client
         sendOK(server, event.id, true, "Event received successfully for processing.");
 
         // Process the event asynchronously without blocking the WebSocket
@@ -349,34 +386,44 @@ async function processEvent(event, server) {
 // Process the event asynchronously in the background
 async function processEventInBackground(event, server) {
     try {
+        // Ensure event is valid JSON
+        if (typeof event !== "object" || event === null || Array.isArray(event)) {
+            console.error("Invalid JSON format. Expected a JSON object.");
+            return { success: false, error: "Invalid JSON format. Expected a JSON object." };
+        }
+
         // Check if the pubkey is allowed
         if (!isPubkeyAllowed(event.pubkey)) {
-            return "Denied. The pubkey is not allowed.";
+            console.error(`Event denied. Pubkey ${event.pubkey} is not allowed.`);
+            return { success: false, error: `Pubkey ${event.pubkey} is not allowed.` };
         }
 
         // Check if the event kind is allowed
         if (!isEventKindAllowed(event.kind)) {
-            return `Denied. Event kind ${event.kind} is not allowed.`;
+            console.error(`Event denied. Event kind ${event.kind} is not allowed.`);
+            return { success: false, error: `Event kind ${event.kind} is not allowed.` };
         }
 
         // Check for blocked content
         if (containsBlockedContent(event)) {
-            return "Denied. The event contains blocked content.";
+            console.error(`Event denied. Content contains blocked phrases.`);
+            return { success: false, error: "Event contains blocked content." };
         }
 
         // Check if the tags are allowed or blocked
         for (const tag of event.tags) {
             const tagKey = tag[0];
-            const tagValue = tag[1] || "";
 
             // If the tag is not allowed, reject the event
             if (!isTagAllowed(tagKey)) {
-                return `Denied. Tag '${tagKey}' is not allowed.`;
+                console.error(`Event denied. Tag '${tagKey}' is not allowed.`);
+                return { success: false, error: `Tag '${tagKey}' is not allowed.` };
             }
 
             // If the tag is blocked, reject the event
             if (blockedTags.has(tagKey)) {
-                return `Denied. Tag '${tagKey}' is blocked.`;
+                console.error(`Event denied. Tag '${tagKey}' is blocked.`);
+                return { success: false, error: `Tag '${tagKey}' is blocked.` };
             }
         }
 
@@ -384,14 +431,16 @@ async function processEventInBackground(event, server) {
         if (event.kind !== 0) {
             const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
             if (!isValidNIP05) {
-                return `Denied. NIP-05 validation failed for pubkey ${event.pubkey}.`;
+                console.error(`Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
+                return { success: false, error: `NIP-05 validation failed for pubkey ${event.pubkey}.` };
             }
         }
 
         // Rate limit all event kinds except excluded kinds
         if (!excludedRateLimitKinds.includes(event.kind)) {
             if (!pubkeyRateLimiter.removeToken()) {
-                return "Rate limit exceeded. Please try again later.";
+                console.error(`Event denied. Rate limit exceeded for pubkey ${event.pubkey}.`);
+                return { success: false, error: "Rate limit exceeded. Please try again later." };
             }
         }
 
@@ -424,6 +473,7 @@ async function processEventInBackground(event, server) {
 
     } catch (error) {
         console.error("Error in background event processing:", error);
+        return { success: false, error: `Error: ${error.message}` };
     }
 }
 
@@ -441,7 +491,29 @@ async function processReq(message, server) {
         return;
     }
 
-    // Check if event kinds allowed
+    // Validate event IDs if present in filters
+    try {
+        if (filters.ids) {
+            validateIds(filters.ids);
+        }
+    } catch (error) {
+        sendError(server, `Invalid event ID format: ${error.message}`);
+        sendEOSE(server, subscriptionId);
+        return;
+    }
+
+    // Validate author(s) pubkey(s) if present in filters
+    try {
+        if (filters.authors) {
+            validateAuthors(filters.authors);
+        }
+    } catch (error) {
+        sendError(server, `Invalid author public key format: ${error.message}`);
+        sendEOSE(server, subscriptionId);
+        return;
+    }
+
+    // Check if event kinds are allowed
     if (filters.kinds) {
         const invalidKinds = filters.kinds.filter(kind => !isEventKindAllowed(kind));
         if (invalidKinds.length > 0) {
@@ -468,7 +540,7 @@ async function processReq(message, server) {
     // If no limit is provided, set it to 50
     filters.limit = filters.limit || 50;
 
-    // Store the subscription in the relayCache for future reference
+    // Store the subscription in cache
     relayCache.addSubscription(wsId, subscriptionId, filters);
 
     // Generate a unique cache key based on the filters
@@ -476,7 +548,6 @@ async function processReq(message, server) {
     const cachedEvents = relayCache.get(cacheKey);
 
     if (cachedEvents && cachedEvents.length > 0) {
-        // If cached events exist and are non-empty, return them immediately
         for (const event of cachedEvents.slice(0, filters.limit)) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
@@ -485,7 +556,7 @@ async function processReq(message, server) {
     }
 
     try {
-        // Shuffle helpers and distribute the filters
+        // Distribute filters to helper workers
         const shuffledHelpers = shuffleArray([...reqHelpers]);
         const numHelpers = Math.min(shuffledHelpers.length, 6);
         const filterPromises = [];
@@ -501,18 +572,17 @@ async function processReq(message, server) {
         const fetchedEvents = await Promise.all(filterPromises);
         const events = fetchedEvents.flat();
 
-        // Only cache the events if we actually have events
+        // Cache the events if we have any
         if (events.length > 0) {
             relayCache.set(cacheKey, events, 60000); // Cache for 60 seconds
         }
 
-        // Send the events to the client (respecting the limit)
+        // Send the events to the client
         for (const event of events.slice(0, filters.limit)) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
         sendEOSE(server, subscriptionId);
     } catch (error) {
-        console.error("Error fetching events:", error);
         sendError(server, `Error fetching events: ${error.message}`);
         sendEOSE(server, subscriptionId);
     }
@@ -729,25 +799,22 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
     try {
         console.log(`Requesting events from helper worker`, logContext);
 
-        const response = await fetch(helper, {
+        const response = await withConnectionLimit(() => fetch(helper, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${authToken}`,
             },
             body: JSON.stringify({ type: "REQ", subscriptionId, filters }),
-        });
+        }));
 
         if (response.ok) {
-            // Check if the response is JSON or ArrayBuffer
             const contentType = response.headers.get("Content-Type");
             let events;
 
             if (contentType && contentType.includes("application/json")) {
-                // Parse as JSON
                 events = await response.json();
             } else {
-                // Handle ArrayBuffer response
                 const arrayBuffer = await response.arrayBuffer();
                 const textDecoder = new TextDecoder("utf-8");
                 const jsonString = textDecoder.decode(arrayBuffer);
@@ -759,27 +826,14 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
                     throw new Error("Failed to parse response as JSON.");
                 }
             }
-
-            console.log(`Successfully retrieved events from helper worker`, {
-                ...logContext,
-                eventCount: events.length,
-            });
+            console.log(`Successfully retrieved events from helper worker`, {...logContext, eventCount: events.length });
             return events;
         } else {
-            console.error(`Error fetching events from helper worker`, {
-                ...logContext,
-                status: response.status,
-                statusText: response.statusText,
-            });
-            throw new Error(
-                `Failed to fetch events: ${response.status} - ${response.statusText}`
-            );
+            console.error(`Error fetching events from helper worker`, {...logContext, status: response.status, statusText: response.statusText });
+            throw new Error(`Failed to fetch events: ${response.status} - ${response.statusText}`);
         }
     } catch (error) {
-        console.error(`Error in fetchEventsFromHelper`, {
-            ...logContext,
-            error: error.message,
-        });
+        console.error(`Error in fetchEventsFromHelper`, {...logContext, error: error.message });
         throw error;
     }
 }
@@ -796,14 +850,14 @@ async function sendEventToHelper(event, server, eventId) {
     try {
         console.log(`Sending event to helper worker`, logContext);
 
-        const response = await fetch(randomHelper, {
+        const response = await withConnectionLimit(() => fetch(randomHelper, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${authToken}`,
             },
             body: JSON.stringify({ type: "EVENT", event }),
-        });
+        }));
 
         if (response.ok) {
             console.log(`Successfully sent event to helper worker`, logContext);
@@ -901,6 +955,24 @@ function shuffleArray(array) {
         [array[i], array[j]] = [array[j], array[i]];
     }
     return array;
+}
+
+// Validate event IDs
+function validateIds(ids) {
+    for (const id of ids) {
+        if (!/^[a-f0-9]{64}$/.test(id)) {
+            throw new Error(`Invalid event ID format: ${id}`);
+        }
+    }
+}
+
+// Validate author public keys
+function validateAuthors(authors) {
+    for (const author of authors) {
+        if (!/^[a-f0-9]{64}$/.test(author)) {
+            throw new Error(`Invalid author pubkey format: ${author}`);
+        }
+    }
 }
 
 // Verify event sig
