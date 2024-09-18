@@ -84,6 +84,9 @@ async function processReq(subscriptionId, filters) {
         if (filters.authors) {
             eventPromises.push(...await fetchEventsByAuthor(filters.authors));
         }
+        if (filters.tags) {
+            eventPromises.push(...await fetchEventsByTag(filters.tags));
+        }
 
         const fetchedEvents = await Promise.all(eventPromises);
         events = filterEvents(fetchedEvents.filter(event => event !== null), filters);
@@ -169,6 +172,22 @@ async function fetchEventsByAuthor(authors, limit = 25) {
     return promises;
 }
 
+// Fetch events by tag in batches
+async function fetchEventsByTag(tags, limit = 25) {
+    const promises = [];
+    for (const [tagName, tagValue] of tags) {
+        const tagCountKey = `counts/${tagName}_count_${tagValue}`;
+        const tagCountResponse = await relayDb.get(tagCountKey);
+        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : '0';
+        const tagCount = parseInt(tagCountValue, 10);
+        for (let i = tagCount; i >= Math.max(1, tagCount - limit + 1); i--) {
+            const tagKey = `tags/${tagName}-${tagValue}:${i}`;
+            promises.push(fetchEventByKey(tagKey));
+        }
+    }
+    return promises;
+}
+
 // Fetch event by key (common for kind, author, etc.)
 async function fetchEventByKey(eventKey) {
     const eventUrl = `https://${r2BucketDomain}/${eventKey}`;
@@ -186,19 +205,23 @@ async function fetchEventByKey(eventKey) {
 // Filter events based on additional filters
 function filterEvents(events, filters) {
     return events.filter(event => {
+        // Check for basic filters: ids, kinds, authors, created_at range
         const includeEvent = (!filters.ids || filters.ids.includes(event.id)) &&
             (!filters.kinds || filters.kinds.includes(event.kind)) &&
             (!filters.authors || filters.authors.includes(event.pubkey)) &&
             (!filters.since || event.created_at >= filters.since) &&
             (!filters.until || event.created_at <= filters.until);
-        const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith('#'));
-        for (const [tagKey, tagValues] of tagFilters) {
-            const tagName = tagKey.slice(1);
-            const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
-            if (!tagValues.some(value => eventTags.includes(value))) {
-                return false;
+        
+        // Check for tag filters
+        if (filters.tags) {
+            for (const [tagName, tagValue] of filters.tags) {
+                const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
+                if (!eventTags.includes(tagValue)) {
+                    return false;
+                }
             }
         }
+
         return includeEvent;
     });
 }

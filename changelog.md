@@ -1,3 +1,8 @@
+## v4.22.26 - 2024-09-18
+
+- Hotfix: sending REQ for tags
+- Tweak: improved batch saving events
+
 ## v4.22.25 - 2024-09-17
 
 - New: only allow events from pubkey's with valid NIP-05 address

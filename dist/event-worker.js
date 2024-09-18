@@ -199,114 +199,92 @@ async function processEvent(event) {
     return `Error: EVENT processing failed - ${error.message}`;
   }
 }
+async function processInBatches(tasks, batchSize) {
+  const results = [];
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    const batch = tasks.slice(i, i + batchSize);
+    results.push(...await Promise.all(batch));
+  }
+  return results;
+}
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
   const contentHash = await hashContent(event);
   const contentHashKey = enableGlobalDuplicateCheck ? `hashes/${contentHash}` : `hashes/${event.pubkey}:${contentHash}`;
-  if (isDuplicateBypassed(event.kind)) {
-    console.log(`Skipping duplicate check for kind: ${event.kind}`);
-  } else {
-    try {
+  const tasks = [];
+  if (!isDuplicateBypassed(event.kind)) {
+    tasks.push((async () => {
       const existingHash = await relayDb.get(contentHashKey);
       if (existingHash) {
         console.log(`Duplicate content detected. Event dropped.`);
-        return { success: false, error: "Duplicate content detected" };
+        throw new Error("Duplicate content detected");
       }
-    } catch (error) {
-      if (error.name !== "R2Error" || error.message !== "R2 object not found") {
-        console.error(`Error checking content hash in R2: ${error.message}`);
-        return { success: false, error: `Error checking content hash in R2: ${error.message}` };
-      }
-    }
+    })());
   }
-  if (!duplicateCheckRateLimiter.removeToken(event.pubkey)) {
-    console.log(`Duplicate check rate limit exceeded for pubkey: ${event.pubkey}`);
-    return { success: false, error: "Duplicate check rate limit exceeded" };
-  }
-  try {
+  tasks.push((async () => {
     const existingEvent = await relayDb.get(eventKey);
     if (existingEvent) {
       console.log(`Duplicate event: ${event.id}. Event dropped.`);
-      return { success: false, error: "Duplicate event" };
+      throw new Error("Duplicate event");
     }
-  } catch (error) {
-    if (error.name !== "R2Error" || error.message !== "R2 object not found") {
-      console.error(`Error checking duplicate event in R2: ${error.message}`);
-      return { success: false, error: `Error checking duplicate event in R2: ${error.message}` };
-    }
-  }
+  })());
   try {
-    JSON.stringify(event);
+    await Promise.all(tasks);
   } catch (error) {
-    console.error(`Invalid JSON for event: ${event.id}. Event dropped.`, error);
-    return { success: false, error: `Invalid JSON for event: ${event.id}` };
+    return { success: false, error: error.message };
   }
-  try {
-    const kindCountKey = `counts/kind_count_${event.kind}`;
-    const kindCountResponse = await relayDb.get(kindCountKey);
-    const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
-    let kindCount = parseInt(kindCountValue, 10);
-    if (isNaN(kindCount)) {
-      kindCount = 0;
+  const saveTasks = [];
+  const kindCountKey = `counts/kind_count_${event.kind}`;
+  const pubkeyCountKey = `counts/pubkey_count_${event.pubkey}`;
+  const kindCountResponse = await relayDb.get(kindCountKey);
+  const kindCountValue = kindCountResponse ? await kindCountResponse.text() : "0";
+  let kindCount = parseInt(kindCountValue, 10);
+  if (isNaN(kindCount))
+    kindCount = 0;
+  const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
+  const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
+  let pubkeyCount = parseInt(pubkeyCountValue, 10);
+  if (isNaN(pubkeyCount))
+    pubkeyCount = 0;
+  const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
+  const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+  saveTasks.push(
+    relayDb.put(eventKey, JSON.stringify(event)),
+    relayDb.put(kindKey, JSON.stringify(event)),
+    relayDb.put(pubkeyKey, JSON.stringify(event)),
+    relayDb.put(kindCountKey, (kindCount + 1).toString()),
+    relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
+  );
+  event.kindKey = kindKey;
+  event.pubkeyKey = pubkeyKey;
+  const tagSaveTasks = [];
+  const tagKeys = [];
+  for (const tag of event.tags) {
+    const tagName = tag[0];
+    const tagValue = tag[1];
+    if (tagName && tagValue) {
+      const tagCountKey = `counts/${tagName}_count_${tagValue}`;
+      const tagCountResponse = await relayDb.get(tagCountKey);
+      const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+      let tagCount = parseInt(tagCountValue, 10);
+      if (isNaN(tagCount))
+        tagCount = 0;
+      const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
+      event[`${tagName}Key_${tagValue}`] = tagKey;
+      tagKeys.push(tagKey);
+      tagSaveTasks.push(
+        relayDb.put(tagKey, JSON.stringify(event)),
+        relayDb.put(tagCountKey, (tagCount + 1).toString())
+      );
     }
-    const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
-    const pubkeyCountKey = `counts/pubkey_count_${event.pubkey}`;
-    const pubkeyCountResponse = await relayDb.get(pubkeyCountKey);
-    const pubkeyCountValue = pubkeyCountResponse ? await pubkeyCountResponse.text() : "0";
-    let pubkeyCount = parseInt(pubkeyCountValue, 10);
-    if (isNaN(pubkeyCount)) {
-      pubkeyCount = 0;
-    }
-    const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
-    const eventWithCountRef = { ...event, kindKey, pubkeyKey };
-    const tagBatches = [];
-    let currentBatch = [];
-    for (const tag of event.tags) {
-      const tagName = tag[0];
-      const tagValue = tag[1];
-      if (tagName && tagValue) {
-        const tagCountKey = `counts/${tagName}_count_${tagValue}`;
-        const tagCountResponse = await relayDb.get(tagCountKey);
-        const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
-        let tagCount = parseInt(tagCountValue, 10);
-        if (isNaN(tagCount)) {
-          tagCount = 0;
-        }
-        const tagKey = `tags/${tagName}-${tagValue}:${tagCount + 1}`;
-        eventWithCountRef[`${tagName}Key_${tagValue}`] = tagKey;
-        currentBatch.push(relayDb.put(tagKey, JSON.stringify(event)));
-        currentBatch.push(relayDb.put(tagCountKey, (tagCount + 1).toString()));
-        if (currentBatch.length === 5) {
-          tagBatches.push(currentBatch);
-          currentBatch = [];
-        }
-      }
-    }
-    if (currentBatch.length > 0) {
-      tagBatches.push(currentBatch);
-    }
-    eventWithCountRef.tags = event.tags.filter((tag) => {
-      const [tagName, tagValue] = tag;
-      return tagName && tagValue;
-    }).map((tag) => {
-      const [tagName, tagValue] = tag;
-      return [tagName, tagValue, eventWithCountRef[`${tagName}Key_${tagValue}`]];
-    });
-    await Promise.all([
-      relayDb.put(kindKey, JSON.stringify(event)),
-      relayDb.put(pubkeyKey, JSON.stringify(event)),
-      relayDb.put(eventKey, JSON.stringify(eventWithCountRef)),
-      relayDb.put(kindCountKey, (kindCount + 1).toString()),
-      relayDb.put(pubkeyCountKey, (pubkeyCount + 1).toString())
-    ]);
-    if (!isDuplicateBypassed(event.kind)) {
-      await relayDb.put(contentHashKey, JSON.stringify(event));
-    }
-    return { success: true };
-  } catch (error) {
-    console.error(`Error saving event to R2: ${error.message}`);
-    return { success: false, error: `Error saving event to R2: ${error.message}` };
   }
+  event.tagKeys = tagKeys;
+  await processInBatches(tagSaveTasks, 3);
+  if (!isDuplicateBypassed(event.kind)) {
+    saveTasks.push(relayDb.put(contentHashKey, JSON.stringify(event)));
+  }
+  await Promise.all(saveTasks);
+  return { success: true };
 }
 async function hashContent(event) {
   const contentToHash = enableGlobalDuplicateCheck ? JSON.stringify({
@@ -338,14 +316,13 @@ async function processDeletionEvent(deletionEvent) {
           if (response.ok) {
             const event = await response.json();
             if (event && event.pubkey === deletionEvent.pubkey) {
+              await relayDb.delete(idKey);
               const relatedDataKeys = [
                 event.kindKey,
                 event.pubkeyKey,
-                ...Object.values(event).filter((value) => typeof value === "string" && value.startsWith("tags/"))
+                ...event.tagKeys || []
+                // Include all tag keys
               ].filter((key) => key !== void 0);
-              await relayDb.delete(idKey);
-              if (event.kindKey) await relayDb.delete(event.kindKey);
-              if (event.pubkeyKey) await relayDb.delete(event.pubkeyKey);
               for (const key of relatedDataKeys) {
                 await relayDb.delete(key);
               }

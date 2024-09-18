@@ -58,8 +58,10 @@ async function processReq(subscriptionId, filters) {
   }
   let events = [];
   const eventPromises = [];
-  if (filters.ids) validateIds(filters.ids);
-  if (filters.authors) validateAuthors(filters.authors);
+  if (filters.ids)
+    validateIds(filters.ids);
+  if (filters.authors)
+    validateAuthors(filters.authors);
   try {
     if (filters.ids) {
       eventPromises.push(...fetchEventsById(filters.ids));
@@ -69,6 +71,9 @@ async function processReq(subscriptionId, filters) {
     }
     if (filters.authors) {
       eventPromises.push(...await fetchEventsByAuthor(filters.authors));
+    }
+    if (filters.tags) {
+      eventPromises.push(...await fetchEventsByTag(filters.tags));
     }
     const fetchedEvents = await Promise.all(eventPromises);
     events = filterEvents(fetchedEvents.filter((event) => event !== null), filters);
@@ -104,7 +109,8 @@ async function fetchEventById(id) {
   const eventUrl = `https://${r2BucketDomain}/${idKey}`;
   try {
     const response = await fetch(eventUrl);
-    if (!response.ok) return null;
+    if (!response.ok)
+      return null;
     const data = await response.text();
     return JSON.parse(data);
   } catch (error) {
@@ -140,11 +146,26 @@ async function fetchEventsByAuthor(authors, limit = 25) {
   }
   return promises;
 }
+async function fetchEventsByTag(tags, limit = 25) {
+  const promises = [];
+  for (const [tagName, tagValue] of tags) {
+    const tagCountKey = `counts/${tagName}_count_${tagValue}`;
+    const tagCountResponse = await relayDb.get(tagCountKey);
+    const tagCountValue = tagCountResponse ? await tagCountResponse.text() : "0";
+    const tagCount = parseInt(tagCountValue, 10);
+    for (let i = tagCount; i >= Math.max(1, tagCount - limit + 1); i--) {
+      const tagKey = `tags/${tagName}-${tagValue}:${i}`;
+      promises.push(fetchEventByKey(tagKey));
+    }
+  }
+  return promises;
+}
 async function fetchEventByKey(eventKey) {
   const eventUrl = `https://${r2BucketDomain}/${eventKey}`;
   try {
     const response = await fetch(eventUrl);
-    if (!response.ok) return null;
+    if (!response.ok)
+      return null;
     const data = await response.text();
     return JSON.parse(data);
   } catch (error) {
@@ -155,12 +176,12 @@ async function fetchEventByKey(eventKey) {
 function filterEvents(events, filters) {
   return events.filter((event) => {
     const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
-    const tagFilters = Object.entries(filters).filter(([key]) => key.startsWith("#"));
-    for (const [tagKey, tagValues] of tagFilters) {
-      const tagName = tagKey.slice(1);
-      const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
-      if (!tagValues.some((value) => eventTags.includes(value))) {
-        return false;
+    if (filters.tags) {
+      for (const [tagName, tagValue] of filters.tags) {
+        const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
+        if (!eventTags.includes(tagValue)) {
+          return false;
+        }
       }
     }
     return includeEvent;
