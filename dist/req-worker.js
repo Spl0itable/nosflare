@@ -12,17 +12,17 @@ addEventListener("fetch", (event) => {
 var MAX_CONCURRENT_CONNECTIONS = 6;
 var activeConnections = 0;
 async function withConnectionLimit(promiseFunction) {
-  console.log(`Active connections: ${activeConnections} / ${MAX_CONCURRENT_CONNECTIONS}`);
   while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    console.log("Connection limit reached, waiting...");
+    console.log("[Connection Limit] Too many connections, waiting...");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   activeConnections += 1;
+  console.log(`[Connection Limit] Active connections increased to ${activeConnections}`);
   try {
     return await promiseFunction();
   } finally {
     activeConnections -= 1;
-    console.log(`Connection closed. Active connections: ${activeConnections}`);
+    console.log(`[Connection Limit] Active connections decreased to ${activeConnections}`);
   }
 }
 async function handlePostRequest(request) {

@@ -48,20 +48,19 @@ let activeConnections = 0;
 
 // Controls number of active connections
 async function withConnectionLimit(promiseFunction) {
-  console.log(`Active connections: ${activeConnections} / ${MAX_CONCURRENT_CONNECTIONS}`);
-
   // Wait if too many connections are active
   while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    console.log("Connection limit reached, waiting...");
-    await new Promise(resolve => setTimeout(resolve, 100));
+      console.log("[Connection Limit] Too many connections, waiting...");
+      await new Promise(resolve => setTimeout(resolve, 100));
   }
 
   activeConnections += 1;
+  console.log(`[Connection Limit] Active connections increased to ${activeConnections}`);
   try {
-    return await promiseFunction();
+      return await promiseFunction();
   } finally {
-    activeConnections -= 1;
-    console.log(`Connection closed. Active connections: ${activeConnections}`);
+      activeConnections -= 1;
+      console.log(`[Connection Limit] Active connections decreased to ${activeConnections}`);
   }
 }
 
