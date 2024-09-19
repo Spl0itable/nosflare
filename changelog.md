@@ -1,3 +1,7 @@
+## v4.22.30 - 2024-09-19
+
+- Tweak: added robust console logging
+
 ## v4.22.29 - 2024-09-19
 
 - Hotfix: prevent unnecessary filters
