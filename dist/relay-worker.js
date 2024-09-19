@@ -2370,6 +2370,11 @@ async function handleWebSocket(event, request) {
 }
 async function processEvent(event, server) {
   try {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      console.error(`[Event] Invalid JSON format for event: ${JSON.stringify(event)}. Expected a JSON object.`);
+      sendOK(server, null, false, "Invalid JSON format. Expected a JSON object.");
+      return;
+    }
     console.log(`[Event] Processing event ${event.id}`);
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
@@ -2386,21 +2391,6 @@ async function processEvent(event, server) {
     } else {
       console.log(`[Event] Signature verification passed for event ${event.id}`);
     }
-    if (!isPubkeyAllowed(event.pubkey)) {
-      console.error(`[Event] Pubkey not allowed: ${event.pubkey} for event ${event.id}`);
-      sendOK(server, event.id, false, `Invalid: pubkey ${event.pubkey} is not allowed.`);
-      return;
-    }
-    if (!isEventKindAllowed(event.kind)) {
-      console.error(`[Event] Event kind ${event.kind} is not allowed for event ${event.id}`);
-      sendOK(server, event.id, false, `Invalid: event kind ${event.kind} is not allowed.`);
-      return;
-    }
-    if (containsBlockedContent(event)) {
-      console.error(`[Event] Event ${event.id} contains blocked content.`);
-      sendOK(server, event.id, false, "Invalid: event contains blocked content.");
-      return;
-    }
     relayCache.set(cacheKey, event, 6e4);
     console.log(`[Event] Event ${event.id} cached with a TTL of 60 seconds`);
     sendOK(server, event.id, true, "Event received successfully for processing.");
@@ -2414,10 +2404,6 @@ async function processEvent(event, server) {
 async function processEventInBackground(event, server) {
   try {
     console.log(`[Event] Processing event ${event.id} in the background`);
-    if (typeof event !== "object" || event === null || Array.isArray(event)) {
-      console.error("[Event] Invalid JSON format. Expected a JSON object.");
-      return { success: false, error: "Invalid JSON format. Expected a JSON object." };
-    }
     if (!isPubkeyAllowed(event.pubkey)) {
       console.error(`[Event] Event denied. Pubkey ${event.pubkey} is not allowed.`);
       return { success: false, error: `Pubkey ${event.pubkey} is not allowed.` };

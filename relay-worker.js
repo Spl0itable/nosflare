@@ -420,6 +420,13 @@ async function handleWebSocket(event, request) {
 // Handles EVENT messages
 async function processEvent(event, server) {
     try {
+        // Ensure event is valid JSON
+        if (typeof event !== "object" || event === null || Array.isArray(event)) {
+            console.error(`[Event] Invalid JSON format for event: ${JSON.stringify(event)}. Expected a JSON object.`);
+            sendOK(server, null, false, "Invalid JSON format. Expected a JSON object.");
+            return;
+        }
+
         // Log event processing start
         console.log(`[Event] Processing event ${event.id}`);
 
@@ -440,27 +447,6 @@ async function processEvent(event, server) {
             return;
         } else {
             console.log(`[Event] Signature verification passed for event ${event.id}`);
-        }
-
-        // Check if the pubkey is allowed
-        if (!isPubkeyAllowed(event.pubkey)) {
-            console.error(`[Event] Pubkey not allowed: ${event.pubkey} for event ${event.id}`);
-            sendOK(server, event.id, false, `Invalid: pubkey ${event.pubkey} is not allowed.`);
-            return;
-        }
-
-        // Check if the event kind is allowed
-        if (!isEventKindAllowed(event.kind)) {
-            console.error(`[Event] Event kind ${event.kind} is not allowed for event ${event.id}`);
-            sendOK(server, event.id, false, `Invalid: event kind ${event.kind} is not allowed.`);
-            return;
-        }
-
-        // Check for blocked content
-        if (containsBlockedContent(event)) {
-            console.error(`[Event] Event ${event.id} contains blocked content.`);
-            sendOK(server, event.id, false, "Invalid: event contains blocked content.");
-            return;
         }
 
         // Add event to cache with a TTL of 60 seconds
@@ -485,12 +471,6 @@ async function processEventInBackground(event, server) {
     try {
         // Log event processing start
         console.log(`[Event] Processing event ${event.id} in the background`);
-
-        // Ensure event is valid JSON
-        if (typeof event !== "object" || event === null || Array.isArray(event)) {
-            console.error("[Event] Invalid JSON format. Expected a JSON object.");
-            return { success: false, error: "Invalid JSON format. Expected a JSON object." };
-        }
 
         // Check if the pubkey is allowed
         if (!isPubkeyAllowed(event.pubkey)) {
