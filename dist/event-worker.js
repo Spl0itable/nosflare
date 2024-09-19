@@ -318,7 +318,7 @@ async function processDeletionEvent(deletionEvent) {
   for (const eventId of deletedEventIds) {
     const metadataKey = `metadata/event:${eventId}`;
     try {
-      console.log(`Deleting event with ID: ${eventId}`);
+      console.log(`Attempting to delete event with ID: ${eventId}`);
       const metadataResponse = await withConnectionLimit(() => relayDb.get(metadataKey));
       if (metadataResponse) {
         const metadata = await metadataResponse.json();
@@ -338,6 +338,8 @@ async function processDeletionEvent(deletionEvent) {
         await withConnectionLimit(() => relayDb.delete(metadataKey));
         await purgeCloudflareCache(keysToDelete);
         console.log(`Event ${eventId} and its metadata deleted successfully.`);
+      } else {
+        console.warn(`Event with ID: ${eventId} not found. Nothing to delete.`);
       }
     } catch (error) {
       console.error(`Error processing deletion for event ${eventId}: ${error.message}`);

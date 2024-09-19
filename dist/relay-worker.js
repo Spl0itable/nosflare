@@ -2052,12 +2052,9 @@ var allowedPubkeys = [
 ];
 function isPubkeyAllowed(pubkey) {
   if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
-    console.log(`[Pubkey Check] Pubkey ${pubkey} is not in allowed list.`);
     return false;
   }
-  const isBlocked = blockedPubkeys.includes(pubkey);
-  console.log(`[Pubkey Check] Pubkey ${pubkey} is ${isBlocked ? "blocked" : "allowed"}.`);
-  return !isBlocked;
+  return !blockedPubkeys.includes(pubkey);
 }
 var blockedEventKinds = /* @__PURE__ */ new Set([
   1064
@@ -2067,12 +2064,9 @@ var allowedEventKinds = /* @__PURE__ */ new Set([
 ]);
 function isEventKindAllowed(kind) {
   if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
-    console.log(`[Event Kind Check] Event kind ${kind} is not in allowed list.`);
     return false;
   }
-  const isBlocked = blockedEventKinds.has(kind);
-  console.log(`[Event Kind Check] Event kind ${kind} is ${isBlocked ? "blocked" : "allowed"}.`);
-  return !isBlocked;
+  return !blockedEventKinds.has(kind);
 }
 var blockedContent = /* @__PURE__ */ new Set([
   "~~ hello world! ~~"
@@ -2084,7 +2078,6 @@ function containsBlockedContent(event) {
   for (const blocked of blockedContent) {
     const blockedLower = blocked.toLowerCase();
     if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
-      console.log(`[Content Check] Event ${event.id} contains blocked content: ${blocked}`);
       return true;
     }
   }
@@ -2107,12 +2100,9 @@ var allowedTags = /* @__PURE__ */ new Set([
 ]);
 function isTagAllowed(tag) {
   if (allowedTags.size > 0 && !allowedTags.has(tag)) {
-    console.log(`[Tag Check] Tag ${tag} is not in allowed list.`);
     return false;
   }
-  const isBlocked = blockedTags.has(tag);
-  console.log(`[Tag Check] Tag ${tag} is ${isBlocked ? "blocked" : "allowed"}.`);
-  return !isBlocked;
+  return !blockedTags.has(tag);
 }
 addEventListener("fetch", (event) => {
   const { request } = event;
