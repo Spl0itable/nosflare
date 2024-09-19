@@ -2023,7 +2023,7 @@ var relayInfo = {
   contact: "lux@censorship.rip",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "4.22.28"
+  version: "4.22.29"
 };
 var relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
 var nip05Users = {
@@ -2185,8 +2185,17 @@ var relayCache = {
   // Store subscriptions
   get(key) {
     const item = this._cache[key];
-    if (item && item.expires > Date.now()) {
-      return item.value;
+    if (item) {
+      const now = Date.now();
+      if (item.expires > now) {
+        console.log(`[Cache] Hit for key: ${key}, expires in ${(item.expires - now) / 1e3} seconds`);
+        return item.value;
+      } else {
+        console.log(`[Cache] Expired for key: ${key}, deleting...`);
+        this.delete(key);
+      }
+    } else {
+      console.log(`[Cache] Miss for key: ${key}`);
     }
     return null;
   },
@@ -2195,26 +2204,48 @@ var relayCache = {
       value,
       expires: Date.now() + ttl
     };
+    console.log(`[Cache] Set key: ${key} with TTL: ${ttl / 1e3} seconds`);
   },
   delete(key) {
-    delete this._cache[key];
+    if (this._cache[key]) {
+      delete this._cache[key];
+      console.log(`[Cache] Deleted key: ${key}`);
+    } else {
+      console.log(`[Cache] No key found to delete: ${key}`);
+    }
   },
   addSubscription(wsId, subscriptionId, filters) {
     if (!this._subscriptions[wsId]) {
       this._subscriptions[wsId] = {};
+      console.log(`[Subscription] New WebSocket ID added: ${wsId}`);
     }
     this._subscriptions[wsId][subscriptionId] = filters;
+    console.log(`[Subscription] Added subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
   },
   getSubscription(wsId, subscriptionId) {
-    return this._subscriptions[wsId]?.[subscriptionId] || null;
+    const subscription = this._subscriptions[wsId]?.[subscriptionId];
+    if (subscription) {
+      console.log(`[Subscription] Found subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
+    } else {
+      console.log(`[Subscription] No subscription found for ID: ${subscriptionId} and WebSocket ID: ${wsId}`);
+    }
+    return subscription || null;
   },
   deleteSubscription(wsId, subscriptionId) {
     if (this._subscriptions[wsId]) {
       delete this._subscriptions[wsId][subscriptionId];
+      console.log(`[Subscription] Deleted subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
+    } else {
+      console.log(`[Subscription] No subscriptions found for WebSocket ID: ${wsId}`);
     }
   },
   clearSubscriptions(wsId) {
-    delete this._subscriptions[wsId];
+    if (this._subscriptions[wsId]) {
+      delete this._subscriptions[wsId];
+      console.log(`[Subscription] Cleared all subscriptions for WebSocket ID: ${wsId}`);
+    } else {
+      console.log(`[Subscription] No subscriptions to clear for WebSocket ID: ${wsId}`);
+    }
   }
 };
 var rateLimiter = class {
@@ -2263,17 +2294,24 @@ async function handleWebSocket(event, request) {
     event.waitUntil(
       (async () => {
         try {
-          const message = JSON.parse(messageEvent.data);
-          const messageType = message[0];
+          let messageData;
+          if (messageEvent.data instanceof ArrayBuffer) {
+            const textDecoder = new TextDecoder("utf-8");
+            const decodedText = textDecoder.decode(messageEvent.data);
+            messageData = JSON.parse(decodedText);
+          } else {
+            messageData = JSON.parse(messageEvent.data);
+          }
+          const messageType = messageData[0];
           switch (messageType) {
             case "EVENT":
-              await processEvent(message[1], server);
+              await processEvent(messageData[1], server);
               break;
             case "REQ":
-              await processReq(message, server);
+              await processReq(messageData, server);
               break;
             case "CLOSE":
-              await closeSubscription(message[1], server);
+              await closeSubscription(messageData[1], server);
               break;
           }
         } catch (e) {
@@ -2333,7 +2371,6 @@ async function processEvent(event, server) {
     console.log(`Event ${event.id} cached with a TTL of 60 seconds`);
     sendOK(server, event.id, true, "Event received successfully for processing.");
     console.log(`Event ${event.id} acknowledged to the client`);
-    console.log(`Processing event ${event.id} asynchronously in background`);
     processEventInBackground(event, server);
   } catch (error) {
     console.error(`Error in processing event ${event.id}:`, error);
@@ -2482,7 +2519,9 @@ async function processReq(message, server) {
   const cachedEvents = relayCache.get(cacheKey);
   if (cachedEvents && cachedEvents.length > 0) {
     console.log(`Serving cached events for subscriptionId: ${subscriptionId}`);
-    sendEventsToClient(server, subscriptionId, cachedEvents.slice(0, filters.limit));
+    for (const event of cachedEvents.slice(0, filters.limit)) {
+      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+    }
     sendEOSE(server, subscriptionId);
     return;
   }
@@ -2490,48 +2529,23 @@ async function processReq(message, server) {
     const shuffledHelpers = shuffleArray([...reqHelpers]);
     const numHelpers = Math.min(shuffledHelpers.length, 6);
     const filterChunks = splitFilters(filters, numHelpers);
-    const allEvents = [];
-    const TIMEOUT_MS = 5e3;
-    let eoseSent2 = false;
-    const eoseTimeout = setTimeout(() => {
-      if (!eoseSent2) {
-        console.log(`Sending EOSE due to timeout for subscriptionId: ${subscriptionId}`);
-        sendEOSE(server, subscriptionId);
-        eoseSent2 = true;
-      }
-    }, TIMEOUT_MS);
     const helperPromises = filterChunks.map((helperFilters, i) => {
       const helper = shuffledHelpers[i];
-      return withConnectionLimit(
-        () => fetchEventsFromHelper(helper, subscriptionId, helperFilters, server).then((events) => {
-          if (events.length > 0) {
-            console.log(`Received ${events.length} events from ${helper} for subscriptionId: ${subscriptionId}`);
-            const cachedEvents2 = relayCache.get(cacheKey) || [];
-            relayCache.set(cacheKey, [...cachedEvents2, ...events], 6e4);
-            sendEventsToClient(server, subscriptionId, events.slice(0, filters.limit));
-          } else {
-            console.log(`No events returned from ${helper} for subscriptionId: ${subscriptionId}`);
-          }
-        }).catch((error) => {
-          console.error(`Error fetching events from helper ${helper} for subscriptionId: ${subscriptionId} - ${error.message}`);
-        })
-      );
+      return fetchEventsFromHelper(helper, subscriptionId, helperFilters, server);
     });
-    Promise.allSettled(helperPromises).then(() => {
-      clearTimeout(eoseTimeout);
-      if (!eoseSent2) {
-        console.log(`Sending EOSE after all helper requests completed for subscriptionId: ${subscriptionId}`);
-        sendEOSE(server, subscriptionId);
-        eoseSent2 = true;
-      }
-    });
+    const fetchedEvents = await Promise.all(helperPromises);
+    const events = fetchedEvents.flat();
+    if (events.length > 0) {
+      relayCache.set(cacheKey, events, 6e4);
+    }
+    for (const event of events.slice(0, filters.limit)) {
+      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+    }
+    sendEOSE(server, subscriptionId);
   } catch (error) {
     console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
     sendError(server, `Error fetching events: ${error.message}`);
-    if (!eoseSent) {
-      sendEOSE(server, subscriptionId);
-      eoseSent = true;
-    }
+    sendEOSE(server, subscriptionId);
   }
 }
 async function closeSubscription(subscriptionId, server) {
@@ -2878,11 +2892,6 @@ function hexToBytes2(hexString) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
   }
   return bytes2;
-}
-function sendEventsToClient(server, subscriptionId, events) {
-  for (const event of events) {
-    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-  }
 }
 function sendOK(server, eventId, status, message) {
   server.send(JSON.stringify(["OK", eventId, status, message]));

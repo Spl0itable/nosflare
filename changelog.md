@@ -1,3 +1,8 @@
+## v4.22.29 - 2024-09-19
+
+- Hotfix: prevent unnecessary filters
+- Tweak: added logging to cache handling
+
 ## v4.22.28 - 2024-09-18
 
 - Hotfix: splitting req messages into chunks

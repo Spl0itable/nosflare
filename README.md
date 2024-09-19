@@ -93,6 +93,10 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 17. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
 
+## Limitations
+
+Due to the serverless architectire and object storage through R2 bucket, there is a slight limitation to handling REQ messages that include the `since` and/or `until` filters. This relay implementation does not store any timestamp related keys. Therefore, making it impossible to fetch events based on these filters. However, all other filters such as ids, kinds, authors, and tags still work correctly. To reduce unnecessary load from REQ messages that include the `since` and/or `until` filters, they have been blocked within the `processReq` function in the `relay-worker.js` file.
+
 ## Roadmap
 
 The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
