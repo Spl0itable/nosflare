@@ -3,13 +3,9 @@
 // Handles POST request from relay worker
 addEventListener("fetch", (event) => {
   const { request } = event;
-  console.log(`Received ${request.method} request at ${new Date().toISOString()}`);
-
   if (request.method === 'POST') {
-    console.log("Handling POST request...");
     event.respondWith(handlePostRequest(request));
   } else {
-    console.warn(`Invalid request method: ${request.method}`);
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
@@ -50,17 +46,14 @@ let activeConnections = 0;
 async function withConnectionLimit(promiseFunction) {
   // Wait if too many connections are active
   while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-      console.log("[Connection Limit] Too many connections, waiting...");
-      await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
 
   activeConnections += 1;
-  console.log(`[Connection Limit] Active connections increased to ${activeConnections}`);
   try {
-      return await promiseFunction();
+    return await promiseFunction();
   } finally {
-      activeConnections -= 1;
-      console.log(`[Connection Limit] Active connections decreased to ${activeConnections}`);
+    activeConnections -= 1;
   }
 }
 

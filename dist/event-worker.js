@@ -1,12 +1,9 @@
 // event-worker.js
 addEventListener("fetch", (event) => {
   const { request } = event;
-  console.log(`Received ${request.method} request at ${(/* @__PURE__ */ new Date()).toISOString()}`);
   if (request.method === "POST") {
-    console.log("Handling POST request...");
     event.respondWith(handlePostRequest(request));
   } else {
-    console.warn(`Invalid request method: ${request.method}`);
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
@@ -37,16 +34,13 @@ var MAX_CONCURRENT_CONNECTIONS = 6;
 var activeConnections = 0;
 async function withConnectionLimit(promiseFunction) {
   while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    console.log("[Connection Limit] Too many connections, waiting...");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   activeConnections += 1;
-  console.log(`[Connection Limit] Active connections increased to ${activeConnections}`);
   try {
     return await promiseFunction();
   } finally {
     activeConnections -= 1;
-    console.log(`[Connection Limit] Active connections decreased to ${activeConnections}`);
   }
 }
 var enableGlobalDuplicateCheck = false;
