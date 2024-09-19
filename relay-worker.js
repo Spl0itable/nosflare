@@ -139,28 +139,21 @@ function isTagAllowed(tag) {
 addEventListener("fetch", (event) => {
     const { request } = event;
     const url = new URL(request.url);
-    console.log(`[Fetch] Request received for ${url.pathname}`);
     if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-            console.log("[Fetch] WebSocket upgrade requested.");
             event.respondWith(handleWebSocket(event, request));
         } else if (request.headers.get("Accept") === "application/nostr+json") {
-            console.log("[Fetch] Relay info requested.");
             event.respondWith(handleRelayInfoRequest());
         } else {
-            console.log("[Fetch] Invalid request, returning default response.");
             event.respondWith(
                 new Response("Connect using a Nostr client", { status: 200 })
             );
         }
     } else if (url.pathname === "/.well-known/nostr.json") {
-        console.log("[Fetch] NIP-05 request received.");
         event.respondWith(handleNIP05Request(url));
     } else if (url.pathname === "/favicon.ico") {
-        console.log("[Fetch] Favicon request received.");
         event.respondWith(serveFavicon(event));
     } else {
-        console.log("[Fetch] Invalid request, returning 400.");
         event.respondWith(new Response("Invalid request", { status: 400 }));
     }
 });
@@ -171,7 +164,6 @@ async function handleRelayInfoRequest() {
         "Access-Control-Allow-Headers": "Content-Type, Accept",
         "Access-Control-Allow-Methods": "GET",
     });
-    console.log("[Relay Info] Sending relay info response.");
     return new Response(JSON.stringify(relayInfo), { status: 200, headers: headers });
 }
 async function serveFavicon() {
@@ -179,19 +171,16 @@ async function serveFavicon() {
     if (response.ok) {
         const headers = new Headers(response.headers);
         headers.set("Cache-Control", "max-age=3600");
-        console.log("[Favicon] Favicon served.");
         return new Response(response.body, {
             status: response.status,
             headers: headers,
         });
     }
-    console.log("[Favicon] Favicon not found, returning 404.");
     return new Response(null, { status: 404 });
 }
 async function handleNIP05Request(url) {
     const name = url.searchParams.get("name");
     if (!name) {
-        console.log("[NIP-05] Missing 'name' parameter.");
         return new Response(JSON.stringify({ error: "Missing 'name' parameter" }), {
             status: 400,
             headers: { "Content-Type": "application/json" },
@@ -199,7 +188,6 @@ async function handleNIP05Request(url) {
     }
     const pubkey = nip05Users[name.toLowerCase()];
     if (!pubkey) {
-        console.log(`[NIP-05] User ${name} not found.`);
         return new Response(JSON.stringify({ error: "User not found" }), {
             status: 404,
             headers: { "Content-Type": "application/json" },
@@ -215,7 +203,6 @@ async function handleNIP05Request(url) {
             ],
         },
     };
-    console.log(`[NIP-05] User ${name} found, returning response.`);
     return new Response(JSON.stringify(response), {
         status: 200,
         headers: {
@@ -232,73 +219,36 @@ const relayCache = {
 
     get(key) {
         const item = this._cache[key];
-        if (item) {
-            const now = Date.now();
-            if (item.expires > now) {
-                console.log(`[Cache] Hit for key: ${key}, expires in ${(item.expires - now) / 1000} seconds`);
-                return item.value;
-            } else {
-                console.log(`[Cache] Expired for key: ${key}, deleting...`);
-                this.delete(key);  // Clean up expired cache
-            }
-        } else {
-            console.log(`[Cache] Miss for key: ${key}`);
+        if (item && item.expires > Date.now()) {
+            return item.value;
         }
         return null;
     },
-
     set(key, value, ttl = 60000) {
         this._cache[key] = {
             value,
             expires: Date.now() + ttl,
         };
-        console.log(`[Cache] Set key: ${key} with TTL: ${ttl / 1000} seconds`);
     },
-
     delete(key) {
-        if (this._cache[key]) {
-            delete this._cache[key];
-            console.log(`[Cache] Deleted key: ${key}`);
-        } else {
-            console.log(`[Cache] No key found to delete: ${key}`);
-        }
+        delete this._cache[key];
     },
-
     addSubscription(wsId, subscriptionId, filters) {
         if (!this._subscriptions[wsId]) {
             this._subscriptions[wsId] = {};
-            console.log(`[Subscription] New WebSocket ID added: ${wsId}`);
         }
         this._subscriptions[wsId][subscriptionId] = filters;
-        console.log(`[Subscription] Added subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
     },
-
     getSubscription(wsId, subscriptionId) {
-        const subscription = this._subscriptions[wsId]?.[subscriptionId];
-        if (subscription) {
-            console.log(`[Subscription] Found subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
-        } else {
-            console.log(`[Subscription] No subscription found for ID: ${subscriptionId} and WebSocket ID: ${wsId}`);
-        }
-        return subscription || null;
+        return this._subscriptions[wsId]?.[subscriptionId] || null;
     },
-
     deleteSubscription(wsId, subscriptionId) {
         if (this._subscriptions[wsId]) {
             delete this._subscriptions[wsId][subscriptionId];
-            console.log(`[Subscription] Deleted subscription ${subscriptionId} for WebSocket ID: ${wsId}`);
-        } else {
-            console.log(`[Subscription] No subscriptions found for WebSocket ID: ${wsId}`);
         }
     },
-
     clearSubscriptions(wsId) {
-        if (this._subscriptions[wsId]) {
-            delete this._subscriptions[wsId];
-            console.log(`[Subscription] Cleared all subscriptions for WebSocket ID: ${wsId}`);
-        } else {
-            console.log(`[Subscription] No subscriptions to clear for WebSocket ID: ${wsId}`);
-        }
+        delete this._subscriptions[wsId];
     }
 };
 
@@ -313,11 +263,9 @@ class rateLimiter {
     removeToken() {
         this.refill();
         if (this.tokens < 1) {
-            console.log("[RateLimiter] No tokens available, rate limit exceeded.");
             return false; // no tokens available, rate limit exceeded
         }
         this.tokens -= 1;
-        console.log("[RateLimiter] Token removed, remaining tokens:", this.tokens);
         return true;
     }
     refill() {
@@ -326,7 +274,6 @@ class rateLimiter {
         const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
         this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
         this.lastRefillTime = now;
-        console.log(`[RateLimiter] Refilled tokens, current token count: ${this.tokens}`);
     }
 }
 const pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 EVENT messages per min
@@ -341,17 +288,14 @@ let activeConnections = 0;
 async function withConnectionLimit(promiseFunction) {
     // Wait if too many connections are active
     while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-        console.log("[Connection Limit] Too many connections, waiting...");
         await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     activeConnections += 1;
-    console.log(`[Connection Limit] Active connections increased to ${activeConnections}`);
     try {
         return await promiseFunction();
     } finally {
         activeConnections -= 1;
-        console.log(`[Connection Limit] Active connections decreased to ${activeConnections}`);
     }
 }
 
@@ -359,10 +303,6 @@ async function withConnectionLimit(promiseFunction) {
 async function handleWebSocket(event, request) {
     const { 0: client, 1: server } = new WebSocketPair();
     server.accept();
-    const wsId = Math.random().toString(36).substr(2, 9);
-    server.id = wsId;
-    console.log(`[WebSocket] WebSocket connection established with ID: ${wsId}`);
-
     server.addEventListener("message", async (messageEvent) => {
         event.waitUntil(
             (async () => {
@@ -381,8 +321,6 @@ async function handleWebSocket(event, request) {
                     }
 
                     const messageType = messageData[0];
-                    console.log(`[WebSocket] Message received of type: ${messageType}`);
-
                     switch (messageType) {
                         case "EVENT":
                             await processEvent(messageData[1], server);
@@ -394,8 +332,6 @@ async function handleWebSocket(event, request) {
                             await closeSubscription(messageData[1], server);
                             break;
                         // Add more cases as needed
-                        default:
-                            console.log(`[WebSocket] Unhandled message type: ${messageType}`);
                     }
                 } catch (e) {
                     sendError(server, "Failed to process the message");
@@ -405,11 +341,12 @@ async function handleWebSocket(event, request) {
         );
     });
     server.addEventListener("close", (event) => {
+        const wsId = server.id || Math.random().toString(36).substr(2, 9);
         relayCache.clearSubscriptions(wsId); // Clear all subscriptions for this connection
-        console.log(`[WebSocket] WebSocket closed with ID: ${wsId}, code: ${event.code}, reason: ${event.reason}`);
+        console.log("WebSocket closed", event.code, event.reason);
     });
     server.addEventListener("error", (error) => {
-        console.error(`[WebSocket] WebSocket error on ID: ${wsId}`, error);
+        console.error("WebSocket error:", error);
     });
     return new Response(null, {
         status: 101,
@@ -574,11 +511,9 @@ async function processReq(message, server) {
 
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
 
-    console.log(`[REQ] Processing REQ for subscriptionId: ${subscriptionId} with filters:`, filters);
-
     // Check the REQ rate limiter
     if (!reqRateLimiter.removeToken()) {
-        console.error(`[REQ] REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
+        console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
         sendError(server, "REQ message rate limit exceeded. Please slow down.");
         sendEOSE(server, subscriptionId);
         return;
@@ -588,7 +523,7 @@ async function processReq(message, server) {
     const unsupportedFilters = ['since', 'until'];
     for (const filter of unsupportedFilters) {
         if (filters[filter]) {
-            console.error(`[REQ] Unsupported filter '${filter}' used in subscriptionId: ${subscriptionId}`);
+            console.error(`Unsupported filter '${filter}' used in subscriptionId: ${subscriptionId}`);
             sendError(server, `Unsupported filter: '${filter}'`);
             sendEOSE(server, subscriptionId);
             return;
@@ -601,7 +536,7 @@ async function processReq(message, server) {
             validateIds(filters.ids);
         }
     } catch (error) {
-        console.error(`[REQ] Invalid event ID format in subscriptionId: ${subscriptionId} - ${error.message}`);
+        console.error(`Invalid event ID format in subscriptionId: ${subscriptionId} - ${error.message}`);
         sendError(server, `Invalid event ID format: ${error.message}`);
         sendEOSE(server, subscriptionId);
         return;
@@ -613,7 +548,7 @@ async function processReq(message, server) {
             validateAuthors(filters.authors);
         }
     } catch (error) {
-        console.error(`[REQ] Invalid author public key format in subscriptionId: ${subscriptionId} - ${error.message}`);
+        console.error(`Invalid author public key format in subscriptionId: ${subscriptionId} - ${error.message}`);
         sendError(server, `Invalid author public key format: ${error.message}`);
         sendEOSE(server, subscriptionId);
         return;
@@ -623,7 +558,7 @@ async function processReq(message, server) {
     if (filters.kinds) {
         const invalidKinds = filters.kinds.filter(kind => !isEventKindAllowed(kind));
         if (invalidKinds.length > 0) {
-            console.error(`[REQ] Blocked kinds in subscriptionId: ${subscriptionId} - ${invalidKinds.join(', ')}`);
+            console.error(`Blocked kinds in subscriptionId: ${subscriptionId} - ${invalidKinds.join(', ')}`);
             sendError(server, `Blocked kinds in request: ${invalidKinds.join(', ')}`);
             sendEOSE(server, subscriptionId);
             return;
@@ -632,7 +567,7 @@ async function processReq(message, server) {
 
     // Allow up to 50 event IDs
     if (filters.ids && filters.ids.length > 50) {
-        console.error(`[REQ] Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 50`);
+        console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 50`);
         sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
         sendEOSE(server, subscriptionId);
         return;
@@ -640,7 +575,7 @@ async function processReq(message, server) {
 
     // Allow up to a limit of 50 events
     if (filters.limit && filters.limit > 50) {
-        console.error(`[REQ] REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 50`);
+        console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 50`);
         sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
         sendEOSE(server, subscriptionId);
         return;
@@ -658,7 +593,7 @@ async function processReq(message, server) {
 
     // Serve cached events if available
     if (cachedEvents && cachedEvents.length > 0) {
-        console.log(`[REQ] Serving cached events for subscriptionId: ${subscriptionId}`);
+        console.log(`Serving cached events for subscriptionId: ${subscriptionId}`);
         for (const event of cachedEvents.slice(0, filters.limit)) {
             server.send(JSON.stringify(["EVENT", subscriptionId, event]));
         }
@@ -694,7 +629,7 @@ async function processReq(message, server) {
         sendEOSE(server, subscriptionId);
 
     } catch (error) {
-        console.error(`[REQ] Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
+        console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
         sendError(server, `Error fetching events: ${error.message}`);
         sendEOSE(server, subscriptionId);
     }
@@ -704,7 +639,6 @@ async function processReq(message, server) {
 async function closeSubscription(subscriptionId, server) {
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
     relayCache.deleteSubscription(wsId, subscriptionId);
-    console.log(`[CLOSE] Subscription ${subscriptionId} closed for WebSocket ID: ${wsId}`);
 
     // Notify the client that the subscription is closed
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -721,7 +655,7 @@ async function validateNIP05FromKind0(pubkey) {
             metadataEvent = await fetchKind0EventForPubkey(pubkey);
 
             if (!metadataEvent) {
-                console.error(`[NIP-05] No kind 0 metadata event found for pubkey: ${pubkey}`);
+                console.error(`No kind 0 metadata event found for pubkey: ${pubkey}`);
                 return false;
             }
 
@@ -734,7 +668,7 @@ async function validateNIP05FromKind0(pubkey) {
         const nip05Address = metadata.nip05;
 
         if (!nip05Address) {
-            console.error(`[NIP-05] No NIP-05 address found in kind 0 for pubkey: ${pubkey}`);
+            console.error(`No NIP-05 address found in kind 0 for pubkey: ${pubkey}`);
             return false;
         }
 
@@ -743,7 +677,7 @@ async function validateNIP05FromKind0(pubkey) {
         return isValid;
 
     } catch (error) {
-        console.error(`[NIP-05] Error validating NIP-05 for pubkey ${pubkey}: ${error.message}`);
+        console.error(`Error validating NIP-05 for pubkey ${pubkey}: ${error.message}`);
         return false;
     }
 }
@@ -764,13 +698,13 @@ async function fetchKind0EventForPubkey(pubkey) {
         }
 
         // If no event found from helpers, use fallback relay
-        console.log(`[NIP-05] No kind 0 event found from helpers, trying fallback relay: wss://relay.nostr.band`);
+        console.log(`No kind 0 event found from helpers, trying fallback relay: wss://relay.nostr.band`);
         const fallbackEvent = await fetchEventFromFallbackRelay(pubkey);
         if (fallbackEvent) {
             return fallbackEvent;
         }
     } catch (error) {
-        console.error(`[NIP-05] Error fetching kind 0 event for pubkey ${pubkey}: ${error.message}`);
+        console.error(`Error fetching kind 0 event for pubkey ${pubkey}: ${error.message}`);
     }
 
     return null;
@@ -788,13 +722,13 @@ async function validateNIP05(nip05Address, pubkey) {
 
         // Check if the domain is in the blocked list
         if (blockedNip05Domains.has(domain)) {
-            console.error(`[NIP-05] NIP-05 domain is blocked: ${domain}`);
+            console.error(`NIP-05 domain is blocked: ${domain}`);
             return false;
         }
 
         // If allowed domains are defined, check if the domain is in the allowed list
         if (allowedNip05Domains.size > 0 && !allowedNip05Domains.has(domain)) {
-            console.error(`[NIP-05] NIP-05 domain is not allowed: ${domain}`);
+            console.error(`NIP-05 domain is not allowed: ${domain}`);
             return false;
         }
 
@@ -803,14 +737,14 @@ async function validateNIP05(nip05Address, pubkey) {
         const response = await fetch(url);
 
         if (!response.ok) {
-            console.error(`[NIP-05] Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
+            console.error(`Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
             return false;
         }
 
         const nip05Data = await response.json();
 
         if (!nip05Data.names || !nip05Data.names[name]) {
-            console.error(`[NIP-05] NIP-05 data does not contain a matching public key for ${name}`);
+            console.error(`NIP-05 data does not contain a matching public key for ${name}`);
             return false;
         }
 
@@ -819,7 +753,7 @@ async function validateNIP05(nip05Address, pubkey) {
         return nip05Pubkey === pubkey;
 
     } catch (error) {
-        console.error(`[NIP-05] Error validating NIP-05 address: ${error.message}`);
+        console.error(`Error validating NIP-05 address: ${error.message}`);
         return false;
     }
 }
@@ -836,12 +770,12 @@ async function fetchEventFromFallbackRelay(pubkey) {
                 ws.send(JSON.stringify(["CLOSE", subscriptionId]));
                 ws.close();
                 hasClosed = true;
-                console.log('[Fallback Relay] WebSocket connection to fallback relay closed');
+                console.log('WebSocket connection to fallback relay closed');
             }
         };
 
         ws.onopen = () => {
-            console.log("[Fallback Relay] WebSocket connection to fallback relay opened.");
+            console.log("WebSocket connection to fallback relay opened.");
             const subscriptionId = Math.random().toString(36).substr(2, 9);
             const filters = {
                 kinds: [0],
@@ -860,7 +794,7 @@ async function fetchEventFromFallbackRelay(pubkey) {
                 if (message[0] === "EVENT" && message[1]) {
                     const eventData = message[2];
                     if (eventData.kind === 0 && eventData.pubkey === pubkey) {
-                        console.log("[Fallback Relay] Received kind 0 event from fallback relay.");
+                        console.log("Received kind 0 event from fallback relay.");
                         closeWebSocket(message[1]);
                         resolve(eventData);
                     }
@@ -868,18 +802,18 @@ async function fetchEventFromFallbackRelay(pubkey) {
 
                 // Handle EOSE message
                 else if (message[0] === "EOSE") {
-                    console.log("[Fallback Relay] EOSE received from fallback relay, no kind 0 event found.");
+                    console.log("EOSE received from fallback relay, no kind 0 event found.");
                     closeWebSocket(message[1]); // Close WebSocket after receiving EOSE
                     resolve(null); // Resolve with null if no event is found
                 }
             } catch (error) {
-                console.error(`[Fallback Relay] Error processing fallback relay event for pubkey ${pubkey}: ${error.message}`);
+                console.error(`Error processing fallback relay event for pubkey ${pubkey}: ${error.message}`);
                 reject(error);
             }
         };
 
         ws.onerror = (error) => {
-            console.error(`[Fallback Relay] WebSocket error with fallback relay: ${error.message}`);
+            console.error(`WebSocket error with fallback relay: ${error.message}`);
             ws.close();
             hasClosed = true;
             reject(error);
@@ -887,13 +821,13 @@ async function fetchEventFromFallbackRelay(pubkey) {
 
         ws.onclose = () => {
             hasClosed = true;
-            console.log('[Fallback Relay] WebSocket connection closed.');
+            console.log('Fallback relay WebSocket connection closed.');
         };
 
         // Timeout if no response is received within 10 seconds
         setTimeout(() => {
             if (!hasClosed) {
-                console.log('[Fallback Relay] Timeout reached. Closing WebSocket connection to fallback relay.');
+                console.log('Timeout reached. Closing WebSocket connection to fallback relay.');
                 closeWebSocket(null);
                 reject(new Error(`No response from fallback relay for pubkey ${pubkey}`));
             }
@@ -910,7 +844,7 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
     };
 
     try {
-        console.log(`[Helper] Requesting events from helper worker`, logContext);
+        console.log(`Requesting events from helper worker`, logContext);
 
         const response = await withConnectionLimit(() => fetch(helper, {
             method: "POST",
@@ -935,18 +869,18 @@ async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
                 try {
                     events = JSON.parse(jsonString);
                 } catch (error) {
-                    console.error("[Helper] Error parsing ArrayBuffer to JSON:", error);
-                    throw new Error("[Helper] Failed to parse response as JSON.");
+                    console.error("Error parsing ArrayBuffer to JSON:", error);
+                    throw new Error("Failed to parse response as JSON.");
                 }
             }
-            console.log(`[Helper] Successfully retrieved events from helper worker`, { ...logContext, eventCount: events.length });
+            console.log(`Successfully retrieved events from helper worker`, { ...logContext, eventCount: events.length });
             return events;
         } else {
-            console.error(`[Helper] Error fetching events from helper worker`, { ...logContext, status: response.status, statusText: response.statusText });
-            throw new Error(`[Helper] Failed to fetch events: ${response.status} - ${response.statusText}`);
+            console.error(`Error fetching events from helper worker`, { ...logContext, status: response.status, statusText: response.statusText });
+            throw new Error(`Failed to fetch events: ${response.status} - ${response.statusText}`);
         }
     } catch (error) {
-        console.error(`[Helper] Error in fetchEventsFromHelper`, { ...logContext, error: error.message });
+        console.error(`Error in fetchEventsFromHelper`, { ...logContext, error: error.message });
         throw error;
     }
 }
@@ -961,7 +895,7 @@ async function sendEventToHelper(event, server, eventId) {
     };
 
     try {
-        console.log(`[Helper] Sending event to helper worker`, logContext);
+        console.log(`Sending event to helper worker`, logContext);
 
         const response = await withConnectionLimit(() => fetch(randomHelper, {
             method: "POST",
@@ -973,16 +907,16 @@ async function sendEventToHelper(event, server, eventId) {
         }));
 
         if (response.ok) {
-            console.log(`[Helper] Successfully sent event to helper worker`, logContext);
+            console.log(`Successfully sent event to helper worker`, logContext);
         } else {
-            console.error(`[Helper] Error sending event to helper worker`, {
+            console.error(`Error sending event to helper worker`, {
                 ...logContext,
                 status: response.status,
                 statusText: response.statusText,
             });
         }
     } catch (error) {
-        console.error(`[Helper] Error in sendEventToHelper`, {
+        console.error(`Error in sendEventToHelper`, {
             ...logContext,
             error: error.message,
         });
@@ -1073,7 +1007,7 @@ function splitArray(arr, numChunks) {
 
 // Helper to shuffle 6 reqHelper selection
 function shuffleArray(array) {
-    for (let i = array.length - 1; i > 0; i++) {
+    for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [array[i], array[j]] = [array[j], array[i]];
     }
@@ -1110,14 +1044,12 @@ async function verifyEventSignature(event) {
         const messageHash = new Uint8Array(messageHashBuffer);
         const publicKeyBytes = hexToBytes(event.pubkey);
         const signatureIsValid = schnorr.verify(signatureBytes, messageHash, publicKeyBytes);
-        console.log(`[Signature] Verification for event ${event.id} is ${signatureIsValid ? 'successful' : 'unsuccessful'}`);
         return signatureIsValid;
     } catch (error) {
-        console.error(`[Signature] Error verifying event signature for event ${event.id}:`, error);
+        console.error("Error verifying event signature:", error);
         return false;
     }
 }
-
 function serializeEventForSigning(event) {
     const serializedEvent = JSON.stringify([
         0,
@@ -1129,7 +1061,6 @@ function serializeEventForSigning(event) {
     ]);
     return serializedEvent;
 }
-
 function hexToBytes(hexString) {
     if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
     const bytes = new Uint8Array(hexString.length / 2);
@@ -1141,16 +1072,11 @@ function hexToBytes(hexString) {
 
 // Sends event response to client
 function sendOK(server, eventId, status, message) {
-    console.log(`[Server] Sending OK response for event ${eventId}: ${status ? 'Success' : 'Failure'} - ${message}`);
     server.send(JSON.stringify(["OK", eventId, status, message]));
 }
-
 function sendError(server, message) {
-    console.error(`[Server] Sending error notice: ${message}`);
     server.send(JSON.stringify(["NOTICE", message]));
 }
-
 function sendEOSE(server, subscriptionId) {
-    console.log(`[Server] Sending EOSE for subscription ${subscriptionId}`);
     server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
