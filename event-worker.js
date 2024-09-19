@@ -112,8 +112,8 @@ async function saveEventToR2(event) {
     try {
       const existingHash = await withConnectionLimit(() => relayDb.get(contentHashKey));
       if (existingHash) {
-        console.log(`Duplicate content detected. Event dropped.`);
-        return { success: false, error: "Duplicate content detected" };
+        console.log(`Duplicate content detected for event: ${JSON.stringify(event)}. Event dropped.`);
+        return { success: false, error: `Duplicate content detected for event with content: ${event.content}` };
       }
     } catch (error) {
       if (error.name !== "R2Error" || error.message !== "R2 object not found") {
@@ -142,7 +142,7 @@ async function saveEventToR2(event) {
   try {
     const kindCountKey = `counts/kind_count_${event.kind}`;
     const pubkeyCountKey = `counts/pubkey_count_${event.pubkey}`;
-  
+
     kindCount = await getCount(kindCountKey);
     pubkeyCount = await getCount(pubkeyCountKey);
   } catch (error) {
@@ -212,7 +212,7 @@ async function saveEventToR2(event) {
     if (!isDuplicateBypassed(event.kind)) {
       await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify(event)));
     }
-    
+
     console.log(`Event ${event.id} saved successfully.`);
     return { success: true };
   } catch (error) {
@@ -243,10 +243,10 @@ async function processDeletionEvent(deletionEvent) {
     try {
       // Get the metadata associated with the event
       const metadataResponse = await withConnectionLimit(() => relayDb.get(metadataKey));
-      
+
       if (metadataResponse) {
         const metadata = await metadataResponse.json();
-        
+
         // Collect all keys to delete
         const keysToDelete = [
           `events/event:${eventId}`,  // Event content

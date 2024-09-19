@@ -199,8 +199,8 @@ async function saveEventToR2(event) {
     try {
       const existingHash = await withConnectionLimit(() => relayDb.get(contentHashKey));
       if (existingHash) {
-        console.log(`Duplicate content detected. Event dropped.`);
-        return { success: false, error: "Duplicate content detected" };
+        console.log(`Duplicate content detected for event: ${JSON.stringify(event)}. Event dropped.`);
+        return { success: false, error: `Duplicate content detected for event with content: ${event.content}` };
       }
     } catch (error) {
       if (error.name !== "R2Error" || error.message !== "R2 object not found") {
