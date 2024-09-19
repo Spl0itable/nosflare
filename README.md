@@ -95,7 +95,7 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 
 ## Limitations
 
-Due to the serverless architectire and object storage through R2 bucket, there is a slight limitation to handling REQ messages that include the `since` and/or `until` filters. This relay implementation does not store any timestamp related keys. Therefore, making it impossible to fetch events based on these filters. However, all other filters such as ids, kinds, authors, and tags still work correctly. To reduce unnecessary load from REQ messages that include the `since` and/or `until` filters, they have been blocked within the `processReq` function in the `relay-worker.js` file.
+Due to the serverless architecture and object storage through R2 bucket, there is a slight limitation to handling REQ messages that include the `since` and/or `until` filters. This relay implementation does not store any timestamp related keys. Therefore, making it impossible to fetch events based on these filters. However, all other filters such as ids, kinds, authors, and tags still work correctly. To reduce unnecessary load from REQ messages that include the `since` and/or `until` filters, they have been blocked within the `processReq` function in the `relay-worker.js` file.
 
 ## Roadmap
 
