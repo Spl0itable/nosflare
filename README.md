@@ -115,6 +115,10 @@ Examples:
 
 ![Rate Limiting](images/rate-limit.jpeg)
 
+## Send It "Blaster"
+
+Attached in this repo is the `send-it.js` file which includes the code for the `wss://sendit.nosflare.com` relay that "blasts" your note to as many online relays as possible, using the nostr.watch API.
+
 ## Contributing
 
 Contributions to Nosflare are welcome! Please submit issues, feature requests, or pull requests through the project's GitHub repo.
