@@ -102,8 +102,6 @@ Due to the serverless architecture and object storage through R2 bucket, there i
 The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
 - "Pay-to-relay" (charging sats for access)
-- Client authorization (NIP-42)
-- Encrypted DMs (NIP-44)
 
 ## Recommended Cloudflare Settings
 
