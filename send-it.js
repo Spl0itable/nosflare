@@ -2539,7 +2539,7 @@ async function blastEventToRelays(event, server, relays) {
     ? `Event blast timed out. Sent to ${successCount}/${relays.length} relays`
     : `Event blasted to ${successCount}/${relays.length} relays in ${duration}ms`;
     
-  console.log(`Blast ${timedOut ? 'timed out' : 'complete'}: ${successCount} success, ${failureCount} failures, ${duration}ms total time`);
+  console.log(`Blast ${timedOut ? 'results' : 'complete'}: ${successCount} success, ${failureCount} failures`);
   sendOK(server, event.id, true, message);
 }
 
