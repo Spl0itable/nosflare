@@ -2020,7 +2020,7 @@ var relayInfo = {
   name: "Send It by Nosflare",
   description: "A serverless Nostr relay to blast events powered by Nosflare",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-  contact: "lux@censorship.rip",
+  contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 45],
   software: "https://github.com/Spl0itable/nosflare",
   version: "4.20.69"
@@ -2052,7 +2052,6 @@ var blockedContent = /* @__PURE__ */ new Set([
   "~~ hello world! ~~",
   "ReplyGuy",
   "ReplyGuy on wss://"
-  // ... more blocked content
 ]);
 function containsBlockedContent(event) {
   const lowercaseContent = (event.content || "").toLowerCase();
@@ -2065,18 +2064,221 @@ function containsBlockedContent(event) {
   }
   return false;
 }
+
 async function fetchRelays() {
   try {
-    const response = await fetch("https://api.nostr.watch/v1/online");
-    if (!response.ok) {
-      throw new Error(`Failed to fetch relays: ${response.statusText}`);
+    const monitorPubkeys = await discoverMonitors();
+    const bootstrapRelays = [
+      "wss://relay.nostr.watch",
+      "wss://relaypag.es",
+      "wss://monitorlizard.nostr1.com",
+      "wss://relay.damus.io",
+      "wss://relay.nostr.band", 
+      "wss://relay.primal.net",
+    ];
+    
+    const onlineRelays = new Set();
+    const sixHoursAgo = Math.floor(Date.now() / 1000) - 21600;
+    const filters = [{
+      kinds: [30166],
+      since: sixHoursAgo,
+      limit: 5000
+    }];
+    
+    if (monitorPubkeys.length > 0) {
+      filters[0].authors = monitorPubkeys;
     }
-    return await response.json();
+    
+    const queryPromises = bootstrapRelays.map(async (relayUrl) => {
+      try {
+        const relayEvents = await queryRelay(relayUrl, filters);
+        relayEvents.forEach(event => {
+          const dTag = event.tags.find(tag => tag[0] === 'd');
+          if (dTag && dTag[1]) {
+            const relayUrl = dTag[1];
+            if (relayUrl.startsWith('wss://') || relayUrl.startsWith('ws://')) {
+              onlineRelays.add(relayUrl);
+            }
+          }
+        });
+      } catch (error) {
+        console.error(`Error querying relay ${relayUrl}:`, error);
+      }
+    });
+    
+    await Promise.all(queryPromises);
+    bootstrapRelays.forEach(relay => onlineRelays.add(relay));
+    
+    let relayList = Array.from(onlineRelays);
+    if (relayList.length < 50) {
+      const fallbackRelays = getFallbackRelays();
+      fallbackRelays.forEach(relay => onlineRelays.add(relay));
+      relayList = Array.from(onlineRelays);
+    }
+    
+    console.log(`Found ${relayList.length} total relays for blasting`);
+    return relayList;
+    
   } catch (error) {
-    console.error("Error fetching relays:", error);
-    return [];
+    console.error("Error fetching relays via NIP-66:", error);
+    return getFallbackRelays();
   }
 }
+
+async function discoverMonitors() {
+  const knownMonitors = [];
+  const discoveredMonitors = new Set(knownMonitors);
+  
+  try {
+    const bootstrapRelays = [
+      "wss://relay.nostr.watch",
+      "wss://relaypag.es",
+      "wss://monitorlizard.nostr1.com",
+      "wss://relay.damus.io",
+      "wss://relay.nostr.band",
+      "wss://relay.primal.net"
+    ];
+    
+    const monitorFilters = [{
+      kinds: [10166],
+      limit: 100
+    }];
+    
+    const queryPromises = bootstrapRelays.map(async (relayUrl) => {
+      try {
+        const events = await queryRelay(relayUrl, monitorFilters);
+        events.forEach(event => {
+          discoveredMonitors.add(event.pubkey);
+        });
+      } catch (error) {
+        console.error(`Error discovering monitors from ${relayUrl}:`, error);
+      }
+    });
+    
+    await Promise.all(queryPromises);
+  } catch (error) {
+    console.error("Error discovering monitors:", error);
+  }
+  
+  return Array.from(discoveredMonitors);
+}
+
+async function queryRelay(relayUrl, filters) {
+  return new Promise((resolve) => {
+    const events = [];
+    let socket;
+    let timeout;
+    
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      resolve(events);
+    };
+    
+    timeout = setTimeout(cleanup, 5000);
+    
+    try {
+      socket = new WebSocket(relayUrl);
+      const subId = Math.random().toString(36).substring(7);
+      
+      socket.addEventListener('open', () => {
+        const reqMessage = JSON.stringify(['REQ', subId, ...filters]);
+        socket.send(reqMessage);
+      });
+      
+      socket.addEventListener('message', (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          const messageType = message[0];
+          
+          if (messageType === 'EVENT' && message[1] === subId) {
+            events.push(message[2]);
+          } else if (messageType === 'EOSE' && message[1] === subId) {
+            cleanup();
+          }
+        } catch (e) {
+          console.error('Error parsing message:', e);
+        }
+      });
+      
+      socket.addEventListener('error', cleanup);
+      socket.addEventListener('close', cleanup);
+      
+    } catch (error) {
+      cleanup();
+    }
+  });
+}
+
+function getFallbackRelays() {
+  return [
+    "wss://relay.damus.io",
+    "wss://relay.nostr.band",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://relay.coinos.io",
+    "wss://relay.snort.social",
+    "wss://nostr.wine",
+    "wss://relay.nostr.bg",
+    "wss://purplepag.es",
+    "wss://nostr.fmt.wiz.biz",
+    "wss://relay.current.fyi",
+    "wss://nostr-pub.wellorder.net",
+    "wss://relay.nostr.wirednet.jp",
+    "wss://relay.orangepill.dev",
+    "wss://relay.nostrati.com",
+    "wss://relay.wellorder.net",
+    "wss://nostr.rocks",
+    "wss://nostr.bitcoiner.social",
+    "wss://nostr-relay.wlvs.space",
+    "wss://nostr.mom",
+    "wss://relay.nostromo.social",
+    "wss://rsslay.fiatjaf.com",
+    "wss://nostr.slothy.win",
+    "wss://relay.stoner.com",
+    "wss://relay.nous.social",
+    "wss://relay.inosta.cc",
+    "wss://relay.noderunners.network",
+    "wss://nostr21.com",
+    "wss://nostr.milou.lol",
+    "wss://relay.mostr.pub",
+    "wss://nostr.oxtr.dev",
+    "wss://nostr-relay.nokotaro.com",
+    "wss://nostr.land",
+    "wss://nostr.yahyah.com",
+    "wss://relay.nostr.nu",
+    "wss://nostr.vulpem.com",
+    "wss://relay.exeter.ac.uk",
+    "wss://relay.parsiq.net",
+    "wss://relay.nostrid.com",
+    "wss://relay.ronaldstoner.com",
+    "wss://relay.hamnet.io",
+    "wss://relay.lacosanostr.com",
+    "wss://nostr.easydns.ca",
+    "wss://nostr.lnprivate.network",
+    "wss://relay.oldcity-bitcoiners.info",
+    "wss://relay.cosmicbolt.net",
+    "wss://relay.nostrmoto.xyz",
+    "wss://nostr.corebreach.com",
+    "wss://private.red.gb.net",
+    "wss://relay.dvms.app",
+    "wss://nostr.sandwich.farm",
+    "wss://relay.nostrich.de",
+    "wss://relay.nostr.ch",
+    "wss://nostr.openchain.fr",
+    "wss://relay.koreus.social",
+    "wss://relay.snort.social",
+    "wss://nostr.kollider.xyz",
+    "wss://relay.nostrgraph.net",
+    "wss://nostr.thank.eu",
+    "wss://nostr.wine",
+    "wss://spore.ws",
+    "wss://relay.shitforce.one"
+  ];
+}
+
 var Semaphore = class {
   constructor(maxConcurrency) {
     this.maxConcurrency = maxConcurrency;
@@ -2097,6 +2299,7 @@ var Semaphore = class {
     }
   }
 };
+
 addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -2116,6 +2319,7 @@ addEventListener("fetch", (event) => {
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
+
 async function handleRelayInfoRequest() {
   const headers = new Headers({
     "Content-Type": "application/nostr+json",
@@ -2125,6 +2329,7 @@ async function handleRelayInfoRequest() {
   });
   return new Response(JSON.stringify(relayInfo), { status: 200, headers });
 }
+
 async function serveFavicon() {
   const response = await fetch(relayIcon);
   if (response.ok) {
@@ -2137,6 +2342,7 @@ async function serveFavicon() {
   }
   return new Response(null, { status: 404 });
 }
+
 var relayCache = {
   _cache: {},
   get(key) {
@@ -2156,6 +2362,7 @@ var relayCache = {
     delete this._cache[key];
   }
 };
+
 var rateLimiter = class {
   constructor(rate, capacity) {
     this.tokens = capacity;
@@ -2179,8 +2386,10 @@ var rateLimiter = class {
     this.lastRefillTime = now;
   }
 };
+
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
 var excludedRateLimitKinds = [];
+
 async function handleWebSocket(event, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -2219,6 +2428,7 @@ async function handleWebSocket(event, request) {
     webSocket: client
   });
 }
+
 async function processEvent(event, server) {
   try {
     if (!excludedRateLimitKinds.includes(event.kind)) {
@@ -2251,6 +2461,7 @@ async function processEvent(event, server) {
     sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
   }
 }
+
 async function processReq(event, server) {
   try {
     sendNotice(server, "Denied! This relay does not accept REQs.");
@@ -2261,6 +2472,7 @@ async function processReq(event, server) {
     sendEOSE(server);
   }
 }
+
 async function closeSubscription(subscriptionId, server) {
   try {
     server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
@@ -2269,6 +2481,7 @@ async function closeSubscription(subscriptionId, server) {
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
   }
 }
+
 async function blastEventToRelays(event, server, relays) {
   if (!isPubkeyAllowed(event.pubkey)) {
     sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
@@ -2282,28 +2495,120 @@ async function blastEventToRelays(event, server, relays) {
     sendOK(server, event.id, false, "Denied. The event contains blocked content.");
     return;
   }
-  const semaphore = new Semaphore(6);
-  for (const relayUrl of relays) {
+
+  let successCount = 0;
+  let failureCount = 0;
+  let timedOut = false;
+  const startTime = Date.now();
+  const semaphore = new Semaphore(5);
+  
+  const blastPromises = relays.map(async (relayUrl) => {
     await semaphore.acquire();
-    (async () => {
-      try {
-        const socket = new WebSocket(relayUrl);
-        socket.addEventListener("open", () => {
+    
+    try {
+      const success = await blastToSingleRelay(event, relayUrl);
+      if (success) {
+        successCount++;
+      } else {
+        failureCount++;
+      }
+    } catch (error) {
+      failureCount++;
+      console.error(`Failed to blast to ${relayUrl}:`, error);
+    } finally {
+      semaphore.release();
+    }
+  });
+
+  const timeoutPromise = new Promise((resolve) => 
+    setTimeout(() => resolve('timeout'), 28000)
+  );
+  
+  const result = await Promise.race([
+    Promise.all(blastPromises),
+    timeoutPromise
+  ]);
+  
+  if (result === 'timeout') {
+    timedOut = true;
+    console.log('Blast timeout reached after 28 seconds');
+  }
+  
+  const duration = Date.now() - startTime;
+  const message = timedOut 
+    ? `Event blast timed out. Sent to ${successCount}/${relays.length} relays`
+    : `Event blasted to ${successCount}/${relays.length} relays in ${duration}ms`;
+    
+  console.log(`Blast ${timedOut ? 'timed out' : 'complete'}: ${successCount} success, ${failureCount} failures, ${duration}ms total time`);
+  sendOK(server, event.id, true, message);
+}
+
+async function blastToSingleRelay(event, relayUrl) {
+  return new Promise((resolve) => {
+    let socket;
+    let isResolved = false;
+    
+    const timeout = setTimeout(() => {
+      if (!isResolved) {
+        isResolved = true;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+        resolve(false);
+      }
+    }, 3000);
+    
+    try {
+      socket = new WebSocket(relayUrl);
+      
+      socket.addEventListener("open", () => {
+        try {
           const eventMessage = JSON.stringify(["EVENT", event]);
           socket.send(eventMessage);
-          socket.close();
-        });
-        socket.addEventListener("error", (error) => {
-          console.error(`Error blasting event to relay ${relayUrl}:`, error);
-        });
-      } catch (error) {
-        console.error(`Error blasting event to relay ${relayUrl}:`, error);
-      } finally {
-        semaphore.release();
+          
+          setTimeout(() => {
+            if (!isResolved) {
+              isResolved = true;
+              clearTimeout(timeout);
+              socket.close();
+              resolve(true);
+            }
+          }, 100);
+        } catch (error) {
+          if (!isResolved) {
+            isResolved = true;
+            clearTimeout(timeout);
+            resolve(false);
+          }
+        }
+      });
+      
+      socket.addEventListener("error", () => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(timeout);
+          resolve(false);
+        }
+      });
+      
+      socket.addEventListener("close", () => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(timeout);
+          resolve(false);
+        }
+      });
+      
+    } catch (error) {
+      if (!isResolved) {
+        isResolved = true;
+        clearTimeout(timeout);
+        resolve(false);
       }
-    })();
-  }
+    }
+  });
 }
+
 async function verifyEventSignature(event) {
   try {
     const signatureBytes = hexToBytes2(event.sig);
@@ -2321,6 +2626,7 @@ async function verifyEventSignature(event) {
     return false;
   }
 }
+
 function serializeEventForSigning(event) {
   const serializedEvent = JSON.stringify([
     0,
@@ -2332,6 +2638,7 @@ function serializeEventForSigning(event) {
   ]);
   return serializedEvent;
 }
+
 function hexToBytes2(hexString) {
   if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
@@ -2340,15 +2647,19 @@ function hexToBytes2(hexString) {
   }
   return bytes2;
 }
+
 function sendOK(server, eventId, status, message) {
   server.send(JSON.stringify(["OK", eventId, status, message]));
 }
+
 function sendError(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
 }
+
 function sendNotice(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
 }
+
 function sendEOSE(server) {
   server.send(JSON.stringify(["EOSE"]));
 }
