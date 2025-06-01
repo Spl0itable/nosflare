@@ -17,7 +17,7 @@ const relayInfo = {
 const relayIcon = "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png";
 
 // Pay to relay configuration
-const relayNpub = "npub16jdfqgazrwapkwyrqm9rdxln9s7ckj9c7zm2xvktqhazpxtrtnnq4w95uw"; // Use your npub
+const relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv"; // Use your npub
 const PAY_TO_RELAY_ENABLED = false; // Set to true to enable pay to relay
 const RELAY_ACCESS_PRICE_SATS = 212121; // Price in SATS for relay access
 const PAID_PUBKEYS_PREFIX = "paid-pubkeys/"; // Do not change

@@ -2167,7 +2167,7 @@ var relayInfo = {
   version: "5.23.35"
 };
 var relayIcon = "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png";
-var relayNpub = "npub16jdfqgazrwapkwyrqm9rdxln9s7ckj9c7zm2xvktqhazpxtrtnnq4w95uw";
+var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
 var PAY_TO_RELAY_ENABLED = false;
 var RELAY_ACCESS_PRICE_SATS = 212121;
 var PAID_PUBKEYS_PREFIX = "paid-pubkeys/";
