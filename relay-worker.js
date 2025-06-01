@@ -7,14 +7,14 @@ const relayInfo = {
     name: "Nosflare",
     description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
     pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-    contact: "lux@censorship.rip",
+    contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "4.22.30",
+    version: "5.22.30",
 };
 
 // Relay favicon
-const relayIcon = "https://cdn-icons-png.flaticon.com/128/426/426833.png";
+const relayIcon = "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png";
 
 // Nostr address NIP-05 verified users
 const nip05Users = {
@@ -126,6 +126,254 @@ function isTagAllowed(tag) {
 }
 
 // Handles upgrading to websocket and serving relay info
+async function serveHomePage() {
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nosflare - Nostr Relay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #0a0a0a;
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        /* Animated background */
+        body::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 20% 50%, rgba(255, 69, 0, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 50%, rgba(255, 140, 0, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 50% 100%, rgba(255, 0, 0, 0.05) 0%, transparent 50%);
+            animation: pulse 10s ease-in-out infinite;
+            z-index: -1;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
+        }
+        
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+            z-index: 1;
+        }
+        
+        .logo-container {
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        .logo {
+            width: 400px;
+            height: auto;
+            filter: drop-shadow(0 0 30px rgba(255, 69, 0, 0.5));
+        }
+        
+        h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #ff4500, #ff8c00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .tagline {
+            font-size: 1.2rem;
+            color: #999;
+            margin-bottom: 3rem;
+        }
+        
+        .info-box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        .url-display {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 69, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 1.1rem;
+            color: #ff8c00;
+            margin: 1rem 0;
+            word-break: break-all;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .url-display:hover {
+            border-color: #ff4500;
+            background: rgba(255, 69, 0, 0.1);
+        }
+        
+        .copy-hint {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+        
+        .stat-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #ff4500;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            color: #999;
+            margin-top: 0.25rem;
+        }
+        
+        .links {
+            margin-top: 3rem;
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .link {
+            color: #ff8c00;
+            text-decoration: none;
+            font-size: 1rem;
+            transition: color 0.3s ease;
+        }
+        
+        .link:hover {
+            color: #ff4500;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            background: #ff4500;
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            transform: translateY(100px);
+            transition: transform 0.3s ease;
+            z-index: 1000;
+        }
+        
+        .toast.show {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo-container">
+            <img src="https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/nosflare.png" alt="Nosflare Logo" class="logo">
+        </div>
+    
+        <p class="tagline">A serverless Nostr relay powered by Cloudflare</p>
+        
+        <div class="info-box">
+            <p style="margin-bottom: 1rem;">Connect your Nostr client to:</p>
+            <div class="url-display" onclick="copyToClipboard()" id="relay-url">
+                <!-- URL will be inserted by JavaScript -->
+            </div>
+            <p class="copy-hint">Click to copy</p>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value">${relayInfo.supported_nips.length}</div>
+                <div class="stat-label">Supported NIPs</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">${relayInfo.version}</div>
+                <div class="stat-label">Version</div>
+            </div>
+        </div>
+        
+        <div class="links">
+            <a href="https://github.com/Spl0itable/nosflare" class="link" target="_blank">GitHub</a>
+            <a href="https://nostr.info" class="link" target="_blank">Learn about Nostr</a>
+        </div>
+    </div>
+    
+    <div class="toast" id="toast">Copied to clipboard!</div>
+    
+    <script>
+        // Set the relay URL dynamically
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const relayUrl = protocol + '//' + window.location.host;
+        document.getElementById('relay-url').textContent = relayUrl;
+        
+        function copyToClipboard() {
+            const relayUrl = document.getElementById('relay-url').textContent;
+            navigator.clipboard.writeText(relayUrl).then(() => {
+                const toast = document.getElementById('toast');
+                toast.classList.add('show');
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+            });
+        }
+    </script>
+</body>
+</html>
+    `;
+    
+    return new Response(html, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/html;charset=UTF-8',
+            'Cache-Control': 'public, max-age=3600'
+        }
+    });
+}
 addEventListener("fetch", (event) => {
     const { request } = event;
     const url = new URL(request.url);
@@ -135,9 +383,7 @@ addEventListener("fetch", (event) => {
         } else if (request.headers.get("Accept") === "application/nostr+json") {
             event.respondWith(handleRelayInfoRequest());
         } else {
-            event.respondWith(
-                new Response("Connect using a Nostr client", { status: 200 })
-            );
+            event.respondWith(serveHomePage());
         }
     } else if (url.pathname === "/.well-known/nostr.json") {
         event.respondWith(handleNIP05Request(url));
@@ -507,17 +753,6 @@ async function processReq(message, server) {
         sendError(server, "REQ message rate limit exceeded. Please slow down.");
         sendEOSE(server, subscriptionId);
         return;
-    }
-
-    // Block unsupported filters
-    const unsupportedFilters = ['since', 'until'];
-    for (const filter of unsupportedFilters) {
-        if (filters[filter]) {
-            console.error(`Unsupported filter '${filter}' used in subscriptionId: ${subscriptionId}`);
-            sendError(server, `Unsupported filter: '${filter}'`);
-            sendEOSE(server, subscriptionId);
-            return;
-        }
     }
 
     // Validate event IDs if present in filters

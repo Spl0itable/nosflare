@@ -93,15 +93,16 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 17. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
 
-## Limitations
+## Bucket Pruning
 
-Due to the serverless architecture and object storage through R2 bucket, there is a slight limitation to handling REQ messages that include the `since` and/or `until` filters. This relay implementation does not store any timestamp related keys. Therefore, making it impossible to fetch events based on these filters. However, all other filters such as ids, kinds, authors, and tags still work correctly. To reduce unnecessary load from REQ messages that include the `since` and/or `until` filters, they have been blocked within the `processReq` function in the `relay-worker.js` file.
+Cloudflare's R2 bucket support data pruning through "Object Lifecycle Rules". This can be tuned to delete selected data after a certain time. This makes it possible to automatically "nuke" events after 24hrs or 30 days or a year or whatever length of time you'd like. Read more [here](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
 
 ## Roadmap
 
 The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
 
-- "Pay-to-relay" (charging sats for access)
+- [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) for full searchable text
+- [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) for replaceable events
 
 ## Recommended Cloudflare Settings
 

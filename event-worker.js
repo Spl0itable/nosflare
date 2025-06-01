@@ -1,6 +1,5 @@
 // EVENT helper worker
 
-// Handles POST request from relay worker
 addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method === 'POST') {
@@ -10,9 +9,9 @@ addEventListener("fetch", (event) => {
   }
 });
 
+// Handles POST requests from relay workers
 async function handlePostRequest(request) {
   try {
-    // Checks if Authorization header is present and matches authToken
     const authHeader = request.headers.get('Authorization');
     console.log(`Authorization header received: ${authHeader !== null}`);
 
@@ -44,7 +43,6 @@ let activeConnections = 0;
 
 // Controls number of active connections
 async function withConnectionLimit(promiseFunction) {
-  // Wait if too many connections are active
   while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -79,7 +77,7 @@ function isDuplicateBypassed(kind) {
   return bypassDuplicateKinds.has(kind);
 }
 
-// Handles EVENT message
+// Handles EVENT messages
 async function processEvent(event) {
   try {
     // Check if deletion event (kind 5)
@@ -105,7 +103,7 @@ async function processEvent(event) {
   }
 }
 
-// Handles saving event to R2 bucket
+// Handles saving event to R2 bucket with compound keys
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
   const metadataKey = `metadata/event:${event.id}`;
@@ -168,12 +166,45 @@ async function saveEventToR2(event) {
   const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
   const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
 
+  // Create compound keys for time-based queries
+  const timestamp = event.created_at;
+  const paddedTimestamp = timestamp.toString().padStart(10, '0');
+  
+  const compoundKeys = [];
+  
+  const timestampKey = `compound/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: timestampKey, type: 'time' });
+  
+  const kindTimeKey = `compound/kind-${event.kind}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: kindTimeKey, type: 'kind-time' });
+  
+  const authorTimeKey = `compound/author-${event.pubkey}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: authorTimeKey, type: 'author-time' });
+  
+  const authorKindTimeKey = `compound/author-${event.pubkey}-kind-${event.kind}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: authorKindTimeKey, type: 'author-kind-time' });
+  
+  for (const tag of event.tags) {
+    const [tagName, tagValue] = tag;
+    if (tagName && tagValue) {
+      const tagTimeKey = `compound/tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: tagTimeKey, type: 'tag-time', tagInfo: { name: tagName, value: tagValue } });
+      
+      const authorTagTimeKey = `compound/author-${event.pubkey}-tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: authorTagTimeKey, type: 'author-tag-time' });
+      
+      const kindTagTimeKey = `compound/kind-${event.kind}-tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: kindTagTimeKey, type: 'kind-tag-time' });
+    }
+  }
+
   // Create metadata object to track related keys
   const metadata = {
     kindKey,
     pubkeyKey,
     tags: [],
     contentHashKey,
+    compoundKeys: compoundKeys.map(ck => ck.key)
   };
 
   const eventWithCountRef = { ...event, kindKey, pubkeyKey };
@@ -207,7 +238,11 @@ async function saveEventToR2(event) {
   }
 
   try {
-    // Save event and related data sequentially with connection limiting
+    const compoundKeyPromises = compoundKeys.map(ck => 
+      withConnectionLimit(() => relayDb.put(ck.key, JSON.stringify(event)))
+    );
+
+    // Save event and related data sequentially
     console.log(`Saving event and related data for event ID: ${event.id}`);
     await Promise.all([
       withConnectionLimit(() => relayDb.put(kindKey, JSON.stringify(event))),
@@ -216,6 +251,7 @@ async function saveEventToR2(event) {
       withConnectionLimit(() => relayDb.put(`counts/kind_count_${event.kind}`, (kindCount + 1).toString())),
       withConnectionLimit(() => relayDb.put(`counts/pubkey_count_${event.pubkey}`, (pubkeyCount + 1).toString())),
       withConnectionLimit(() => relayDb.put(metadataKey, JSON.stringify(metadata))),
+      ...compoundKeyPromises
     ]);
 
     // Batch save tag data
@@ -229,7 +265,7 @@ async function saveEventToR2(event) {
       await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify(event)));
     }
 
-    console.log(`Event ${event.id} saved successfully.`);
+    console.log(`Event ${event.id} saved successfully with compound keys.`);
     return { success: true };
   } catch (error) {
     console.error(`Error saving event data in R2 for event ID: ${event.id}: ${error.message}`);
@@ -251,7 +287,7 @@ async function getCount(key) {
   }
 }
 
-// Handles event deletion
+// Handles event deletion including compound keys
 async function processDeletionEvent(deletionEvent) {
   console.log(`Processing deletion event with ID: ${deletionEvent.id}`);
   const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
@@ -266,27 +302,24 @@ async function processDeletionEvent(deletionEvent) {
       if (metadataResponse) {
         const metadata = await metadataResponse.json();
 
-        // Collect all keys to delete
+        // Collect all keys to delete including compound keys
         const keysToDelete = [
-          `events/event:${eventId}`,  // Event content
-          metadata.kindKey,           // Kind reference
-          metadata.pubkeyKey,         // Pubkey reference
-          metadata.contentHashKey,    // Content hash reference
-          ...metadata.tags            // Associated tags
+          `events/event:${eventId}`,
+          metadata.kindKey,
+          metadata.pubkeyKey,
+          metadata.contentHashKey,
+          ...metadata.tags,
+          ...(metadata.compoundKeys || [])
         ];
 
-        // Delete all related keys simultaneously
         await Promise.all(keysToDelete.map(key => withConnectionLimit(() => relayDb.delete(key))));
 
-        // Also delete the metadata key itself
         await withConnectionLimit(() => relayDb.delete(metadataKey));
 
-        // Purge from cache
         await purgeCloudflareCache(keysToDelete);
 
         console.log(`Event ${eventId} and its metadata deleted successfully.`);
       } else {
-        // Log message if event is not found
         console.warn(`Event with ID: ${eventId} not found. Nothing to delete.`);
       }
     } catch (error) {
@@ -301,7 +334,6 @@ async function purgeCloudflareCache(keys) {
   headers.append('Authorization', `Bearer ${apiToken}`);
   headers.append('Content-Type', 'application/json');
 
-  // Construct URLs without encoding `/` and `:`
   const urls = keys.map(key => `https://${r2BucketDomain}/${key}`);
 
   const requestOptions = {
