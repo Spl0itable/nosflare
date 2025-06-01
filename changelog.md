@@ -1,8 +1,8 @@
-## v5.22.30 - 2025-06-01
+## v5.23.35 - 2025-06-01
 
-- New: added compond key construction when saving events that allows use of "since" and "until" filters in REQs
+- New: added compound key construction when saving events that allows use of "since" and "until" filters in REQs
 - New: added "pay to relay" functionality to charge SATS for relay usage
-- New: added basic HTML page for HTTP requests to relay URL
+- New: added customizable HTML landing page for HTTP requests to relay URL
 
 ## v4.22.30 - 2024-09-19
 

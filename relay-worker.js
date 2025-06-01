@@ -10,11 +10,17 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "5.22.30",
+    version: "5.23.35",
 };
 
 // Relay favicon
 const relayIcon = "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png";
+
+// Pay to relay configuration
+const relayNpub = "npub16jdfqgazrwapkwyrqm9rdxln9s7ckj9c7zm2xvktqhazpxtrtnnq4w95uw"; // Use your npub
+const PAY_TO_RELAY_ENABLED = false; // Set to true to enable pay to relay
+const RELAY_ACCESS_PRICE_SATS = 212121; // Price in SATS for relay access
+const PAID_PUBKEYS_PREFIX = "paid-pubkeys/"; // Do not change
 
 // Nostr address NIP-05 verified users
 const nip05Users = {
@@ -127,6 +133,31 @@ function isTagAllowed(tag) {
 
 // Handles upgrading to websocket and serving relay info
 async function serveHomePage() {
+    const payToRelaySection = PAY_TO_RELAY_ENABLED ? `
+        <div class="pay-section" id="paySection">
+            <p style="margin-bottom: 1rem;">Pay to access this relay:</p>
+            <button id="payButton" class="pay-button" data-npub="${relayNpub}" data-relays="wss://relay.damus.io,wss://relay.primal.net,wss://sendit.nosflare.com" data-sats-amount="${RELAY_ACCESS_PRICE_SATS}">
+                <img src="https://raw.githubusercontent.com/Spl0itable/pwb/main/images/pwb-button-min.png" alt="Pay with Bitcoin" style="height: 60px;">
+            </button>
+            <p class="price-info">${RELAY_ACCESS_PRICE_SATS.toLocaleString()} sats</p>
+        </div>
+        <div class="info-box" id="accessSection" style="display: none;">
+            <p style="margin-bottom: 1rem;">Connect your Nostr client to:</p>
+            <div class="url-display" onclick="copyToClipboard()" id="relay-url">
+                <!-- URL will be inserted by JavaScript -->
+            </div>
+            <p class="copy-hint">Click to copy</p>
+        </div>
+    ` : `
+        <div class="info-box">
+            <p style="margin-bottom: 1rem;">Connect your Nostr client to:</p>
+            <div class="url-display" onclick="copyToClipboard()" id="relay-url">
+                <!-- URL will be inserted by JavaScript -->
+            </div>
+            <p class="copy-hint">Click to copy</p>
+        </div>
+    `;
+
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -182,14 +213,9 @@ async function serveHomePage() {
         }
         
         .logo-container {
-            animation: float 3s ease-in-out infinite;
+            display: inline-block;
         }
-        
-        @keyframes float {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
-        }
-        
+
         .logo {
             width: 400px;
             height: auto;
@@ -219,6 +245,34 @@ async function serveHomePage() {
             padding: 2rem;
             margin-bottom: 2rem;
             backdrop-filter: blur(10px);
+        }
+        
+        .pay-section {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        .pay-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            margin: 1rem 0;
+            transition: transform 0.3s ease;
+        }
+        
+        .pay-button:hover {
+            transform: scale(1.05);
+        }
+        
+        .price-info {
+            font-size: 1.2rem;
+            color: #ff8c00;
+            font-weight: 600;
         }
         
         .url-display {
@@ -306,6 +360,12 @@ async function serveHomePage() {
         .toast.show {
             transform: translateY(0);
         }
+        
+        .success-message {
+            color: #4CAF50;
+            font-size: 1.1rem;
+            margin-top: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -316,13 +376,7 @@ async function serveHomePage() {
     
         <p class="tagline">A serverless Nostr relay powered by Cloudflare</p>
         
-        <div class="info-box">
-            <p style="margin-bottom: 1rem;">Connect your Nostr client to:</p>
-            <div class="url-display" onclick="copyToClipboard()" id="relay-url">
-                <!-- URL will be inserted by JavaScript -->
-            </div>
-            <p class="copy-hint">Click to copy</p>
-        </div>
+        ${payToRelaySection}
         
         <div class="stats">
             <div class="stat-item">
@@ -343,11 +397,17 @@ async function serveHomePage() {
     
     <div class="toast" id="toast">Copied to clipboard!</div>
     
+    <script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
     <script>
         // Set the relay URL dynamically
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const relayUrl = protocol + '//' + window.location.host;
-        document.getElementById('relay-url').textContent = relayUrl;
+        
+        // Set relay URL in the display element
+        const relayUrlElement = document.getElementById('relay-url');
+        if (relayUrlElement) {
+            relayUrlElement.textContent = relayUrl;
+        }
         
         function copyToClipboard() {
             const relayUrl = document.getElementById('relay-url').textContent;
@@ -361,7 +421,116 @@ async function serveHomePage() {
                 console.error('Failed to copy:', err);
             });
         }
+        
+        ${PAY_TO_RELAY_ENABLED ? `
+        // Pay to relay functionality
+        let paymentCheckInterval;
+
+        // Check if user has already paid
+        async function checkPaymentStatus() {
+            if (!window.nostr || !window.nostr.getPublicKey) return false;
+            
+            try {
+                const pubkey = await window.nostr.getPublicKey();
+                const response = await fetch('/api/check-payment?pubkey=' + pubkey);
+                const data = await response.json();
+                
+                if (data.paid) {
+                    showRelayAccess();
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                console.error('Error checking payment status:', error);
+                return false;
+            }
+        }
+
+        function showRelayAccess() {
+            const paySection = document.getElementById('paySection');
+            const accessSection = document.getElementById('accessSection');
+            
+            if (paySection && accessSection) {
+                // Smooth transition
+                paySection.style.transition = 'opacity 0.3s ease-out';
+                paySection.style.opacity = '0';
+                
+                setTimeout(() => {
+                    paySection.style.display = 'none';
+                    accessSection.style.display = 'block';
+                    accessSection.style.opacity = '0';
+                    accessSection.style.transition = 'opacity 0.3s ease-in';
+                    
+                    // Force reflow
+                    void accessSection.offsetHeight;
+                    
+                    accessSection.style.opacity = '1';
+                }, 300);
+            }
+            
+            if (paymentCheckInterval) {
+                clearInterval(paymentCheckInterval);
+                paymentCheckInterval = null;
+            }
+        }
+
+        // Listen for payment success from the zap dialog
+        window.addEventListener('payment-success', async (event) => {
+            console.log('Payment success event received');
+            // Give the backend a moment to process
+            setTimeout(() => {
+                showRelayAccess();
+            }, 500);
+        });
+
+        // Add animation styles
+        const style = document.createElement('style');
+        style.textContent = \`
+            @keyframes slideIn {
+                from { transform: translateX(100%); }
+                to { transform: translateX(0); }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); }
+                to { transform: translateX(100%); }
+            }
+        \`;
+        document.head.appendChild(style);
+
+        // Initialize payment handling
+        async function initPayment() {
+            // Import the zap functionality
+            const script = document.createElement('script');
+            script.src = 'https://raw.githubusercontent.com/Spl0itable/nosflare/main/nostr-zap.js';
+            script.onload = () => {
+                if (window.nostrZap) {
+                    window.nostrZap.initTargets('#payButton');
+                    
+                    // Start checking when payment button is clicked
+                    document.getElementById('payButton').addEventListener('click', () => {
+                        if (!paymentCheckInterval) {
+                            paymentCheckInterval = setInterval(async () => {
+                                await checkPaymentStatus();
+                            }, 3000);
+                        }
+                    });
+                }
+            };
+            document.head.appendChild(script);
+            
+            // Check initial payment status
+            await checkPaymentStatus();
+        }
+
+        // Wait for page to load and Nostr extension
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initPayment);
+        } else {
+            initPayment();
+        }
+        ` : ''}
     </script>
+    ${PAY_TO_RELAY_ENABLED ? '<script src="https://unpkg.com/nostr-login@latest/dist/unpkg.js" data-perms="sign_event:1" data-methods="connect,extension,local" data-dark-mode="true"></script>' : ''}
 </body>
 </html>
     `;
@@ -377,6 +546,19 @@ async function serveHomePage() {
 addEventListener("fetch", (event) => {
     const { request } = event;
     const url = new URL(request.url);
+    
+    // Handle payment notification from zap
+    if (request.method === 'POST' && url.searchParams.has('notify-zap') && PAY_TO_RELAY_ENABLED) {
+        event.respondWith(handlePaymentNotification(request));
+        return;
+    }
+    
+    // API endpoint for checking payment status
+    if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
+        event.respondWith(handleCheckPayment(request));
+        return;
+    }
+    
     if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
             event.respondWith(handleWebSocket(event, request));
@@ -522,7 +704,6 @@ let activeConnections = 0;
 
 // Controls number of active connections
 async function withConnectionLimit(promiseFunction) {
-    // Wait if too many connections are active
     while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -545,14 +726,11 @@ async function handleWebSocket(event, request) {
                 try {
                     let messageData;
 
-                    // Check if the message is in ArrayBuffer format
                     if (messageEvent.data instanceof ArrayBuffer) {
-                        // Decode ArrayBuffer to string
                         const textDecoder = new TextDecoder("utf-8");
                         const decodedText = textDecoder.decode(messageEvent.data);
                         messageData = JSON.parse(decodedText);
                     } else {
-                        // Assume it's already a string and parse as JSON
                         messageData = JSON.parse(messageEvent.data);
                     }
 
@@ -578,7 +756,7 @@ async function handleWebSocket(event, request) {
     });
     server.addEventListener("close", (event) => {
         const wsId = server.id || Math.random().toString(36).substr(2, 9);
-        relayCache.clearSubscriptions(wsId); // Clear all subscriptions for this connection
+        relayCache.clearSubscriptions(wsId);
         console.log("WebSocket closed", event.code, event.reason);
     });
     server.addEventListener("error", (error) => {
@@ -620,6 +798,18 @@ async function processEvent(event, server) {
             return;
         } else {
             console.log(`[Event] Signature verification passed for event ${event.id}`);
+        }
+
+        // Check if pay to relay is enabled and if the pubkey has paid
+        if (PAY_TO_RELAY_ENABLED) {
+            const hasPaid = await hasPaidForRelay(event.pubkey);
+            if (!hasPaid) {
+                const protocol = 'https:';
+                const relayUrl = `${protocol}//${server.url || 'relay.nosflare.com'}`;
+                console.error(`[Event] Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
+                sendOK(server, event.id, false, `blocked: payment required. Visit ${relayUrl} to pay for relay access.`);
+                return;
+            }
         }
 
         // Add event to cache with a TTL of 60 seconds
@@ -933,6 +1123,128 @@ async function fetchKind0EventForPubkey(pubkey) {
     }
 
     return null;
+}
+
+// Helper function to check if a pubkey has paid
+async function hasPaidForRelay(pubkey) {
+    if (!PAY_TO_RELAY_ENABLED) return true; // If pay to relay is disabled, allow all
+    
+    try {
+        const paidKey = `${PAID_PUBKEYS_PREFIX}${pubkey}.json`;
+        const paidRecord = await R2_BUCKET.get(paidKey);
+        
+        if (paidRecord) {
+            const paidData = JSON.parse(await paidRecord.text());
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error(`Error checking paid status for ${pubkey}:`, error);
+        return false;
+    }
+}
+
+// Helper function to save paid pubkey to R2
+async function savePaidPubkey(pubkey) {
+    try {
+        const paidKey = `${PAID_PUBKEYS_PREFIX}${pubkey}.json`;
+        const paidData = {
+            pubkey: pubkey,
+            paidAt: Math.floor(Date.now() / 1000),
+        };
+        
+        await R2_BUCKET.put(paidKey, JSON.stringify(paidData), {
+            httpMetadata: { contentType: 'application/json' }
+        });
+        
+        console.log(`Successfully saved paid pubkey: ${pubkey}`);
+        return true;
+    } catch (error) {
+        console.error(`Error saving paid pubkey ${pubkey}:`, error);
+        return false;
+    }
+}
+
+// Handle zap payment status check
+async function handleCheckPayment(request) {
+    const url = new URL(request.url);
+    const pubkey = url.searchParams.get('pubkey');
+    
+    if (!pubkey) {
+        return new Response(JSON.stringify({ error: 'Missing pubkey' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+    
+    const paid = await hasPaidForRelay(pubkey);
+    
+    return new Response(JSON.stringify({ paid }), {
+        status: 200,
+        headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        }
+    });
+}
+
+// Handle zap payment notification
+async function handlePaymentNotification(request) {
+    if (request.method !== 'POST') {
+        return new Response('Method not allowed', { status: 405 });
+    }
+    
+    try {
+        const url = new URL(request.url);
+        const pubkey = url.searchParams.get('npub');
+        
+        if (!pubkey) {
+            return new Response(JSON.stringify({ error: 'Missing pubkey' }), {
+                status: 400,
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            });
+        }
+        
+        // Save the paid pubkey to R2 bucket
+        const success = await savePaidPubkey(pubkey);
+        
+        if (success) {
+            return new Response(JSON.stringify({ 
+                success: true,
+                message: 'Payment recorded successfully'
+            }), {
+                status: 200,
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            });
+        } else {
+            return new Response(JSON.stringify({ 
+                error: 'Failed to save payment' 
+            }), {
+                status: 500,
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error processing payment notification:', error);
+        return new Response(JSON.stringify({ 
+            error: 'Invalid request' 
+        }), {
+            status: 400,
+            headers: { 
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            }
+        });
+    }
 }
 
 // Checks if NIP-05 is valid

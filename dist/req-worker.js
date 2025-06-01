@@ -7,19 +7,6 @@ addEventListener("fetch", (event) => {
     event.respondWith(new Response("Invalid request", { status: 400 }));
   }
 });
-var MAX_CONCURRENT_CONNECTIONS = 6;
-var activeConnections = 0;
-async function withConnectionLimit(promiseFunction) {
-  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  activeConnections += 1;
-  try {
-    return await promiseFunction();
-  } finally {
-    activeConnections -= 1;
-  }
-}
 async function handlePostRequest(request) {
   try {
     const authHeader = request.headers.get("Authorization");
@@ -47,35 +34,216 @@ async function handlePostRequest(request) {
     return new Response(`Error processing request: ${error.message}`, { status: 500 });
   }
 }
+var MAX_CONCURRENT_CONNECTIONS = 6;
+var activeConnections = 0;
+async function withConnectionLimit(promiseFunction) {
+  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  activeConnections += 1;
+  try {
+    return await promiseFunction();
+  } finally {
+    activeConnections -= 1;
+  }
+}
+function getBestCompoundKeyPrefix(filters) {
+  const hasTime = filters.since || filters.until;
+  const hasAuthors = filters.authors && filters.authors.length > 0;
+  const hasKinds = filters.kinds && filters.kinds.length > 0;
+  const hasTags = filters["#e"] || filters["#p"] || filters["#a"] || filters["#t"];
+  if (hasAuthors && hasKinds && hasTime) {
+    return {
+      type: "author-kind-time",
+      prefixes: filters.authors.flatMap(
+        (author) => filters.kinds.map(
+          (kind) => `compound/author-${author}-kind-${kind}/time/`
+        )
+      )
+    };
+  }
+  if (hasAuthors && hasTags && hasTime) {
+    const tagFilters = [];
+    ["#e", "#p", "#a", "#t"].forEach((tagKey) => {
+      if (filters[tagKey]) {
+        const tagName = tagKey.substring(1);
+        filters[tagKey].forEach((tagValue) => {
+          filters.authors.forEach((author) => {
+            tagFilters.push(`compound/author-${author}-tag-${tagName}-${tagValue}/time/`);
+          });
+        });
+      }
+    });
+    return { type: "author-tag-time", prefixes: tagFilters };
+  }
+  if (hasKinds && hasTags && hasTime) {
+    const tagFilters = [];
+    ["#e", "#p", "#a", "#t"].forEach((tagKey) => {
+      if (filters[tagKey]) {
+        const tagName = tagKey.substring(1);
+        filters[tagKey].forEach((tagValue) => {
+          filters.kinds.forEach((kind) => {
+            tagFilters.push(`compound/kind-${kind}-tag-${tagName}-${tagValue}/time/`);
+          });
+        });
+      }
+    });
+    return { type: "kind-tag-time", prefixes: tagFilters };
+  }
+  if (hasAuthors && hasTime) {
+    return {
+      type: "author-time",
+      prefixes: filters.authors.map((author) => `compound/author-${author}/time/`)
+    };
+  }
+  if (hasKinds && hasTime) {
+    return {
+      type: "kind-time",
+      prefixes: filters.kinds.map((kind) => `compound/kind-${kind}/time/`)
+    };
+  }
+  if (hasTags && hasTime) {
+    const tagFilters = [];
+    ["#e", "#p", "#a", "#t"].forEach((tagKey) => {
+      if (filters[tagKey]) {
+        const tagName = tagKey.substring(1);
+        filters[tagKey].forEach((tagValue) => {
+          tagFilters.push(`compound/tag-${tagName}-${tagValue}/time/`);
+        });
+      }
+    });
+    return { type: "tag-time", prefixes: tagFilters };
+  }
+  if (hasTime) {
+    return { type: "time", prefixes: ["compound/time/"] };
+  }
+  return null;
+}
+async function fetchEventsByCompoundKey(prefix, since, until, limit = 50) {
+  const events = [];
+  const eventIds = /* @__PURE__ */ new Set();
+  const sinceTs = since ? since.toString().padStart(10, "0") : "0000000000";
+  const untilTs = until ? until.toString().padStart(10, "0") : "9999999999";
+  try {
+    const options = {
+      prefix,
+      limit: Math.min(limit * 2, 1e3)
+    };
+    if (since) {
+      options.cursor = `${prefix}${sinceTs}`;
+    }
+    console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${options.cursor || "none"}`);
+    const listed = await withConnectionLimit(() => relayDb.list(options));
+    console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
+    for (const object of listed.objects) {
+      const timePart = object.key.split("/time/")[1];
+      if (!timePart) continue;
+      const [timestamp, eventId] = timePart.split(":");
+      if (timestamp > untilTs) break;
+      if (timestamp >= sinceTs && timestamp <= untilTs) {
+        if (!eventIds.has(eventId)) {
+          eventIds.add(eventId);
+          const eventUrl = `https://${r2BucketDomain}/${object.key}`;
+          const eventResponse = await withConnectionLimit(() => fetch(eventUrl));
+          if (eventResponse.ok) {
+            const eventText = await eventResponse.text();
+            const event = JSON.parse(eventText);
+            if (event) {
+              events.push(event);
+              if (events.length >= limit) break;
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error fetching events by compound key ${prefix}:`, error);
+  }
+  console.log(`Returning ${events.length} events for prefix: ${prefix}`);
+  return events;
+}
 async function processReq(subscriptionId, filters) {
   console.log(`Processing request for subscription ID: ${subscriptionId}`);
   let events = [];
-  const eventPromises = [];
-  try {
+  const compoundKeyInfo = getBestCompoundKeyPrefix(filters);
+  if (compoundKeyInfo) {
+    console.log(`Using optimized compound key query: ${compoundKeyInfo.type}`);
+    const promises = compoundKeyInfo.prefixes.map(
+      (prefix) => fetchEventsByCompoundKey(
+        prefix,
+        filters.since,
+        filters.until,
+        filters.limit || 50
+      )
+    );
+    const results = await Promise.all(promises);
+    const allEvents = results.flat();
+    const eventMap = /* @__PURE__ */ new Map();
+    allEvents.forEach((event) => {
+      if (!eventMap.has(event.id)) {
+        eventMap.set(event.id, event);
+      }
+    });
+    events = Array.from(eventMap.values());
+  } else {
+    const eventPromises = [];
     if (filters.ids) {
       console.log(`Fetching events by IDs: ${filters.ids}`);
       eventPromises.push(...fetchEventsById(filters.ids));
     }
     if (filters.kinds) {
       console.log(`Fetching events by kinds: ${filters.kinds}`);
-      eventPromises.push(...await fetchEventsByKind(filters.kinds));
+      eventPromises.push(...await fetchEventsByKind(filters.kinds, filters.limit));
     }
     if (filters.authors) {
       console.log(`Fetching events by authors: ${filters.authors}`);
-      eventPromises.push(...await fetchEventsByAuthor(filters.authors));
+      eventPromises.push(...await fetchEventsByAuthor(filters.authors, filters.limit));
     }
-    if (filters.tags) {
-      console.log(`Fetching events by tags: ${JSON.stringify(filters.tags)}`);
-      eventPromises.push(...await fetchEventsByTag(filters.tags));
+    const tagPromises = [];
+    ["#e", "#p", "#a", "#t"].forEach((tagKey) => {
+      if (filters[tagKey]) {
+        const tagName = tagKey.substring(1);
+        filters[tagKey].forEach((tagValue) => {
+          console.log(`Fetching events by tag: ${tagName}=${tagValue}`);
+          tagPromises.push(...fetchEventsByTag([[tagName, tagValue]], filters.limit));
+        });
+      }
+    });
+    if (tagPromises.length > 0) {
+      eventPromises.push(...await Promise.all(tagPromises.flat()));
     }
     const fetchedEvents = await Promise.all(eventPromises);
-    console.log(`Fetched ${fetchedEvents.length} events, applying filters...`);
-    events = filterEvents(fetchedEvents.filter((event) => event !== null), filters);
-  } catch (error) {
-    console.error(`Error retrieving events from R2:`, error);
+    events = fetchedEvents.filter((event) => event !== null);
+  }
+  console.log(`Fetched ${events.length} events, applying final filters...`);
+  events = filterEventsComplete(events, filters);
+  events.sort((a, b) => b.created_at - a.created_at);
+  if (filters.limit) {
+    events = events.slice(0, filters.limit);
   }
   console.log(`Returning ${events.length} filtered events.`);
   return events;
+}
+function filterEventsComplete(events, filters) {
+  return events.filter((event) => {
+    if (filters.ids && !filters.ids.includes(event.id)) return false;
+    if (filters.kinds && !filters.kinds.includes(event.kind)) return false;
+    if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
+    if (filters.since && event.created_at < filters.since) return false;
+    if (filters.until && event.created_at > filters.until) return false;
+    const tagFilters = ["#e", "#p", "#a", "#t"];
+    for (const filterKey of tagFilters) {
+      if (filters[filterKey]) {
+        const tagName = filterKey.substring(1);
+        const eventTagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1]);
+        const hasMatch = filters[filterKey].some(
+          (filterValue) => eventTagValues.includes(filterValue)
+        );
+        if (!hasMatch) return false;
+      }
+    }
+    return true;
+  });
 }
 function fetchEventsById(ids, batchSize = 10) {
   console.log(`Fetching events by IDs in batches of ${batchSize}`);
@@ -176,19 +344,4 @@ async function fetchEventByKey(eventKey) {
     console.error(`Error fetching event with key ${eventKey}:`, error);
     return null;
   }
-}
-function filterEvents(events, filters) {
-  console.log(`Filtering events based on filters: ${JSON.stringify(filters)}`);
-  return events.filter((event) => {
-    const includeEvent = (!filters.ids || filters.ids.includes(event.id)) && (!filters.kinds || filters.kinds.includes(event.kind)) && (!filters.authors || filters.authors.includes(event.pubkey)) && (!filters.since || event.created_at >= filters.since) && (!filters.until || event.created_at <= filters.until);
-    if (filters.tags) {
-      for (const [tagName, tagValue] of filters.tags) {
-        const eventTags = event.tags.filter(([t]) => t === tagName).map(([, v]) => v);
-        if (!eventTags.includes(tagValue)) {
-          return false;
-        }
-      }
-    }
-    return includeEvent;
-  });
 }

@@ -246,11 +246,34 @@ async function saveEventToR2(event) {
   }
   const kindKey = `kinds/kind-${event.kind}:${kindCount + 1}`;
   const pubkeyKey = `pubkeys/pubkey-${event.pubkey}:${pubkeyCount + 1}`;
+  const timestamp = event.created_at;
+  const paddedTimestamp = timestamp.toString().padStart(10, "0");
+  const compoundKeys = [];
+  const timestampKey = `compound/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: timestampKey, type: "time" });
+  const kindTimeKey = `compound/kind-${event.kind}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: kindTimeKey, type: "kind-time" });
+  const authorTimeKey = `compound/author-${event.pubkey}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: authorTimeKey, type: "author-time" });
+  const authorKindTimeKey = `compound/author-${event.pubkey}-kind-${event.kind}/time/${paddedTimestamp}:${event.id}`;
+  compoundKeys.push({ key: authorKindTimeKey, type: "author-kind-time" });
+  for (const tag of event.tags) {
+    const [tagName, tagValue] = tag;
+    if (tagName && tagValue) {
+      const tagTimeKey = `compound/tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: tagTimeKey, type: "tag-time", tagInfo: { name: tagName, value: tagValue } });
+      const authorTagTimeKey = `compound/author-${event.pubkey}-tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: authorTagTimeKey, type: "author-tag-time" });
+      const kindTagTimeKey = `compound/kind-${event.kind}-tag-${tagName}-${tagValue}/time/${paddedTimestamp}:${event.id}`;
+      compoundKeys.push({ key: kindTagTimeKey, type: "kind-tag-time" });
+    }
+  }
   const metadata = {
     kindKey,
     pubkeyKey,
     tags: [],
-    contentHashKey
+    contentHashKey,
+    compoundKeys: compoundKeys.map((ck) => ck.key)
   };
   const eventWithCountRef = { ...event, kindKey, pubkeyKey };
   const tagBatches = [];
@@ -277,6 +300,9 @@ async function saveEventToR2(event) {
     return { success: false, error: `Error processing tags: ${error.message}` };
   }
   try {
+    const compoundKeyPromises = compoundKeys.map(
+      (ck) => withConnectionLimit(() => relayDb.put(ck.key, JSON.stringify(event)))
+    );
     console.log(`Saving event and related data for event ID: ${event.id}`);
     await Promise.all([
       withConnectionLimit(() => relayDb.put(kindKey, JSON.stringify(event))),
@@ -284,7 +310,8 @@ async function saveEventToR2(event) {
       withConnectionLimit(() => relayDb.put(eventKey, JSON.stringify(eventWithCountRef))),
       withConnectionLimit(() => relayDb.put(`counts/kind_count_${event.kind}`, (kindCount + 1).toString())),
       withConnectionLimit(() => relayDb.put(`counts/pubkey_count_${event.pubkey}`, (pubkeyCount + 1).toString())),
-      withConnectionLimit(() => relayDb.put(metadataKey, JSON.stringify(metadata)))
+      withConnectionLimit(() => relayDb.put(metadataKey, JSON.stringify(metadata))),
+      ...compoundKeyPromises
     ]);
     for (const batch of tagBatches) {
       await Promise.all(batch);
@@ -293,7 +320,7 @@ async function saveEventToR2(event) {
       console.log(`Saving content hash for event ID: ${event.id}`);
       await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify(event)));
     }
-    console.log(`Event ${event.id} saved successfully.`);
+    console.log(`Event ${event.id} saved successfully with compound keys.`);
     return { success: true };
   } catch (error) {
     console.error(`Error saving event data in R2 for event ID: ${event.id}: ${error.message}`);
@@ -324,15 +351,11 @@ async function processDeletionEvent(deletionEvent) {
         const metadata = await metadataResponse.json();
         const keysToDelete = [
           `events/event:${eventId}`,
-          // Event content
           metadata.kindKey,
-          // Kind reference
           metadata.pubkeyKey,
-          // Pubkey reference
           metadata.contentHashKey,
-          // Content hash reference
-          ...metadata.tags
-          // Associated tags
+          ...metadata.tags,
+          ...metadata.compoundKeys || []
         ];
         await Promise.all(keysToDelete.map((key) => withConnectionLimit(() => relayDb.delete(key))));
         await withConnectionLimit(() => relayDb.delete(metadataKey));

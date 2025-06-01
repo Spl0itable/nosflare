@@ -44,12 +44,16 @@ Clone this repo to your machine, then `cd` into its directory, and open `relay-w
 ***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
 *Optional:*
-- In the `relay-worker.js` file: Edit the `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
+- In the `relay-worker.js` file: Edit the "Pay to relay configuration" if you would like to charge people for access to the relay. You will want to set `PAY_TO_RELAY_ENABLED` to `true` state, edit `relayNpub` with your own npub and enter the desired price in SATS to `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
 How blocklisting and allowlisting works:
 > If pubkey(s) and event kind(s) and tag(s) are in blocklist, only that pubkey(s) and event kind(s) and tag(s) will be blocked and all others allowed. Conversely, if pubkey(s) and event kind(s) and tag(s) are in allowlist, only that pubkey(s) and event kind(s) and tag(s) will be allowed and all others blocked.
+
+*HTML landing page:*
+
+Nosflare has a default static HTML page that renders when someone visits the relay URL from a browser instead of a Nostr client. This landing page is what's used to accept payments for access to the relay (if enabled) as well as show some data about the relay. Customize this as you please, adding your own logo, etc.
 
 *Spam filtering:*
 
@@ -93,6 +97,10 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 17. In a different section on the Settings > Variables page of each worker, bind the `relayDb` variable to the R2 bucket you created in the R2 Bucket Bindings section.
 ![R2 Bucket Binding](images/r2-binding.jpeg)
 
+## Pay to relay
+
+Nosflare allows for "pay to relay", which lets the relay operator accept Bitcoin lightning payments through Nostr zaps of SATS. The price can be whatever the relay operator chooses and sets detailed above in the optional settings section. This allows relay operators to turn their relay into a paid relay. Once enabled, every event sent to the relay will have its author's pubkey checked to see if they've paid for access.
+
 ## Bucket Pruning
 
 Cloudflare's R2 bucket support data pruning through "Object Lifecycle Rules". This can be tuned to delete selected data after a certain time. This makes it possible to automatically "nuke" events after 24hrs or 30 days or a year or whatever length of time you'd like. Read more [here](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
@@ -134,3 +142,6 @@ For inquiries related to Nosflare, you can start a discussion on the GitHub repo
  
 `npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
 
+## Changelog
+
+See the `changelog.md` file for versioning.
