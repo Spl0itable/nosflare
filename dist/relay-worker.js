@@ -2254,7 +2254,7 @@ async function serveHomePage() {
         <div class="pay-section" id="paySection">
             <p style="margin-bottom: 1rem;">Pay to access this relay:</p>
             <button id="payButton" class="pay-button" data-npub="${relayNpub}" data-relays="wss://relay.damus.io,wss://relay.primal.net,wss://sendit.nosflare.com" data-sats-amount="${RELAY_ACCESS_PRICE_SATS}">
-                <img src="https://raw.githubusercontent.com/Spl0itable/pwb/main/images/pwb-button-min.png" alt="Pay with Bitcoin" style="height: 60px;">
+                <img src="https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/pwb-button-min.png" alt="Pay with Bitcoin" style="height: 60px;">
             </button>
             <p class="price-info">${RELAY_ACCESS_PRICE_SATS.toLocaleString()} sats</p>
         </div>
