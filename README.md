@@ -6,7 +6,7 @@ Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose
 
 This relay is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social protocol.
 
-Most applicable NIPs are supported along with support for allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
+Most applicable NIPs are supported along with support for "pay to relay", allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
 
 Nosflare introduces a unique "helper" scheme which allows utilizing helper workers for handling EVENT and REQ messages. This let's the primary websocket worker communicate with helper workers in order to improve the saving and retrieval of events to and from the R2 bucket. At least one helper worker for both EVENT and REQ messages is required, detailed further in the Deployment section.
 
