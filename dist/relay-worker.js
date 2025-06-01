@@ -2617,7 +2617,7 @@ async function serveHomePage() {
         async function initPayment() {
             // Import the zap functionality
             const script = document.createElement('script');
-            script.src = 'https://raw.githubusercontent.com/Spl0itable/nosflare/main/nostr-zap.js';
+            script.src = 'https://cdn.jsdelivr.net/gh/Spl0itable/nosflare@main/nostr-zap.js';
             script.onload = () => {
                 if (window.nostrZap) {
                     window.nostrZap.initTargets('#payButton');
