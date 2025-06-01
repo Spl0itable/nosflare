@@ -1131,7 +1131,7 @@ async function hasPaidForRelay(pubkey) {
     
     try {
         const paidKey = `${PAID_PUBKEYS_PREFIX}${pubkey}.json`;
-        const paidRecord = await R2_BUCKET.get(paidKey);
+        const paidRecord = await relayDb.get(paidKey);
         
         if (paidRecord) {
             const paidData = JSON.parse(await paidRecord.text());
@@ -1153,7 +1153,7 @@ async function savePaidPubkey(pubkey) {
             paidAt: Math.floor(Date.now() / 1000),
         };
         
-        await R2_BUCKET.put(paidKey, JSON.stringify(paidData), {
+        await relayDb.put(paidKey, JSON.stringify(paidData), {
             httpMetadata: { contentType: 'application/json' }
         });
         
