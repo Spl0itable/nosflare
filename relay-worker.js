@@ -10,7 +10,7 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "5.23.35",
+    version: "5.23.37",
 };
 
 // Relay favicon

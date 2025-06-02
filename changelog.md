@@ -1,3 +1,7 @@
+## v5.23.37 - 2025-06-02
+
+- Hotfix: error breaking "since" and "until" filters
+
 ## v5.23.36 - 2025-06-02
 
 - Tweak: increased rate limiting thresholds

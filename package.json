@@ -1,6 +1,6 @@
 {
     "name": "Nosflare",
-    "version": "5.23.36",
+    "version": "5.23.37",
     "main": "dist/relay-worker.js",
     "scripts": {
       "build:relay": "esbuild relay-worker.js --bundle --outfile=dist/relay-worker.js --platform=neutral --target=es2020 --format=esm --allow-overwrite",

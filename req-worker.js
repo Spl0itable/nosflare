@@ -148,29 +148,37 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 10000) {
   const untilTs = until ? until.toString().padStart(10, '0') : '9999999999';
 
   try {
-    const options = {
-      prefix: prefix,
-      limit: Math.min(limit * 2, 10000)
-    };
+    let cursor;
+    let hasMore = true;
+    
+    while (hasMore && events.length < limit) {
+      const options = {
+        prefix: prefix,
+        limit: Math.min(1000, limit - events.length), // Use smaller batches
+        cursor: cursor
+      };
 
-    if (since) {
-      options.cursor = `${prefix}${sinceTs}`;
-    }
+      console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${cursor || 'none'}`);
 
-    console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${options.cursor || 'none'}`);
+      const listed = await withConnectionLimit(() => relayDb.list(options));
 
-    const listed = await withConnectionLimit(() => relayDb.list(options));
+      console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
 
-    console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
+      for (const object of listed.objects) {
+        const timePart = object.key.split('/time/')[1];
+        if (!timePart) continue;
 
-    for (const object of listed.objects) {
-      const timePart = object.key.split('/time/')[1];
-      if (!timePart) continue;
+        const [timestamp, eventId] = timePart.split(':');
 
-      const [timestamp, eventId] = timePart.split(':');
+        // Since R2 lists objects lexicographically, we can skip objects before 'since'
+        if (timestamp < sinceTs) continue;
+        
+        // Stop processing if we've gone past 'until'
+        if (timestamp > untilTs) {
+          hasMore = false;
+          break;
+        }
 
-      if (timestamp > untilTs) break;
-      if (timestamp >= sinceTs && timestamp <= untilTs) {
         if (!eventIds.has(eventId)) {
           eventIds.add(eventId);
 
@@ -181,14 +189,22 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 10000) {
             const event = JSON.parse(eventText);
             if (event) {
               events.push(event);
-              if (events.length >= limit) break;
+              if (events.length >= limit) {
+                hasMore = false;
+                break;
+              }
             }
           }
         }
       }
+
+      // Update cursor for next iteration
+      cursor = listed.truncated ? listed.cursor : undefined;
+      hasMore = listed.truncated && events.length < limit;
     }
   } catch (error) {
     console.error(`Error fetching events by compound key ${prefix}:`, error);
+    return events; // Return what we have so far instead of throwing
   }
 
   console.log(`Returning ${events.length} events for prefix: ${prefix}`);
@@ -292,7 +308,7 @@ function filterEventsComplete(events, filters) {
         const eventTagValues = event.tags
           .filter(tag => tag[0] === tagName)
           .map(tag => tag[1]);
-
+ 
         const hasMatch = filters[filterKey].some(filterValue =>
           eventTagValues.includes(filterValue)
         );

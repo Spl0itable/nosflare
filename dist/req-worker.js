@@ -125,22 +125,27 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 1e4) {
   const sinceTs = since ? since.toString().padStart(10, "0") : "0000000000";
   const untilTs = until ? until.toString().padStart(10, "0") : "9999999999";
   try {
-    const options = {
-      prefix,
-      limit: Math.min(limit * 2, 1e4)
-    };
-    if (since) {
-      options.cursor = `${prefix}${sinceTs}`;
-    }
-    console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${options.cursor || "none"}`);
-    const listed = await withConnectionLimit(() => relayDb.list(options));
-    console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
-    for (const object of listed.objects) {
-      const timePart = object.key.split("/time/")[1];
-      if (!timePart) continue;
-      const [timestamp, eventId] = timePart.split(":");
-      if (timestamp > untilTs) break;
-      if (timestamp >= sinceTs && timestamp <= untilTs) {
+    let cursor;
+    let hasMore = true;
+    while (hasMore && events.length < limit) {
+      const options = {
+        prefix,
+        limit: Math.min(1e3, limit - events.length),
+        // Use smaller batches
+        cursor
+      };
+      console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${cursor || "none"}`);
+      const listed = await withConnectionLimit(() => relayDb.list(options));
+      console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
+      for (const object of listed.objects) {
+        const timePart = object.key.split("/time/")[1];
+        if (!timePart) continue;
+        const [timestamp, eventId] = timePart.split(":");
+        if (timestamp < sinceTs) continue;
+        if (timestamp > untilTs) {
+          hasMore = false;
+          break;
+        }
         if (!eventIds.has(eventId)) {
           eventIds.add(eventId);
           const eventUrl = `https://${r2BucketDomain}/${object.key}`;
@@ -150,14 +155,20 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 1e4) {
             const event = JSON.parse(eventText);
             if (event) {
               events.push(event);
-              if (events.length >= limit) break;
+              if (events.length >= limit) {
+                hasMore = false;
+                break;
+              }
             }
           }
         }
       }
+      cursor = listed.truncated ? listed.cursor : void 0;
+      hasMore = listed.truncated && events.length < limit;
     }
   } catch (error) {
     console.error(`Error fetching events by compound key ${prefix}:`, error);
+    return events;
   }
   console.log(`Returning ${events.length} events for prefix: ${prefix}`);
   return events;
