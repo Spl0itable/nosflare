@@ -2800,9 +2800,9 @@ var rateLimiter = class {
     this.lastRefillTime = now;
   }
 };
-var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
+var pubkeyRateLimiter = new rateLimiter(100 / 6e4, 100);
 var excludedRateLimitKinds = [];
-var reqRateLimiter = new rateLimiter(10 / 6e4, 10);
+var reqRateLimiter = new rateLimiter(1e4 / 6e4, 1e4);
 var MAX_CONCURRENT_CONNECTIONS = 6;
 var activeConnections = 0;
 async function withConnectionLimit(promiseFunction) {
@@ -3017,19 +3017,19 @@ async function processReq(message, server) {
       return;
     }
   }
-  if (filters.ids && filters.ids.length > 50) {
-    console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 50`);
-    sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
+  if (filters.ids && filters.ids.length > 1e4) {
+    console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
+    sendError(server, "The 'ids' filter must contain 10000 or fewer event IDs.");
     sendEOSE(server, subscriptionId);
     return;
   }
-  if (filters.limit && filters.limit > 50) {
-    console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 50`);
-    sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
+  if (filters.limit && filters.limit > 1e4) {
+    console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
+    sendError(server, "REQ limit exceeded. Maximum allowed limit is 10000.");
     sendEOSE(server, subscriptionId);
     return;
   }
-  filters.limit = filters.limit || 50;
+  filters.limit = filters.limit || 1e4;
   relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);

@@ -1,3 +1,8 @@
+## v5.23.36 - 2025-06-02
+
+- Tweak: increased rate limiting thresholds
+- Hotfix: case where tags filter caused fatal error
+
 ## v5.23.35 - 2025-06-01
 
 - New: added compound key construction when saving events that allows use of "since" and "until" filters in REQs

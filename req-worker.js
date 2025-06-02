@@ -68,14 +68,14 @@ function getBestCompoundKeyPrefix(filters) {
   if (hasAuthors && hasKinds && hasTime) {
     return {
       type: 'author-kind-time',
-      prefixes: filters.authors.flatMap(author => 
-        filters.kinds.map(kind => 
+      prefixes: filters.authors.flatMap(author =>
+        filters.kinds.map(kind =>
           `compound/author-${author}-kind-${kind}/time/`
         )
       )
     };
   }
-  
+
   if (hasAuthors && hasTags && hasTime) {
     const tagFilters = [];
     ['#e', '#p', '#a', '#t'].forEach(tagKey => {
@@ -90,7 +90,7 @@ function getBestCompoundKeyPrefix(filters) {
     });
     return { type: 'author-tag-time', prefixes: tagFilters };
   }
-  
+
   if (hasKinds && hasTags && hasTime) {
     const tagFilters = [];
     ['#e', '#p', '#a', '#t'].forEach(tagKey => {
@@ -105,21 +105,21 @@ function getBestCompoundKeyPrefix(filters) {
     });
     return { type: 'kind-tag-time', prefixes: tagFilters };
   }
-  
+
   if (hasAuthors && hasTime) {
     return {
       type: 'author-time',
       prefixes: filters.authors.map(author => `compound/author-${author}/time/`)
     };
   }
-  
+
   if (hasKinds && hasTime) {
     return {
       type: 'kind-time',
       prefixes: filters.kinds.map(kind => `compound/kind-${kind}/time/`)
     };
   }
-  
+
   if (hasTags && hasTime) {
     const tagFilters = [];
     ['#e', '#p', '#a', '#t'].forEach(tagKey => {
@@ -132,7 +132,7 @@ function getBestCompoundKeyPrefix(filters) {
     });
     return { type: 'tag-time', prefixes: tagFilters };
   }
-  
+
   if (hasTime) {
     return { type: 'time', prefixes: ['compound/time/'] };
   }
@@ -140,40 +140,40 @@ function getBestCompoundKeyPrefix(filters) {
 }
 
 // Fetch events using compound keys
-async function fetchEventsByCompoundKey(prefix, since, until, limit = 50) {
+async function fetchEventsByCompoundKey(prefix, since, until, limit = 10000) {
   const events = [];
   const eventIds = new Set();
-  
+
   const sinceTs = since ? since.toString().padStart(10, '0') : '0000000000';
   const untilTs = until ? until.toString().padStart(10, '0') : '9999999999';
-  
+
   try {
     const options = {
       prefix: prefix,
-      limit: Math.min(limit * 2, 1000)
+      limit: Math.min(limit * 2, 10000)
     };
-    
+
     if (since) {
       options.cursor = `${prefix}${sinceTs}`;
     }
-    
+
     console.log(`Listing R2 objects with prefix: ${prefix}, cursor: ${options.cursor || 'none'}`);
-    
+
     const listed = await withConnectionLimit(() => relayDb.list(options));
-    
+
     console.log(`Found ${listed.objects.length} objects for prefix: ${prefix}`);
-    
+
     for (const object of listed.objects) {
       const timePart = object.key.split('/time/')[1];
       if (!timePart) continue;
-      
+
       const [timestamp, eventId] = timePart.split(':');
-      
+
       if (timestamp > untilTs) break;
       if (timestamp >= sinceTs && timestamp <= untilTs) {
         if (!eventIds.has(eventId)) {
           eventIds.add(eventId);
-          
+
           const eventUrl = `https://${r2BucketDomain}/${object.key}`;
           const eventResponse = await withConnectionLimit(() => fetch(eventUrl));
           if (eventResponse.ok) {
@@ -190,7 +190,7 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 50) {
   } catch (error) {
     console.error(`Error fetching events by compound key ${prefix}:`, error);
   }
-  
+
   console.log(`Returning ${events.length} events for prefix: ${prefix}`);
   return events;
 }
@@ -198,37 +198,37 @@ async function fetchEventsByCompoundKey(prefix, since, until, limit = 50) {
 // Handles REQ messages with compound key support
 async function processReq(subscriptionId, filters) {
   console.log(`Processing request for subscription ID: ${subscriptionId}`);
-  
+
   let events = [];
-  
+
   const compoundKeyInfo = getBestCompoundKeyPrefix(filters);
-  
+
   if (compoundKeyInfo) {
     console.log(`Using optimized compound key query: ${compoundKeyInfo.type}`);
-    
+
     const promises = compoundKeyInfo.prefixes.map(prefix =>
       fetchEventsByCompoundKey(
         prefix,
         filters.since,
         filters.until,
-        filters.limit || 50
+        filters.limit || 10000
       )
     );
-    
+
     const results = await Promise.all(promises);
     const allEvents = results.flat();
-    
+
     const eventMap = new Map();
     allEvents.forEach(event => {
       if (!eventMap.has(event.id)) {
         eventMap.set(event.id, event);
       }
     });
-    
+
     events = Array.from(eventMap.values());
   } else {
     const eventPromises = [];
-    
+
     if (filters.ids) {
       console.log(`Fetching events by IDs: ${filters.ids}`);
       eventPromises.push(...fetchEventsById(filters.ids));
@@ -241,34 +241,36 @@ async function processReq(subscriptionId, filters) {
       console.log(`Fetching events by authors: ${filters.authors}`);
       eventPromises.push(...await fetchEventsByAuthor(filters.authors, filters.limit));
     }
-    
+
     const tagPromises = [];
-    ['#e', '#p', '#a', '#t'].forEach(tagKey => {
+    for (const tagKey of ['#e', '#p', '#a', '#t']) {
       if (filters[tagKey]) {
         const tagName = tagKey.substring(1);
-        filters[tagKey].forEach(tagValue => {
+        for (const tagValue of filters[tagKey]) {
           console.log(`Fetching events by tag: ${tagName}=${tagValue}`);
-          tagPromises.push(...fetchEventsByTag([[tagName, tagValue]], filters.limit));
-        });
+          // Await the function call to get the array of promises
+          const promises = await fetchEventsByTag([[tagName, tagValue]], filters.limit);
+          tagPromises.push(...promises);
+        }
       }
-    });
-    
-    if (tagPromises.length > 0) {
-      eventPromises.push(...await Promise.all(tagPromises.flat()));
     }
-    
+
+    if (tagPromises.length > 0) {
+      eventPromises.push(...tagPromises);
+    }
+
     const fetchedEvents = await Promise.all(eventPromises);
     events = fetchedEvents.filter(event => event !== null);
   }
-  
+
   console.log(`Fetched ${events.length} events, applying final filters...`);
   events = filterEventsComplete(events, filters);
-  
+
   events.sort((a, b) => b.created_at - a.created_at);
   if (filters.limit) {
     events = events.slice(0, filters.limit);
   }
-  
+
   console.log(`Returning ${events.length} filtered events.`);
   return events;
 }
@@ -282,7 +284,7 @@ function filterEventsComplete(events, filters) {
     if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
     if (filters.since && event.created_at < filters.since) return false;
     if (filters.until && event.created_at > filters.until) return false;
-    
+
     const tagFilters = ['#e', '#p', '#a', '#t'];
     for (const filterKey of tagFilters) {
       if (filters[filterKey]) {
@@ -290,15 +292,15 @@ function filterEventsComplete(events, filters) {
         const eventTagValues = event.tags
           .filter(tag => tag[0] === tagName)
           .map(tag => tag[1]);
-        
-        const hasMatch = filters[filterKey].some(filterValue => 
+
+        const hasMatch = filters[filterKey].some(filterValue =>
           eventTagValues.includes(filterValue)
         );
-        
+
         if (!hasMatch) return false;
       }
     }
-    
+
     return true;
   });
 }
@@ -339,7 +341,7 @@ async function fetchEventById(id) {
 }
 
 // Fetch events by kind in batches
-async function fetchEventsByKind(kinds, limit = 25) {
+async function fetchEventsByKind(kinds, limit = 10000) {
   console.log(`Fetching events by kinds: ${kinds} with limit: ${limit}`);
 
   const promises = [];
@@ -361,7 +363,7 @@ async function fetchEventsByKind(kinds, limit = 25) {
 }
 
 // Fetch events by author in batches
-async function fetchEventsByAuthor(authors, limit = 25) {
+async function fetchEventsByAuthor(authors, limit = 10000) {
   console.log(`Fetching events by authors: ${authors} with limit: ${limit}`);
 
   const promises = [];
@@ -383,7 +385,7 @@ async function fetchEventsByAuthor(authors, limit = 25) {
 }
 
 // Fetch events by tag in batches
-async function fetchEventsByTag(tags, limit = 25) {
+async function fetchEventsByTag(tags, limit = 10000) {
   console.log(`Fetching events by tags: ${JSON.stringify(tags)} with limit: ${limit}`);
 
   const promises = [];

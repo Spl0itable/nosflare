@@ -694,9 +694,9 @@ class rateLimiter {
         this.lastRefillTime = now;
     }
 }
-const pubkeyRateLimiter = new rateLimiter(10 / 60000, 10); // 10 EVENT messages per min
+const pubkeyRateLimiter = new rateLimiter(100 / 60000, 100); // 100 EVENT messages per min
 const excludedRateLimitKinds = []; // kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
-const reqRateLimiter = new rateLimiter(10 / 60000, 10);  // 10 REQ messages per min
+const reqRateLimiter = new rateLimiter(10000 / 60000, 10000);  // 10,000 REQ messages per min
 
 // Controls concurrent connections
 const MAX_CONCURRENT_CONNECTIONS = 6;
@@ -980,24 +980,24 @@ async function processReq(message, server) {
         }
     }
 
-    // Allow up to 50 event IDs
-    if (filters.ids && filters.ids.length > 50) {
-        console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 50`);
-        sendError(server, "The 'ids' filter must contain 50 or fewer event IDs.");
+    // Allow up to 10,000 event IDs
+    if (filters.ids && filters.ids.length > 10000) {
+        console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
+        sendError(server, "The 'ids' filter must contain 10000 or fewer event IDs.");
         sendEOSE(server, subscriptionId);
         return;
     }
 
-    // Allow up to a limit of 50 events
-    if (filters.limit && filters.limit > 50) {
-        console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 50`);
-        sendError(server, "REQ limit exceeded. Maximum allowed limit is 50.");
+    // Allow up to a limit of 10,000 events
+    if (filters.limit && filters.limit > 10000) {
+        console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
+        sendError(server, "REQ limit exceeded. Maximum allowed limit is 10000.");
         sendEOSE(server, subscriptionId);
         return;
     }
 
-    // If no limit is provided, set it to 50
-    filters.limit = filters.limit || 50;
+    // If no limit is provided, set it to 10,000
+    filters.limit = filters.limit || 10000;
 
     // Store the subscription in cache
     relayCache.addSubscription(wsId, subscriptionId, filters);
