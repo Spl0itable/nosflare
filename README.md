@@ -39,7 +39,7 @@ npm install -g esbuild
 
 ### Building
 
-Clone this repo to your machine, then `cd` into its directory, and open `relay-worker.js` in a file editor. Edit the contents of `relayInfo` and `relayIcon` as desired to customize the relay name, icon, etc.
+Clone this repo to your machine, then `cd` into its directory, and open `relay-worker.js` in a file editor. Edit the contents of `relayInfo` and enable any optional settings as desired by uncommenting them to customize the relay name, icon, limitations, etc.
 
 ***Important!*** Edit the `eventHelpers` and `reqHelpers` section by replacing the placeholder URLs with at least one URL for each. Detailed further in the Deployment steps below.
  
