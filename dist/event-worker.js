@@ -1,50 +1,7 @@
 // event-worker.js
-addEventListener("fetch", (event) => {
-  const { request } = event;
-  if (request.method === "POST") {
-    event.respondWith(handlePostRequest(request));
-  } else {
-    event.respondWith(new Response("Invalid request", { status: 400 }));
-  }
-});
-async function handlePostRequest(request) {
-  try {
-    const authHeader = request.headers.get("Authorization");
-    console.log(`Authorization header received: ${authHeader !== null}`);
-    if (!authHeader || authHeader !== `Bearer ${authToken}`) {
-      console.warn("Unauthorized request.");
-      return new Response("Unauthorized", { status: 401 });
-    }
-    const { type, event } = await request.json();
-    console.log(`Request type: ${type}, Event ID: ${event.id}`);
-    if (type === "EVENT") {
-      console.log(`Processing event with ID: ${event.id}`);
-      await processEvent(event);
-      return new Response("Event received successfully", { status: 200 });
-    } else {
-      console.warn(`Invalid request type: ${type}`);
-      return new Response("Invalid request type", { status: 400 });
-    }
-  } catch (error) {
-    console.error("Error processing POST request:", error);
-    return new Response(`Error processing request: ${error.message}`, { status: 500 });
-  }
-}
-var MAX_CONCURRENT_CONNECTIONS = 6;
-var activeConnections = 0;
-async function withConnectionLimit(promiseFunction) {
-  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  activeConnections += 1;
-  try {
-    return await promiseFunction();
-  } finally {
-    activeConnections -= 1;
-  }
-}
+var enableAntiSpam = false;
 var enableGlobalDuplicateCheck = false;
-var bypassDuplicateKinds = /* @__PURE__ */ new Set([
+var antiSpamKinds = /* @__PURE__ */ new Set([
   0,
   1,
   2,
@@ -173,9 +130,54 @@ var bypassDuplicateKinds = /* @__PURE__ */ new Set([
   39007,
   39008,
   39009
+  // Add other kinds you want to check for duplicates
 ]);
-function isDuplicateBypassed(kind) {
-  return bypassDuplicateKinds.has(kind);
+addEventListener("fetch", (event) => {
+  const { request } = event;
+  if (request.method === "POST") {
+    event.respondWith(handlePostRequest(request));
+  } else {
+    event.respondWith(new Response("Invalid request", { status: 400 }));
+  }
+});
+async function handlePostRequest(request) {
+  try {
+    const authHeader = request.headers.get("Authorization");
+    console.log(`Authorization header received: ${authHeader !== null}`);
+    if (!authHeader || authHeader !== `Bearer ${authToken}`) {
+      console.warn("Unauthorized request.");
+      return new Response("Unauthorized", { status: 401 });
+    }
+    const { type, event } = await request.json();
+    console.log(`Request type: ${type}, Event ID: ${event.id}`);
+    if (type === "EVENT") {
+      console.log(`Processing event with ID: ${event.id}`);
+      await processEvent(event);
+      return new Response("Event received successfully", { status: 200 });
+    } else {
+      console.warn(`Invalid request type: ${type}`);
+      return new Response("Invalid request type", { status: 400 });
+    }
+  } catch (error) {
+    console.error("Error processing POST request:", error);
+    return new Response(`Error processing request: ${error.message}`, { status: 500 });
+  }
+}
+var MAX_CONCURRENT_CONNECTIONS = 6;
+var activeConnections = 0;
+async function withConnectionLimit(promiseFunction) {
+  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  activeConnections += 1;
+  try {
+    return await promiseFunction();
+  } finally {
+    activeConnections -= 1;
+  }
+}
+function shouldCheckForDuplicates(kind) {
+  return enableAntiSpam && antiSpamKinds.has(kind);
 }
 async function processEvent(event) {
   try {
@@ -200,18 +202,16 @@ async function processEvent(event) {
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
   const metadataKey = `metadata/event:${event.id}`;
-  console.log(`Generating content hash for event with ID: ${event.id}`);
-  const contentHash = await hashContent(event);
-  const contentHashKey = enableGlobalDuplicateCheck ? `hashes/${contentHash}` : `hashes/${event.pubkey}:${contentHash}`;
-  if (isDuplicateBypassed(event.kind)) {
-    console.log(`Skipping duplicate check for kind: ${event.kind}`);
-  } else {
+  let contentHashKey = null;
+  if (shouldCheckForDuplicates(event.kind)) {
+    console.log(`Checking for duplicate content for kind ${event.kind}`);
+    const contentHash = await hashContent(event);
+    contentHashKey = enableGlobalDuplicateCheck ? `hashes/${contentHash}` : `hashes/${event.pubkey}:${contentHash}`;
     try {
-      console.log(`Checking for existing content hash for event ID: ${event.id}`);
       const existingHash = await withConnectionLimit(() => relayDb.get(contentHashKey));
       if (existingHash) {
-        console.log(`Duplicate content detected for event: ${JSON.stringify(event)}. Event dropped.`);
-        return { success: false, error: `Duplicate content detected for event with content: ${event.content}` };
+        console.log(`Duplicate content detected for event: ${event.id}`);
+        return { success: false, error: `Duplicate content detected` };
       }
     } catch (error) {
       if (error.name !== "R2Error" || error.message !== "R2 object not found") {
@@ -272,9 +272,11 @@ async function saveEventToR2(event) {
     kindKey,
     pubkeyKey,
     tags: [],
-    contentHashKey,
     compoundKeys: compoundKeys.map((ck) => ck.key)
   };
+  if (contentHashKey) {
+    metadata.contentHashKey = contentHashKey;
+  }
   const eventWithCountRef = { ...event, kindKey, pubkeyKey };
   const tagBatches = [];
   let currentBatch = [];
@@ -303,8 +305,7 @@ async function saveEventToR2(event) {
     const compoundKeyPromises = compoundKeys.map(
       (ck) => withConnectionLimit(() => relayDb.put(ck.key, JSON.stringify(event)))
     );
-    console.log(`Saving event and related data for event ID: ${event.id}`);
-    await Promise.all([
+    const basePromises = [
       withConnectionLimit(() => relayDb.put(kindKey, JSON.stringify(event))),
       withConnectionLimit(() => relayDb.put(pubkeyKey, JSON.stringify(event))),
       withConnectionLimit(() => relayDb.put(eventKey, JSON.stringify(eventWithCountRef))),
@@ -312,13 +313,18 @@ async function saveEventToR2(event) {
       withConnectionLimit(() => relayDb.put(`counts/pubkey_count_${event.pubkey}`, (pubkeyCount + 1).toString())),
       withConnectionLimit(() => relayDb.put(metadataKey, JSON.stringify(metadata))),
       ...compoundKeyPromises
-    ]);
+    ];
+    console.log(`Saving event and related data for event ID: ${event.id}`);
+    await Promise.all(basePromises);
     for (const batch of tagBatches) {
       await Promise.all(batch);
     }
-    if (!isDuplicateBypassed(event.kind)) {
+    if (contentHashKey) {
       console.log(`Saving content hash for event ID: ${event.id}`);
-      await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify(event)));
+      await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify({
+        eventId: event.id,
+        timestamp: event.created_at
+      })));
     }
     console.log(`Event ${event.id} saved successfully with compound keys.`);
     return { success: true };
@@ -353,10 +359,12 @@ async function processDeletionEvent(deletionEvent) {
           `events/event:${eventId}`,
           metadata.kindKey,
           metadata.pubkeyKey,
-          metadata.contentHashKey,
           ...metadata.tags,
           ...metadata.compoundKeys || []
         ];
+        if (metadata.contentHashKey) {
+          keysToDelete.push(metadata.contentHashKey);
+        }
         await Promise.all(keysToDelete.map((key) => withConnectionLimit(() => relayDb.delete(key))));
         await withConnectionLimit(() => relayDb.delete(metadataKey));
         await purgeCloudflareCache(keysToDelete);

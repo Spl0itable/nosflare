@@ -1,3 +1,9 @@
+## v5.24.37 - 2025-06-03
+
+- Tweak: added all NIP-11 options; paid relay status now shows correctly
+- Tweak: moved NIP-05 validation check to optional state using `checkValidNip05` in `relay-worker.js` defaults to disabled
+- New: added `enableAntiSpam` in `event-worker.js` for consolidated control over event hashing and duplicate content checking, defaults to disabled
+
 ## v5.23.37 - 2025-06-02
 
 - Hotfix: error breaking "since" and "until" filters

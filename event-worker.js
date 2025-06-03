@@ -1,5 +1,15 @@
 // EVENT helper worker
 
+// Anti-spam configuration
+const enableAntiSpam = false; // Set to true to enable hashing and duplicate content checking
+const enableGlobalDuplicateCheck = false; // When anti-spam is enabled, set to true for global hash (across all pubkeys and not individually)
+
+// Kinds subjected to duplicate checks when anti-spam is enabled
+const antiSpamKinds = new Set([
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 40, 41, 42, 43, 44, 64, 818, 1021, 1022, 1040, 1059, 1063, 1311, 1617, 1621, 1622, 1630, 1633, 1971, 1984, 1985, 1986, 1987, 2003, 2004, 2022, 4550, 5000, 5999, 6000, 6999, 7000, 9000, 9030, 9041, 9467, 9734, 9735, 9802, 10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10009, 10015, 10030, 10050, 10063, 10096, 13194, 21000, 22242, 23194, 23195, 24133, 24242, 27235, 30000, 30001, 30002, 30003, 30004, 30005, 30007, 30008, 30009, 30015, 30017, 30018, 30019, 30020, 30023, 30024, 30030, 30040, 30041, 30063, 30078, 30311, 30315, 30402, 30403, 30617, 30618, 30818, 30819, 31890, 31922, 31923, 31924, 31925, 31989, 31990, 34235, 34236, 34237, 34550, 39000, 39001, 39002, 39003, 39004, 39005, 39006, 39007, 39008, 39009
+  // Add other kinds you want to check for duplicates
+]);
+
 addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method === 'POST') {
@@ -55,26 +65,9 @@ async function withConnectionLimit(promiseFunction) {
   }
 }
 
-// Setting to enable or disable global duplicate hash check
-const enableGlobalDuplicateCheck = false;  // Set to true for global duplicate hash regardless of pubkey, or false for per-pubkey hash
-
-// Bypass kinds from duplicate hash checks - all kinds bypassed by default
-const bypassDuplicateKinds = new Set([
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 40, 41, 42, 43, 44, 64, 818, 1021, 1022, 1040, 1059, 1063, 1311, 1617, 1621, 1622, 1630, 1633, 1971, 1984, 1985, 1986, 1987, 2003, 2004, 2022, 4550, 5000, 5999, 6000, 6999, 7000, 9000, 9030, 9041, 9467, 9734, 9735, 9802, 10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10009, 10015, 10030, 10050, 10063, 10096, 13194, 21000, 22242, 23194, 23195, 24133, 24242, 27235, 30000, 30001, 30002, 30003, 30004, 30005, 30007, 30008, 30009, 30015, 30017, 30018, 30019, 30020, 30023, 30024, 30030, 30040, 30041, 30063, 30078, 30311, 30315, 30402, 30403, 30617, 30618, 30818, 30819, 31890, 31922, 31923, 31924, 31925, 31989, 31990, 34235, 34236, 34237, 34550, 39000, 39001, 39002, 39003, 39004, 39005, 39006, 39007, 39008, 39009
-]);
-
-// Kinds subjected to duplicate hash checks
-const duplicateCheckedKinds = new Set([]);
-
-function isDuplicateChecked(kind) {
-  if (duplicateCheckedKinds.size > 0 && !duplicateCheckedKinds.has(kind)) {
-    return false;
-  }
-  return !bypassDuplicateKinds.has(kind);
-}
-
-function isDuplicateBypassed(kind) {
-  return bypassDuplicateKinds.has(kind);
+// Check if anti-spam should be applied to this event kind
+function shouldCheckForDuplicates(kind) {
+  return enableAntiSpam && antiSpamKinds.has(kind);
 }
 
 // Handles EVENT messages
@@ -107,24 +100,24 @@ async function processEvent(event) {
 async function saveEventToR2(event) {
   const eventKey = `events/event:${event.id}`;
   const metadataKey = `metadata/event:${event.id}`;
-  console.log(`Generating content hash for event with ID: ${event.id}`);
+  
+  let contentHashKey = null;
+  
+  // Only perform anti-spam checks if enabled and applicable to this kind
+  if (shouldCheckForDuplicates(event.kind)) {
+    console.log(`Checking for duplicate content for kind ${event.kind}`);
+    
+    const contentHash = await hashContent(event);
+    contentHashKey = enableGlobalDuplicateCheck
+      ? `hashes/${contentHash}`
+      : `hashes/${event.pubkey}:${contentHash}`;
 
-  const contentHash = await hashContent(event);
-  const contentHashKey = enableGlobalDuplicateCheck
-    ? `hashes/${contentHash}`
-    : `hashes/${event.pubkey}:${contentHash}`;
-
-  // Check if the event kind allows duplicate hash checks
-  if (isDuplicateBypassed(event.kind)) {
-    console.log(`Skipping duplicate check for kind: ${event.kind}`);
-  } else {
     // Check if the content hash already exists
     try {
-      console.log(`Checking for existing content hash for event ID: ${event.id}`);
       const existingHash = await withConnectionLimit(() => relayDb.get(contentHashKey));
       if (existingHash) {
-        console.log(`Duplicate content detected for event: ${JSON.stringify(event)}. Event dropped.`);
-        return { success: false, error: `Duplicate content detected for event with content: ${event.content}` };
+        console.log(`Duplicate content detected for event: ${event.id}`);
+        return { success: false, error: `Duplicate content detected` };
       }
     } catch (error) {
       if (error.name !== "R2Error" || error.message !== "R2 object not found") {
@@ -203,9 +196,13 @@ async function saveEventToR2(event) {
     kindKey,
     pubkeyKey,
     tags: [],
-    contentHashKey,
     compoundKeys: compoundKeys.map(ck => ck.key)
   };
+  
+  // Only add contentHashKey if anti-spam is enabled for this kind
+  if (contentHashKey) {
+    metadata.contentHashKey = contentHashKey;
+  }
 
   const eventWithCountRef = { ...event, kindKey, pubkeyKey };
 
@@ -242,9 +239,8 @@ async function saveEventToR2(event) {
       withConnectionLimit(() => relayDb.put(ck.key, JSON.stringify(event)))
     );
 
-    // Save event and related data sequentially
-    console.log(`Saving event and related data for event ID: ${event.id}`);
-    await Promise.all([
+    // Prepare base promises
+    const basePromises = [
       withConnectionLimit(() => relayDb.put(kindKey, JSON.stringify(event))),
       withConnectionLimit(() => relayDb.put(pubkeyKey, JSON.stringify(event))),
       withConnectionLimit(() => relayDb.put(eventKey, JSON.stringify(eventWithCountRef))),
@@ -252,17 +248,24 @@ async function saveEventToR2(event) {
       withConnectionLimit(() => relayDb.put(`counts/pubkey_count_${event.pubkey}`, (pubkeyCount + 1).toString())),
       withConnectionLimit(() => relayDb.put(metadataKey, JSON.stringify(metadata))),
       ...compoundKeyPromises
-    ]);
+    ];
+
+    // Save event and related data
+    console.log(`Saving event and related data for event ID: ${event.id}`);
+    await Promise.all(basePromises);
 
     // Batch save tag data
     for (const batch of tagBatches) {
       await Promise.all(batch);
     }
 
-    // Save the content hash if duplicate checks are enabled for this kind
-    if (!isDuplicateBypassed(event.kind)) {
+    // Save the content hash only if anti-spam is enabled for this kind
+    if (contentHashKey) {
       console.log(`Saving content hash for event ID: ${event.id}`);
-      await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify(event)));
+      await withConnectionLimit(() => relayDb.put(contentHashKey, JSON.stringify({ 
+        eventId: event.id, 
+        timestamp: event.created_at 
+      })));
     }
 
     console.log(`Event ${event.id} saved successfully with compound keys.`);
@@ -307,10 +310,14 @@ async function processDeletionEvent(deletionEvent) {
           `events/event:${eventId}`,
           metadata.kindKey,
           metadata.pubkeyKey,
-          metadata.contentHashKey,
           ...metadata.tags,
           ...(metadata.compoundKeys || [])
         ];
+        
+        // Only delete contentHashKey if it exists
+        if (metadata.contentHashKey) {
+          keysToDelete.push(metadata.contentHashKey);
+        }
 
         await Promise.all(keysToDelete.map(key => withConnectionLimit(() => relayDb.delete(key))));
 
@@ -354,7 +361,7 @@ async function purgeCloudflareCache(keys) {
   });
 }
 
-// Hash content (excluding the ID)
+// Hash content (only called when anti-spam is enabled)
 async function hashContent(event) {
   const contentToHash = enableGlobalDuplicateCheck
     ? JSON.stringify({ kind: event.kind, tags: event.tags, content: event.content })

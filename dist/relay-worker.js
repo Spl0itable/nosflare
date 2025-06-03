@@ -2157,6 +2157,10 @@ var schnorr = /* @__PURE__ */ (() => ({
 }))();
 
 // relay-worker.js
+var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
+var PAY_TO_RELAY_ENABLED = false;
+var RELAY_ACCESS_PRICE_SATS = 212121;
+var PAID_PUBKEYS_PREFIX = "paid-pubkeys/";
 var relayInfo = {
   name: "Nosflare",
   description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
@@ -2164,13 +2168,49 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "5.23.37"
+  version: "5.24.37",
+  icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
+  // Optional fields (uncomment as needed):
+  // banner: "https://example.com/banner.jpg",
+  // privacy_policy: "https://example.com/privacy-policy.html",
+  // terms_of_service: "https://example.com/terms.html",
+  // Server limitations
+  limitation: {
+    // max_message_length: 524288, // 512KB
+    // max_subscriptions: 300,
+    // max_limit: 10000,
+    // max_subid_length: 256,
+    // max_event_tags: 2000,
+    // max_content_length: 70000,
+    // min_pow_difficulty: 0,
+    // auth_required: false,
+    payment_required: PAY_TO_RELAY_ENABLED,
+    restricted_writes: PAY_TO_RELAY_ENABLED
+    // created_at_lower_limit: 0,
+    // created_at_upper_limit: 2147483647,
+    // default_limit: 10000
+  }
+  // Event retention policies (uncomment and configure as needed):
+  // retention: [
+  //     { kinds: [0, 1, [5, 7], [40, 49]], time: 3600 },
+  //     { kinds: [[40000, 49999]], time: 100 },
+  //     { kinds: [[30000, 39999]], count: 1000 },
+  //     { time: 3600, count: 10000 }
+  // ],
+  // Content limitations by country (uncomment as needed):
+  // relay_countries: ["*"], // Use ["US", "CA", "EU"] for specific countries, ["*"] for global
+  // Community preferences (uncomment as needed):
+  // language_tags: ["en", "en-419"], // IETF language tags, use ["*"] for all languages
+  // tags: ["sfw-only", "bitcoin-only", "anime"], // Community/content tags
+  // posting_policy: "https://example.com/posting-policy.html",
+  // Payment configuration (added dynamically in handleRelayInfoRequest if PAY_TO_RELAY_ENABLED):
+  // payments_url: "https://my-relay/payments",
+  // fees: {
+  //     admission: [{ amount: 1000000, unit: "msats" }],
+  //     subscription: [{ amount: 5000000, unit: "msats", period: 2592000 }],
+  //     publication: [{ kinds: [4], amount: 100, unit: "msats" }],
+  // }
 };
-var relayIcon = "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png";
-var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
-var PAY_TO_RELAY_ENABLED = false;
-var RELAY_ACCESS_PRICE_SATS = 212121;
-var PAID_PUBKEYS_PREFIX = "paid-pubkeys/";
 var nip05Users = {
   "lux": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
   // ... more NIP-05 verified users
@@ -2228,6 +2268,7 @@ function containsBlockedContent(event) {
   }
   return false;
 }
+var checkValidNip05 = false;
 var blockedNip05Domains = /* @__PURE__ */ new Set([
   // Add domains that are explicitly blocked
   // "primal.net"
@@ -2248,6 +2289,235 @@ function isTagAllowed(tag) {
     return false;
   }
   return !blockedTags.has(tag);
+}
+addEventListener("fetch", (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
+  if (request.method === "POST" && url.searchParams.has("notify-zap") && PAY_TO_RELAY_ENABLED) {
+    event.respondWith(handlePaymentNotification(request));
+    return;
+  }
+  if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
+    event.respondWith(handleCheckPayment(request));
+    return;
+  }
+  if (url.pathname === "/") {
+    if (request.headers.get("Upgrade") === "websocket") {
+      event.respondWith(handleWebSocket(event, request));
+    } else if (request.headers.get("Accept") === "application/nostr+json") {
+      event.respondWith(handleRelayInfoRequest(request));
+    } else {
+      event.respondWith(serveHomePage());
+    }
+  } else if (url.pathname === "/.well-known/nostr.json") {
+    event.respondWith(handleNIP05Request(url));
+  } else if (url.pathname === "/favicon.ico") {
+    event.respondWith(serveFavicon(event));
+  } else {
+    event.respondWith(new Response("Invalid request", { status: 400 }));
+  }
+});
+async function handleRelayInfoRequest(request) {
+  const responseInfo = { ...relayInfo };
+  if (PAY_TO_RELAY_ENABLED) {
+    const url = new URL(request.url);
+    const paymentUrl = `${url.protocol}//${url.host}`;
+    responseInfo.payments_url = paymentUrl;
+    responseInfo.fees = {
+      admission: [{
+        amount: RELAY_ACCESS_PRICE_SATS * 1e3,
+        // Convert SATS to millisats
+        unit: "msats"
+      }]
+      // Additional fee structures (uncomment as needed):
+      // subscription: [{
+      //     amount: 5000000,
+      //     unit: "msats",
+      //     period: 2592000 // 30 days in seconds
+      // }],
+      // publication: [{
+      //     kinds: [4], // DM kind
+      //     amount: 100,
+      //     unit: "msats"
+      // }]
+    };
+  }
+  const headers = new Headers({
+    "Content-Type": "application/nostr+json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, Accept",
+    "Access-Control-Allow-Methods": "GET"
+  });
+  return new Response(JSON.stringify(responseInfo), { status: 200, headers });
+}
+async function serveFavicon() {
+  const response = await fetch(relayInfo.icon);
+  if (response.ok) {
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", "max-age=3600");
+    return new Response(response.body, {
+      status: response.status,
+      headers
+    });
+  }
+  return new Response(null, { status: 404 });
+}
+async function handleNIP05Request(url) {
+  const name = url.searchParams.get("name");
+  if (!name) {
+    return new Response(JSON.stringify({ error: "Missing 'name' parameter" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  const pubkey = nip05Users[name.toLowerCase()];
+  if (!pubkey) {
+    return new Response(JSON.stringify({ error: "User not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  const response = {
+    names: {
+      [name]: pubkey
+    },
+    relays: {
+      [pubkey]: [
+        // ... add relays for NIP-05 users
+      ]
+    }
+  };
+  return new Response(JSON.stringify(response), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*"
+    }
+  });
+}
+var relayCache = {
+  _cache: {},
+  _subscriptions: {},
+  // Store subscriptions
+  get(key) {
+    const item = this._cache[key];
+    if (item && item.expires > Date.now()) {
+      return item.value;
+    }
+    return null;
+  },
+  set(key, value, ttl = 6e4) {
+    this._cache[key] = {
+      value,
+      expires: Date.now() + ttl
+    };
+  },
+  delete(key) {
+    delete this._cache[key];
+  },
+  addSubscription(wsId, subscriptionId, filters) {
+    if (!this._subscriptions[wsId]) {
+      this._subscriptions[wsId] = {};
+    }
+    this._subscriptions[wsId][subscriptionId] = filters;
+  },
+  getSubscription(wsId, subscriptionId) {
+    return this._subscriptions[wsId]?.[subscriptionId] || null;
+  },
+  deleteSubscription(wsId, subscriptionId) {
+    if (this._subscriptions[wsId]) {
+      delete this._subscriptions[wsId][subscriptionId];
+    }
+  },
+  clearSubscriptions(wsId) {
+    delete this._subscriptions[wsId];
+  }
+};
+var rateLimiter = class {
+  constructor(rate, capacity) {
+    this.tokens = capacity;
+    this.lastRefillTime = Date.now();
+    this.capacity = capacity;
+    this.fillRate = rate;
+  }
+  removeToken() {
+    this.refill();
+    if (this.tokens < 1) {
+      return false;
+    }
+    this.tokens -= 1;
+    return true;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsedTime = now - this.lastRefillTime;
+    const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
+    this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
+    this.lastRefillTime = now;
+  }
+};
+var pubkeyRateLimiter = new rateLimiter(100 / 6e4, 100);
+var excludedRateLimitKinds = [];
+var reqRateLimiter = new rateLimiter(1e4 / 6e4, 1e4);
+var MAX_CONCURRENT_CONNECTIONS = 6;
+var activeConnections = 0;
+async function withConnectionLimit(promiseFunction) {
+  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  activeConnections += 1;
+  try {
+    return await promiseFunction();
+  } finally {
+    activeConnections -= 1;
+  }
+}
+async function handleWebSocket(event, request) {
+  const { 0: client, 1: server } = new WebSocketPair();
+  server.accept();
+  server.addEventListener("message", async (messageEvent) => {
+    event.waitUntil(
+      (async () => {
+        try {
+          let messageData;
+          if (messageEvent.data instanceof ArrayBuffer) {
+            const textDecoder = new TextDecoder("utf-8");
+            const decodedText = textDecoder.decode(messageEvent.data);
+            messageData = JSON.parse(decodedText);
+          } else {
+            messageData = JSON.parse(messageEvent.data);
+          }
+          const messageType = messageData[0];
+          switch (messageType) {
+            case "EVENT":
+              await processEvent(messageData[1], server);
+              break;
+            case "REQ":
+              await processReq(messageData, server);
+              break;
+            case "CLOSE":
+              await closeSubscription(messageData[1], server);
+              break;
+          }
+        } catch (e) {
+          sendError(server, "Failed to process the message");
+          console.error("Failed to process message:", e);
+        }
+      })()
+    );
+  });
+  server.addEventListener("close", (event2) => {
+    const wsId = server.id || Math.random().toString(36).substr(2, 9);
+    relayCache.clearSubscriptions(wsId);
+    console.log("WebSocket closed", event2.code, event2.reason);
+  });
+  server.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
+  });
+  return new Response(null, {
+    status: 101,
+    webSocket: client
+  });
 }
 async function serveHomePage() {
   const payToRelaySection = PAY_TO_RELAY_ENABLED ? `
@@ -2658,211 +2928,6 @@ async function serveHomePage() {
     }
   });
 }
-addEventListener("fetch", (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
-  if (request.method === "POST" && url.searchParams.has("notify-zap") && PAY_TO_RELAY_ENABLED) {
-    event.respondWith(handlePaymentNotification(request));
-    return;
-  }
-  if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
-    event.respondWith(handleCheckPayment(request));
-    return;
-  }
-  if (url.pathname === "/") {
-    if (request.headers.get("Upgrade") === "websocket") {
-      event.respondWith(handleWebSocket(event, request));
-    } else if (request.headers.get("Accept") === "application/nostr+json") {
-      event.respondWith(handleRelayInfoRequest());
-    } else {
-      event.respondWith(serveHomePage());
-    }
-  } else if (url.pathname === "/.well-known/nostr.json") {
-    event.respondWith(handleNIP05Request(url));
-  } else if (url.pathname === "/favicon.ico") {
-    event.respondWith(serveFavicon(event));
-  } else {
-    event.respondWith(new Response("Invalid request", { status: 400 }));
-  }
-});
-async function handleRelayInfoRequest() {
-  const headers = new Headers({
-    "Content-Type": "application/nostr+json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Accept",
-    "Access-Control-Allow-Methods": "GET"
-  });
-  return new Response(JSON.stringify(relayInfo), { status: 200, headers });
-}
-async function serveFavicon() {
-  const response = await fetch(relayIcon);
-  if (response.ok) {
-    const headers = new Headers(response.headers);
-    headers.set("Cache-Control", "max-age=3600");
-    return new Response(response.body, {
-      status: response.status,
-      headers
-    });
-  }
-  return new Response(null, { status: 404 });
-}
-async function handleNIP05Request(url) {
-  const name = url.searchParams.get("name");
-  if (!name) {
-    return new Response(JSON.stringify({ error: "Missing 'name' parameter" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  const pubkey = nip05Users[name.toLowerCase()];
-  if (!pubkey) {
-    return new Response(JSON.stringify({ error: "User not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  const response = {
-    names: {
-      [name]: pubkey
-    },
-    relays: {
-      [pubkey]: [
-        // ... add relays for NIP-05 users
-      ]
-    }
-  };
-  return new Response(JSON.stringify(response), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
-    }
-  });
-}
-var relayCache = {
-  _cache: {},
-  _subscriptions: {},
-  // Store subscriptions
-  get(key) {
-    const item = this._cache[key];
-    if (item && item.expires > Date.now()) {
-      return item.value;
-    }
-    return null;
-  },
-  set(key, value, ttl = 6e4) {
-    this._cache[key] = {
-      value,
-      expires: Date.now() + ttl
-    };
-  },
-  delete(key) {
-    delete this._cache[key];
-  },
-  addSubscription(wsId, subscriptionId, filters) {
-    if (!this._subscriptions[wsId]) {
-      this._subscriptions[wsId] = {};
-    }
-    this._subscriptions[wsId][subscriptionId] = filters;
-  },
-  getSubscription(wsId, subscriptionId) {
-    return this._subscriptions[wsId]?.[subscriptionId] || null;
-  },
-  deleteSubscription(wsId, subscriptionId) {
-    if (this._subscriptions[wsId]) {
-      delete this._subscriptions[wsId][subscriptionId];
-    }
-  },
-  clearSubscriptions(wsId) {
-    delete this._subscriptions[wsId];
-  }
-};
-var rateLimiter = class {
-  constructor(rate, capacity) {
-    this.tokens = capacity;
-    this.lastRefillTime = Date.now();
-    this.capacity = capacity;
-    this.fillRate = rate;
-  }
-  removeToken() {
-    this.refill();
-    if (this.tokens < 1) {
-      return false;
-    }
-    this.tokens -= 1;
-    return true;
-  }
-  refill() {
-    const now = Date.now();
-    const elapsedTime = now - this.lastRefillTime;
-    const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
-    this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
-    this.lastRefillTime = now;
-  }
-};
-var pubkeyRateLimiter = new rateLimiter(100 / 6e4, 100);
-var excludedRateLimitKinds = [];
-var reqRateLimiter = new rateLimiter(1e4 / 6e4, 1e4);
-var MAX_CONCURRENT_CONNECTIONS = 6;
-var activeConnections = 0;
-async function withConnectionLimit(promiseFunction) {
-  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  activeConnections += 1;
-  try {
-    return await promiseFunction();
-  } finally {
-    activeConnections -= 1;
-  }
-}
-async function handleWebSocket(event, request) {
-  const { 0: client, 1: server } = new WebSocketPair();
-  server.accept();
-  server.addEventListener("message", async (messageEvent) => {
-    event.waitUntil(
-      (async () => {
-        try {
-          let messageData;
-          if (messageEvent.data instanceof ArrayBuffer) {
-            const textDecoder = new TextDecoder("utf-8");
-            const decodedText = textDecoder.decode(messageEvent.data);
-            messageData = JSON.parse(decodedText);
-          } else {
-            messageData = JSON.parse(messageEvent.data);
-          }
-          const messageType = messageData[0];
-          switch (messageType) {
-            case "EVENT":
-              await processEvent(messageData[1], server);
-              break;
-            case "REQ":
-              await processReq(messageData, server);
-              break;
-            case "CLOSE":
-              await closeSubscription(messageData[1], server);
-              break;
-          }
-        } catch (e) {
-          sendError(server, "Failed to process the message");
-          console.error("Failed to process message:", e);
-        }
-      })()
-    );
-  });
-  server.addEventListener("close", (event2) => {
-    const wsId = server.id || Math.random().toString(36).substr(2, 9);
-    relayCache.clearSubscriptions(wsId);
-    console.log("WebSocket closed", event2.code, event2.reason);
-  });
-  server.addEventListener("error", (error) => {
-    console.error("WebSocket error:", error);
-  });
-  return new Response(null, {
-    status: 101,
-    webSocket: client
-  });
-}
 async function processEvent(event, server) {
   try {
     if (typeof event !== "object" || event === null || Array.isArray(event)) {
@@ -2932,7 +2997,7 @@ async function processEventInBackground(event, server) {
         return { success: false, error: `Tag '${tagKey}' is blocked.` };
       }
     }
-    if (event.kind !== 0) {
+    if (checkValidNip05 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
       if (!isValidNIP05) {
         console.error(`[Event] Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
