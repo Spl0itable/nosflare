@@ -1,3 +1,9 @@
+## v6.0.0 - 2025-06-04
+
+- New: deprecated usage of R2 bucket in place of D1 SQL database
+- New: supports read replication to lower latency for read queries and scale read throughput by adding read-only database copies, called read replicas, across regions globally closer to clients
+- New: includes migration worker script `migrate.js` which can be deployed on seperate worker to migrate data from R2 bucket to D1 database
+
 ## v5.24.37 - 2025-06-03
 
 - Tweak: added all NIP-11 options; paid relay status now shows correctly

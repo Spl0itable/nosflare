@@ -90,9 +90,6 @@ function randomBytes(bytesLength = 32) {
   if (crypto2 && typeof crypto2.getRandomValues === "function") {
     return crypto2.getRandomValues(new Uint8Array(bytesLength));
   }
-  if (crypto2 && typeof crypto2.randomBytes === "function") {
-    return crypto2.randomBytes(bytesLength);
-  }
   throw new Error("crypto.getRandomValues must be defined");
 }
 
@@ -348,76 +345,9 @@ var SHA256 = class extends HashMD {
 };
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// ../../../node_modules/@noble/hashes/esm/hmac.js
-var HMAC = class extends Hash {
-  constructor(hash2, _key) {
-    super();
-    this.finished = false;
-    this.destroyed = false;
-    hash(hash2);
-    const key = toBytes(_key);
-    this.iHash = hash2.create();
-    if (typeof this.iHash.update !== "function")
-      throw new Error("Expected instance of class which extends utils.Hash");
-    this.blockLen = this.iHash.blockLen;
-    this.outputLen = this.iHash.outputLen;
-    const blockLen = this.blockLen;
-    const pad = new Uint8Array(blockLen);
-    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54;
-    this.iHash.update(pad);
-    this.oHash = hash2.create();
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54 ^ 92;
-    this.oHash.update(pad);
-    pad.fill(0);
-  }
-  update(buf) {
-    exists(this);
-    this.iHash.update(buf);
-    return this;
-  }
-  digestInto(out) {
-    exists(this);
-    bytes(out, this.outputLen);
-    this.finished = true;
-    this.iHash.digestInto(out);
-    this.oHash.update(out);
-    this.oHash.digestInto(out);
-    this.destroy();
-  }
-  digest() {
-    const out = new Uint8Array(this.oHash.outputLen);
-    this.digestInto(out);
-    return out;
-  }
-  _cloneInto(to) {
-    to || (to = Object.create(Object.getPrototypeOf(this), {}));
-    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
-    to = to;
-    to.finished = finished;
-    to.destroyed = destroyed;
-    to.blockLen = blockLen;
-    to.outputLen = outputLen;
-    to.oHash = oHash._cloneInto(to.oHash);
-    to.iHash = iHash._cloneInto(to.iHash);
-    return to;
-  }
-  destroy() {
-    this.destroyed = true;
-    this.oHash.destroy();
-    this.iHash.destroy();
-  }
-};
-var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
-hmac.create = (hash2, key) => new HMAC(hash2, key);
-
 // ../../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
-  aInRange: () => aInRange,
-  abool: () => abool,
   abytes: () => abytes,
   bitGet: () => bitGet,
   bitLen: () => bitLen,
@@ -432,10 +362,7 @@ __export(utils_exports, {
   equalBytes: () => equalBytes,
   hexToBytes: () => hexToBytes,
   hexToNumber: () => hexToNumber,
-  inRange: () => inRange,
   isBytes: () => isBytes2,
-  memoized: () => memoized,
-  notImplemented: () => notImplemented,
   numberToBytesBE: () => numberToBytesBE,
   numberToBytesLE: () => numberToBytesLE,
   numberToHexUnpadded: () => numberToHexUnpadded,
@@ -443,19 +370,15 @@ __export(utils_exports, {
   utf8ToBytes: () => utf8ToBytes2,
   validateObject: () => validateObject
 });
-var _0n = /* @__PURE__ */ BigInt(0);
-var _1n = /* @__PURE__ */ BigInt(1);
-var _2n = /* @__PURE__ */ BigInt(2);
+var _0n = BigInt(0);
+var _1n = BigInt(1);
+var _2n = BigInt(2);
 function isBytes2(a) {
   return a instanceof Uint8Array || a != null && typeof a === "object" && a.constructor.name === "Uint8Array";
 }
 function abytes(item) {
   if (!isBytes2(item))
     throw new Error("Uint8Array expected");
-}
-function abool(title, value) {
-  if (typeof value !== "boolean")
-    throw new Error(`${title} must be valid boolean, got "${value}".`);
 }
 var hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 function bytesToHex(bytes2) {
@@ -466,8 +389,8 @@ function bytesToHex(bytes2) {
   }
   return hex;
 }
-function numberToHexUnpadded(num2) {
-  const hex = num2.toString(16);
+function numberToHexUnpadded(num) {
+  const hex = num.toString(16);
   return hex.length & 1 ? `0${hex}` : hex;
 }
 function hexToNumber(hex) {
@@ -566,14 +489,6 @@ function utf8ToBytes2(str) {
     throw new Error(`utf8ToBytes expected string, got ${typeof str}`);
   return new Uint8Array(new TextEncoder().encode(str));
 }
-var isPosBig = (n) => typeof n === "bigint" && _0n <= n;
-function inRange(n, min, max) {
-  return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
-}
-function aInRange(title, n, min, max) {
-  if (!inRange(n, min, max))
-    throw new Error(`expected valid ${title}: ${min} <= n < ${max}, got ${typeof n} ${n}`);
-}
 function bitLen(n) {
   let len;
   for (len = 0; n > _0n; n >>= _1n, len += 1)
@@ -666,20 +581,6 @@ function validateObject(object, validators, optValidators = {}) {
     checkField(fieldName, type, true);
   return object;
 }
-var notImplemented = () => {
-  throw new Error("not implemented");
-};
-function memoized(fn) {
-  const map = /* @__PURE__ */ new WeakMap();
-  return (arg, ...args) => {
-    const val = map.get(arg);
-    if (val !== void 0)
-      return val;
-    const computed = fn(arg, ...args);
-    map.set(arg, computed);
-    return computed;
-  };
-}
 
 // ../../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
@@ -695,7 +596,7 @@ function mod(a, b) {
   const result = a % b;
   return result >= _0n2 ? result : b + result;
 }
-function pow(num2, power, modulo) {
+function pow(num, power, modulo) {
   if (modulo <= _0n2 || power < _0n2)
     throw new Error("Expected power/modulo > 0");
   if (modulo === _1n2)
@@ -703,8 +604,8 @@ function pow(num2, power, modulo) {
   let res = _1n2;
   while (power > _0n2) {
     if (power & _1n2)
-      res = res * num2 % modulo;
-    num2 = num2 * num2 % modulo;
+      res = res * num % modulo;
+    num = num * num % modulo;
     power >>= _1n2;
   }
   return res;
@@ -769,9 +670,9 @@ function tonelliShanks(P) {
           break;
         t2 = Fp2.sqr(t2);
       }
-      const ge = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
-      g = Fp2.sqr(ge);
-      x = Fp2.mul(x, ge);
+      const ge2 = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
+      g = Fp2.sqr(ge2);
+      x = Fp2.mul(x, ge2);
       b = Fp2.mul(b, g);
       r = m;
     }
@@ -837,15 +738,15 @@ function validateField(field) {
   }, initial);
   return validateObject(field, opts);
 }
-function FpPow(f, num2, power) {
+function FpPow(f, num, power) {
   if (power < _0n2)
     throw new Error("Expected power > 0");
   if (power === _0n2)
     return f.ONE;
   if (power === _1n2)
-    return num2;
+    return num;
   let p = f.ONE;
-  let d = num2;
+  let d = num;
   while (power > _0n2) {
     if (power & _1n2)
       p = f.mul(p, d);
@@ -856,18 +757,18 @@ function FpPow(f, num2, power) {
 }
 function FpInvertBatch(f, nums) {
   const tmp = new Array(nums.length);
-  const lastMultiplied = nums.reduce((acc, num2, i) => {
-    if (f.is0(num2))
+  const lastMultiplied = nums.reduce((acc, num, i) => {
+    if (f.is0(num))
       return acc;
     tmp[i] = acc;
-    return f.mul(acc, num2);
+    return f.mul(acc, num);
   }, f.ONE);
   const inverted = f.inv(lastMultiplied);
-  nums.reduceRight((acc, num2, i) => {
-    if (f.is0(num2))
+  nums.reduceRight((acc, num, i) => {
+    if (f.is0(num))
       return acc;
     tmp[i] = f.mul(acc, tmp[i]);
-    return f.mul(acc, num2);
+    return f.mul(acc, num);
   }, inverted);
   return tmp;
 }
@@ -890,34 +791,34 @@ function Field(ORDER, bitLen2, isLE2 = false, redef = {}) {
     MASK: bitMask(BITS),
     ZERO: _0n2,
     ONE: _1n2,
-    create: (num2) => mod(num2, ORDER),
-    isValid: (num2) => {
-      if (typeof num2 !== "bigint")
-        throw new Error(`Invalid field element: expected bigint, got ${typeof num2}`);
-      return _0n2 <= num2 && num2 < ORDER;
+    create: (num) => mod(num, ORDER),
+    isValid: (num) => {
+      if (typeof num !== "bigint")
+        throw new Error(`Invalid field element: expected bigint, got ${typeof num}`);
+      return _0n2 <= num && num < ORDER;
     },
-    is0: (num2) => num2 === _0n2,
-    isOdd: (num2) => (num2 & _1n2) === _1n2,
-    neg: (num2) => mod(-num2, ORDER),
+    is0: (num) => num === _0n2,
+    isOdd: (num) => (num & _1n2) === _1n2,
+    neg: (num) => mod(-num, ORDER),
     eql: (lhs, rhs) => lhs === rhs,
-    sqr: (num2) => mod(num2 * num2, ORDER),
+    sqr: (num) => mod(num * num, ORDER),
     add: (lhs, rhs) => mod(lhs + rhs, ORDER),
     sub: (lhs, rhs) => mod(lhs - rhs, ORDER),
     mul: (lhs, rhs) => mod(lhs * rhs, ORDER),
-    pow: (num2, power) => FpPow(f, num2, power),
+    pow: (num, power) => FpPow(f, num, power),
     div: (lhs, rhs) => mod(lhs * invert(rhs, ORDER), ORDER),
     // Same as above, but doesn't normalize
-    sqrN: (num2) => num2 * num2,
+    sqrN: (num) => num * num,
     addN: (lhs, rhs) => lhs + rhs,
     subN: (lhs, rhs) => lhs - rhs,
     mulN: (lhs, rhs) => lhs * rhs,
-    inv: (num2) => invert(num2, ORDER),
+    inv: (num) => invert(num, ORDER),
     sqrt: redef.sqrt || ((n) => sqrtP(f, n)),
     invertBatch: (lst) => FpInvertBatch(f, lst),
     // TODO: do we really need constant cmov?
     // We don't have const-time bigints anyway, so probably will be not very useful
     cmov: (a, b, c) => c ? b : a,
-    toBytes: (num2) => isLE2 ? numberToBytesLE(num2, BYTES) : numberToBytesBE(num2, BYTES),
+    toBytes: (num) => isLE2 ? numberToBytesLE(num, BYTES) : numberToBytesBE(num, BYTES),
     fromBytes: (bytes2) => {
       if (bytes2.length !== BYTES)
         throw new Error(`Fp.fromBytes: expected ${BYTES}, got ${bytes2.length}`);
@@ -942,27 +843,20 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   const minLen = getMinHashLength(fieldOrder);
   if (len < 16 || len < minLen || len > 1024)
     throw new Error(`expected ${minLen}-1024 bytes of input, got ${len}`);
-  const num2 = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
-  const reduced = mod(num2, fieldOrder - _1n2) + _1n2;
+  const num = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
+  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 
 // ../../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
-var pointPrecomputes = /* @__PURE__ */ new WeakMap();
-var pointWindowSizes = /* @__PURE__ */ new WeakMap();
 function wNAF(c, bits) {
   const constTimeNegate = (condition, item) => {
     const neg = item.negate();
     return condition ? neg : item;
   };
-  const validateW = (W) => {
-    if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
-      throw new Error(`Wrong window size=${W}, should be [1..${bits}]`);
-  };
   const opts = (W) => {
-    validateW(W);
     const windows = Math.ceil(bits / W) + 1;
     const windowSize = 2 ** (W - 1);
     return { windows, windowSize };
@@ -1041,61 +935,18 @@ function wNAF(c, bits) {
       }
       return { p, f };
     },
-    wNAFCached(P, n, transform) {
-      const W = pointWindowSizes.get(P) || 1;
-      let comp = pointPrecomputes.get(P);
+    wNAFCached(P, precomputesMap, n, transform) {
+      const W = P._WINDOW_SIZE || 1;
+      let comp = precomputesMap.get(P);
       if (!comp) {
         comp = this.precomputeWindow(P, W);
-        if (W !== 1)
-          pointPrecomputes.set(P, transform(comp));
+        if (W !== 1) {
+          precomputesMap.set(P, transform(comp));
+        }
       }
       return this.wNAF(W, comp, n);
-    },
-    // We calculate precomputes for elliptic curve point multiplication
-    // using windowed method. This specifies window size and
-    // stores precomputed values. Usually only base point would be precomputed.
-    setWindowSize(P, W) {
-      validateW(W);
-      pointWindowSizes.set(P, W);
-      pointPrecomputes.delete(P);
     }
   };
-}
-function pippenger(c, field, points, scalars) {
-  if (!Array.isArray(points) || !Array.isArray(scalars) || scalars.length !== points.length)
-    throw new Error("arrays of points and scalars must have equal length");
-  scalars.forEach((s, i) => {
-    if (!field.isValid(s))
-      throw new Error(`wrong scalar at index ${i}`);
-  });
-  points.forEach((p, i) => {
-    if (!(p instanceof c))
-      throw new Error(`wrong point at index ${i}`);
-  });
-  const wbits = bitLen(BigInt(points.length));
-  const windowSize = wbits > 12 ? wbits - 3 : wbits > 4 ? wbits - 2 : wbits ? 2 : 1;
-  const MASK = (1 << windowSize) - 1;
-  const buckets = new Array(MASK + 1).fill(c.ZERO);
-  const lastBits = Math.floor((field.BITS - 1) / windowSize) * windowSize;
-  let sum = c.ZERO;
-  for (let i = lastBits; i >= 0; i -= windowSize) {
-    buckets.fill(c.ZERO);
-    for (let j = 0; j < scalars.length; j++) {
-      const scalar = scalars[j];
-      const wbits2 = Number(scalar >> BigInt(i) & BigInt(MASK));
-      buckets[wbits2] = buckets[wbits2].add(points[j]);
-    }
-    let resI = c.ZERO;
-    for (let j = buckets.length - 1, sumI = c.ZERO; j > 0; j--) {
-      sumI = sumI.add(buckets[j]);
-      resI = resI.add(sumI);
-    }
-    sum = sum.add(resI);
-    if (i !== 0)
-      for (let j = 0; j < windowSize; j++)
-        sum = sum.double();
-  }
-  return sum;
 }
 function validateBasic(curve) {
   validateField(curve.Fp);
@@ -1116,12 +967,6 @@ function validateBasic(curve) {
 }
 
 // ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
-function validateSigVerOpts(opts) {
-  if (opts.lowS !== void 0)
-    abool("lowS", opts.lowS);
-  if (opts.prehash !== void 0)
-    abool("prehash", opts.prehash);
-}
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1155,99 +1000,48 @@ var DER = {
       super(m);
     }
   },
-  // Basic building block is TLV (Tag-Length-Value)
-  _tlv: {
-    encode: (tag, data) => {
-      const { Err: E } = DER;
-      if (tag < 0 || tag > 256)
-        throw new E("tlv.encode: wrong tag");
-      if (data.length & 1)
-        throw new E("tlv.encode: unpadded data");
-      const dataLen = data.length / 2;
-      const len = numberToHexUnpadded(dataLen);
-      if (len.length / 2 & 128)
-        throw new E("tlv.encode: long form length too big");
-      const lenLen = dataLen > 127 ? numberToHexUnpadded(len.length / 2 | 128) : "";
-      return `${numberToHexUnpadded(tag)}${lenLen}${len}${data}`;
-    },
-    // v - value, l - left bytes (unparsed)
-    decode(tag, data) {
-      const { Err: E } = DER;
-      let pos = 0;
-      if (tag < 0 || tag > 256)
-        throw new E("tlv.encode: wrong tag");
-      if (data.length < 2 || data[pos++] !== tag)
-        throw new E("tlv.decode: wrong tlv");
-      const first = data[pos++];
-      const isLong = !!(first & 128);
-      let length = 0;
-      if (!isLong)
-        length = first;
-      else {
-        const lenLen = first & 127;
-        if (!lenLen)
-          throw new E("tlv.decode(long): indefinite length not supported");
-        if (lenLen > 4)
-          throw new E("tlv.decode(long): byte length is too big");
-        const lengthBytes = data.subarray(pos, pos + lenLen);
-        if (lengthBytes.length !== lenLen)
-          throw new E("tlv.decode: length bytes not complete");
-        if (lengthBytes[0] === 0)
-          throw new E("tlv.decode(long): zero leftmost byte");
-        for (const b of lengthBytes)
-          length = length << 8 | b;
-        pos += lenLen;
-        if (length < 128)
-          throw new E("tlv.decode(long): not minimal encoding");
-      }
-      const v = data.subarray(pos, pos + length);
-      if (v.length !== length)
-        throw new E("tlv.decode: wrong value length");
-      return { v, l: data.subarray(pos + length) };
-    }
-  },
-  // https://crypto.stackexchange.com/a/57734 Leftmost bit of first byte is 'negative' flag,
-  // since we always use positive integers here. It must always be empty:
-  // - add zero byte if exists
-  // - if next byte doesn't have a flag, leading zero is not allowed (minimal encoding)
-  _int: {
-    encode(num2) {
-      const { Err: E } = DER;
-      if (num2 < _0n4)
-        throw new E("integer: negative integers are not allowed");
-      let hex = numberToHexUnpadded(num2);
-      if (Number.parseInt(hex[0], 16) & 8)
-        hex = "00" + hex;
-      if (hex.length & 1)
-        throw new E("unexpected assertion");
-      return hex;
-    },
-    decode(data) {
-      const { Err: E } = DER;
-      if (data[0] & 128)
-        throw new E("Invalid signature integer: negative");
-      if (data[0] === 0 && !(data[1] & 128))
-        throw new E("Invalid signature integer: unnecessary leading zero");
-      return b2n(data);
-    }
+  _parseInt(data) {
+    const { Err: E } = DER;
+    if (data.length < 2 || data[0] !== 2)
+      throw new E("Invalid signature integer tag");
+    const len = data[1];
+    const res = data.subarray(2, len + 2);
+    if (!len || res.length !== len)
+      throw new E("Invalid signature integer: wrong length");
+    if (res[0] & 128)
+      throw new E("Invalid signature integer: negative");
+    if (res[0] === 0 && !(res[1] & 128))
+      throw new E("Invalid signature integer: unnecessary leading zero");
+    return { d: b2n(res), l: data.subarray(len + 2) };
   },
   toSig(hex) {
-    const { Err: E, _int: int, _tlv: tlv } = DER;
+    const { Err: E } = DER;
     const data = typeof hex === "string" ? h2b(hex) : hex;
     abytes(data);
-    const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
-    if (seqLeftBytes.length)
+    let l = data.length;
+    if (l < 2 || data[0] != 48)
+      throw new E("Invalid signature tag");
+    if (data[1] !== l - 2)
+      throw new E("Invalid signature: incorrect length");
+    const { d: r, l: sBytes } = DER._parseInt(data.subarray(2));
+    const { d: s, l: rBytesLeft } = DER._parseInt(sBytes);
+    if (rBytesLeft.length)
       throw new E("Invalid signature: left bytes after parsing");
-    const { v: rBytes, l: rLeftBytes } = tlv.decode(2, seqBytes);
-    const { v: sBytes, l: sLeftBytes } = tlv.decode(2, rLeftBytes);
-    if (sLeftBytes.length)
-      throw new E("Invalid signature: left bytes after parsing");
-    return { r: int.decode(rBytes), s: int.decode(sBytes) };
+    return { r, s };
   },
   hexFromSig(sig) {
-    const { _tlv: tlv, _int: int } = DER;
-    const seq = `${tlv.encode(2, int.encode(sig.r))}${tlv.encode(2, int.encode(sig.s))}`;
-    return tlv.encode(48, seq);
+    const slice = (s2) => Number.parseInt(s2[0], 16) & 8 ? "00" + s2 : s2;
+    const h = (num) => {
+      const hex = num.toString(16);
+      return hex.length & 1 ? `0${hex}` : hex;
+    };
+    const s = slice(h(sig.s));
+    const r = slice(h(sig.r));
+    const shl = s.length / 2;
+    const rhl = r.length / 2;
+    const sl = h(shl);
+    const rl = h(rhl);
+    return `30${h(rhl + shl + 4)}02${rl}${r}02${sl}${s}`;
   }
 };
 var _0n4 = BigInt(0);
@@ -1258,7 +1052,6 @@ var _4n2 = BigInt(4);
 function weierstrassPoints(opts) {
   const CURVE = validatePointOpts(opts);
   const { Fp: Fp2 } = CURVE;
-  const Fn = Field(CURVE.n, CURVE.nBitLength);
   const toBytes2 = CURVE.toBytes || ((_c, point, _isCompressed) => {
     const a = point.toAffine();
     return concatBytes2(Uint8Array.from([4]), Fp2.toBytes(a.x), Fp2.toBytes(a.y));
@@ -1277,11 +1070,15 @@ function weierstrassPoints(opts) {
   }
   if (!Fp2.eql(Fp2.sqr(CURVE.Gy), weierstrassEquation(CURVE.Gx)))
     throw new Error("bad generator point: equation left != right");
-  function isWithinCurveOrder(num2) {
-    return inRange(num2, _1n4, CURVE.n);
+  function isWithinCurveOrder(num) {
+    return typeof num === "bigint" && _0n4 < num && num < CURVE.n;
+  }
+  function assertGE(num) {
+    if (!isWithinCurveOrder(num))
+      throw new Error("Expected valid bigint: 0 < bigint < curve.n");
   }
   function normPrivateKeyToScalar(key) {
-    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n: N } = CURVE;
+    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n } = CURVE;
     if (lengths && typeof key !== "bigint") {
       if (isBytes2(key))
         key = bytesToHex(key);
@@ -1289,54 +1086,22 @@ function weierstrassPoints(opts) {
         throw new Error("Invalid key");
       key = key.padStart(nByteLength * 2, "0");
     }
-    let num2;
+    let num;
     try {
-      num2 = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
+      num = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
     } catch (error) {
       throw new Error(`private key must be ${nByteLength} bytes, hex or bigint, not ${typeof key}`);
     }
     if (wrapPrivateKey)
-      num2 = mod(num2, N);
-    aInRange("private key", num2, _1n4, N);
-    return num2;
+      num = mod(num, n);
+    assertGE(num);
+    return num;
   }
+  const pointPrecomputes = /* @__PURE__ */ new Map();
   function assertPrjPoint(other) {
     if (!(other instanceof Point2))
       throw new Error("ProjectivePoint expected");
   }
-  const toAffineMemo = memoized((p, iz) => {
-    const { px: x, py: y, pz: z } = p;
-    if (Fp2.eql(z, Fp2.ONE))
-      return { x, y };
-    const is0 = p.is0();
-    if (iz == null)
-      iz = is0 ? Fp2.ONE : Fp2.inv(z);
-    const ax = Fp2.mul(x, iz);
-    const ay = Fp2.mul(y, iz);
-    const zz = Fp2.mul(z, iz);
-    if (is0)
-      return { x: Fp2.ZERO, y: Fp2.ZERO };
-    if (!Fp2.eql(zz, Fp2.ONE))
-      throw new Error("invZ was invalid");
-    return { x: ax, y: ay };
-  });
-  const assertValidMemo = memoized((p) => {
-    if (p.is0()) {
-      if (CURVE.allowInfinityPoint && !Fp2.is0(p.py))
-        return;
-      throw new Error("bad point: ZERO");
-    }
-    const { x, y } = p.toAffine();
-    if (!Fp2.isValid(x) || !Fp2.isValid(y))
-      throw new Error("bad point: x or y not FE");
-    const left = Fp2.sqr(y);
-    const right = weierstrassEquation(x);
-    if (!Fp2.eql(left, right))
-      throw new Error("bad point: equation left != right");
-    if (!p.isTorsionFree())
-      throw new Error("bad point: not in prime-order subgroup");
-    return true;
-  });
   class Point2 {
     constructor(px, py, pz) {
       this.px = px;
@@ -1348,7 +1113,6 @@ function weierstrassPoints(opts) {
         throw new Error("y required");
       if (pz == null || !Fp2.isValid(pz))
         throw new Error("z required");
-      Object.freeze(this);
     }
     // Does not validate if the point is on-curve.
     // Use fromHex instead, or call assertValidity() later.
@@ -1392,17 +1156,27 @@ function weierstrassPoints(opts) {
     static fromPrivateKey(privateKey) {
       return Point2.BASE.multiply(normPrivateKeyToScalar(privateKey));
     }
-    // Multiscalar Multiplication
-    static msm(points, scalars) {
-      return pippenger(Point2, Fn, points, scalars);
-    }
     // "Private method", don't use it directly
     _setWindowSize(windowSize) {
-      wnaf.setWindowSize(this, windowSize);
+      this._WINDOW_SIZE = windowSize;
+      pointPrecomputes.delete(this);
     }
     // A point on curve is valid if it conforms to equation.
     assertValidity() {
-      assertValidMemo(this);
+      if (this.is0()) {
+        if (CURVE.allowInfinityPoint && !Fp2.is0(this.py))
+          return;
+        throw new Error("bad point: ZERO");
+      }
+      const { x, y } = this.toAffine();
+      if (!Fp2.isValid(x) || !Fp2.isValid(y))
+        throw new Error("bad point: x or y not FE");
+      const left = Fp2.sqr(y);
+      const right = weierstrassEquation(x);
+      if (!Fp2.eql(left, right))
+        throw new Error("bad point: equation left != right");
+      if (!this.isTorsionFree())
+        throw new Error("bad point: not in prime-order subgroup");
     }
     hasEvenY() {
       const { y } = this.toAffine();
@@ -1529,24 +1303,27 @@ function weierstrassPoints(opts) {
       return this.equals(Point2.ZERO);
     }
     wNAF(n) {
-      return wnaf.wNAFCached(this, n, Point2.normalizeZ);
+      return wnaf.wNAFCached(this, pointPrecomputes, n, (comp) => {
+        const toInv = Fp2.invertBatch(comp.map((p) => p.pz));
+        return comp.map((p, i) => p.toAffine(toInv[i])).map(Point2.fromAffine);
+      });
     }
     /**
      * Non-constant-time multiplication. Uses double-and-add algorithm.
      * It's faster, but should only be used when you don't care about
      * an exposed private key e.g. sig verification, which works over *public* keys.
      */
-    multiplyUnsafe(sc) {
-      aInRange("scalar", sc, _0n4, CURVE.n);
+    multiplyUnsafe(n) {
       const I = Point2.ZERO;
-      if (sc === _0n4)
+      if (n === _0n4)
         return I;
-      if (sc === _1n4)
+      assertGE(n);
+      if (n === _1n4)
         return this;
       const { endo } = CURVE;
       if (!endo)
-        return wnaf.unsafeLadder(this, sc);
-      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(sc);
+        return wnaf.unsafeLadder(this, n);
+      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
       let k1p = I;
       let k2p = I;
       let d = this;
@@ -1576,11 +1353,12 @@ function weierstrassPoints(opts) {
      * @returns New point
      */
     multiply(scalar) {
-      const { endo, n: N } = CURVE;
-      aInRange("scalar", scalar, _1n4, N);
+      assertGE(scalar);
+      let n = scalar;
       let point, fake;
+      const { endo } = CURVE;
       if (endo) {
-        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(scalar);
+        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
         let { p: k1p, f: f1p } = this.wNAF(k1);
         let { p: k2p, f: f2p } = this.wNAF(k2);
         k1p = wnaf.constTimeNegate(k1neg, k1p);
@@ -1589,7 +1367,7 @@ function weierstrassPoints(opts) {
         point = k1p.add(k2p);
         fake = f1p.add(f2p);
       } else {
-        const { p, f } = this.wNAF(scalar);
+        const { p, f } = this.wNAF(n);
         point = p;
         fake = f;
       }
@@ -1611,7 +1389,18 @@ function weierstrassPoints(opts) {
     // Can accept precomputed Z^-1 - for example, from invertBatch.
     // (x, y, z) ∋ (x=x/z, y=y/z)
     toAffine(iz) {
-      return toAffineMemo(this, iz);
+      const { px: x, py: y, pz: z } = this;
+      const is0 = this.is0();
+      if (iz == null)
+        iz = is0 ? Fp2.ONE : Fp2.inv(z);
+      const ax = Fp2.mul(x, iz);
+      const ay = Fp2.mul(y, iz);
+      const zz = Fp2.mul(z, iz);
+      if (is0)
+        return { x: Fp2.ZERO, y: Fp2.ZERO };
+      if (!Fp2.eql(zz, Fp2.ONE))
+        throw new Error("invZ was invalid");
+      return { x: ax, y: ay };
     }
     isTorsionFree() {
       const { h: cofactor, isTorsionFree } = CURVE;
@@ -1630,12 +1419,10 @@ function weierstrassPoints(opts) {
       return this.multiplyUnsafe(CURVE.h);
     }
     toRawBytes(isCompressed = true) {
-      abool("isCompressed", isCompressed);
       this.assertValidity();
       return toBytes2(Point2, this, isCompressed);
     }
     toHex(isCompressed = true) {
-      abool("isCompressed", isCompressed);
       return bytesToHex(this.toRawBytes(isCompressed));
     }
   }
@@ -1669,6 +1456,9 @@ function weierstrass(curveDef) {
   const { Fp: Fp2, n: CURVE_ORDER } = CURVE;
   const compressedLen = Fp2.BYTES + 1;
   const uncompressedLen = 2 * Fp2.BYTES + 1;
+  function isValidFieldElement(num) {
+    return _0n4 < num && num < Fp2.ORDER;
+  }
   function modN2(a) {
     return mod(a, CURVE_ORDER);
   }
@@ -1681,7 +1471,6 @@ function weierstrass(curveDef) {
       const a = point.toAffine();
       const x = Fp2.toBytes(a.x);
       const cat = concatBytes2;
-      abool("isCompressed", isCompressed);
       if (isCompressed) {
         return cat(Uint8Array.from([point.hasEvenY() ? 2 : 3]), x);
       } else {
@@ -1694,7 +1483,7 @@ function weierstrass(curveDef) {
       const tail = bytes2.subarray(1);
       if (len === compressedLen && (head === 2 || head === 3)) {
         const x = bytesToNumberBE(tail);
-        if (!inRange(x, _1n4, Fp2.ORDER))
+        if (!isValidFieldElement(x))
           throw new Error("Point is not on curve");
         const y2 = weierstrassEquation(x);
         let y;
@@ -1718,7 +1507,7 @@ function weierstrass(curveDef) {
       }
     }
   });
-  const numToNByteStr = (num2) => bytesToHex(numberToBytesBE(num2, CURVE.nByteLength));
+  const numToNByteStr = (num) => bytesToHex(numberToBytesBE(num, CURVE.nByteLength));
   function isBiggerThanHalfOrder(number2) {
     const HALF = CURVE_ORDER >> _1n4;
     return number2 > HALF;
@@ -1747,8 +1536,10 @@ function weierstrass(curveDef) {
       return new Signature(r, s);
     }
     assertValidity() {
-      aInRange("r", this.r, _1n4, CURVE_ORDER);
-      aInRange("s", this.s, _1n4, CURVE_ORDER);
+      if (!isWithinCurveOrder(this.r))
+        throw new Error("r must be 0 < r < CURVE.n");
+      if (!isWithinCurveOrder(this.s))
+        throw new Error("s must be 0 < s < CURVE.n");
     }
     addRecoveryBit(recovery) {
       return new Signature(this.r, this.s, recovery);
@@ -1850,17 +1641,20 @@ function weierstrass(curveDef) {
     return b.multiply(normPrivateKeyToScalar(privateA)).toRawBytes(isCompressed);
   }
   const bits2int = CURVE.bits2int || function(bytes2) {
-    const num2 = bytesToNumberBE(bytes2);
+    const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
-    return delta > 0 ? num2 >> BigInt(delta) : num2;
+    return delta > 0 ? num >> BigInt(delta) : num;
   };
   const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
-  function int2octets(num2) {
-    aInRange(`num < 2^${CURVE.nBitLength}`, num2, _0n4, ORDER_MASK);
-    return numberToBytesBE(num2, CURVE.nByteLength);
+  function int2octets(num) {
+    if (typeof num !== "bigint")
+      throw new Error("bigint expected");
+    if (!(_0n4 <= num && num < ORDER_MASK))
+      throw new Error(`bigint expected < 2^${CURVE.nBitLength}`);
+    return numberToBytesBE(num, CURVE.nByteLength);
   }
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
     if (["recovered", "canonical"].some((k) => k in opts))
@@ -1870,7 +1664,6 @@ function weierstrass(curveDef) {
     if (lowS == null)
       lowS = true;
     msgHash = ensureBytes("msgHash", msgHash);
-    validateSigVerOpts(opts);
     if (prehash)
       msgHash = ensureBytes("prehashed msgHash", hash2(msgHash));
     const h1int = bits2int_modN(msgHash);
@@ -1919,7 +1712,6 @@ function weierstrass(curveDef) {
     publicKey = ensureBytes("publicKey", publicKey);
     if ("strict" in opts)
       throw new Error("options.strict was renamed to lowS");
-    validateSigVerOpts(opts);
     const { lowS, prehash } = opts;
     let _sig = void 0;
     let P;
@@ -1970,6 +1762,71 @@ function weierstrass(curveDef) {
     utils
   };
 }
+
+// ../../../node_modules/@noble/hashes/esm/hmac.js
+var HMAC = class extends Hash {
+  constructor(hash2, _key) {
+    super();
+    this.finished = false;
+    this.destroyed = false;
+    hash(hash2);
+    const key = toBytes(_key);
+    this.iHash = hash2.create();
+    if (typeof this.iHash.update !== "function")
+      throw new Error("Expected instance of class which extends utils.Hash");
+    this.blockLen = this.iHash.blockLen;
+    this.outputLen = this.iHash.outputLen;
+    const blockLen = this.blockLen;
+    const pad = new Uint8Array(blockLen);
+    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54;
+    this.iHash.update(pad);
+    this.oHash = hash2.create();
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54 ^ 92;
+    this.oHash.update(pad);
+    pad.fill(0);
+  }
+  update(buf) {
+    exists(this);
+    this.iHash.update(buf);
+    return this;
+  }
+  digestInto(out) {
+    exists(this);
+    bytes(out, this.outputLen);
+    this.finished = true;
+    this.iHash.digestInto(out);
+    this.oHash.update(out);
+    this.oHash.digestInto(out);
+    this.destroy();
+  }
+  digest() {
+    const out = new Uint8Array(this.oHash.outputLen);
+    this.digestInto(out);
+    return out;
+  }
+  _cloneInto(to) {
+    to || (to = Object.create(Object.getPrototypeOf(this), {}));
+    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+    to = to;
+    to.finished = finished;
+    to.destroyed = destroyed;
+    to.blockLen = blockLen;
+    to.outputLen = outputLen;
+    to.oHash = oHash._cloneInto(to.oHash);
+    to.iHash = iHash._cloneInto(to.iHash);
+    return to;
+  }
+  destroy() {
+    this.destroyed = true;
+    this.oHash.destroy();
+    this.iHash.destroy();
+  }
+};
+var hmac = (hash2, key, message) => new HMAC(hash2, key).update(message).digest();
+hmac.create = (hash2, key) => new HMAC(hash2, key);
 
 // ../../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
@@ -2062,6 +1919,8 @@ var secp256k1 = createCurve({
   }
 }, sha256);
 var _0n5 = BigInt(0);
+var fe = (x) => typeof x === "bigint" && _0n5 < x && x < secp256k1P;
+var ge = (x) => typeof x === "bigint" && _0n5 < x && x < secp256k1N;
 var TAGGED_HASH_PREFIXES = {};
 function taggedHash(tag, ...messages) {
   let tagP = TAGGED_HASH_PREFIXES[tag];
@@ -2085,7 +1944,8 @@ function schnorrGetExtPubKey(priv) {
   return { scalar, bytes: pointToBytes(p) };
 }
 function lift_x(x) {
-  aInRange("x", x, _1n5, secp256k1P);
+  if (!fe(x))
+    throw new Error("bad x: need 0 < x < p");
   const xx = modP(x * x);
   const c = modP(xx * x + BigInt(7));
   let y = sqrtMod(c);
@@ -2095,9 +1955,8 @@ function lift_x(x) {
   p.assertValidity();
   return p;
 }
-var num = bytesToNumberBE;
 function challenge(...args) {
-  return modN(num(taggedHash("BIP0340/challenge", ...args)));
+  return modN(bytesToNumberBE(taggedHash("BIP0340/challenge", ...args)));
 }
 function schnorrGetPublicKey(privateKey) {
   return schnorrGetExtPubKey(privateKey).bytes;
@@ -2106,9 +1965,9 @@ function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
   const m = ensureBytes("message", message);
   const { bytes: px, scalar: d } = schnorrGetExtPubKey(privateKey);
   const a = ensureBytes("auxRand", auxRand, 32);
-  const t = numTo32b(d ^ num(taggedHash("BIP0340/aux", a)));
+  const t = numTo32b(d ^ bytesToNumberBE(taggedHash("BIP0340/aux", a)));
   const rand = taggedHash("BIP0340/nonce", t, px, m);
-  const k_ = modN(num(rand));
+  const k_ = modN(bytesToNumberBE(rand));
   if (k_ === _0n5)
     throw new Error("sign failed: k is zero");
   const { bytes: rx, scalar: k } = schnorrGetExtPubKey(k_);
@@ -2125,12 +1984,12 @@ function schnorrVerify(signature, message, publicKey) {
   const m = ensureBytes("message", message);
   const pub = ensureBytes("publicKey", publicKey, 32);
   try {
-    const P = lift_x(num(pub));
-    const r = num(sig.subarray(0, 32));
-    if (!inRange(r, _1n5, secp256k1P))
+    const P = lift_x(bytesToNumberBE(pub));
+    const r = bytesToNumberBE(sig.subarray(0, 32));
+    if (!fe(r))
       return false;
-    const s = num(sig.subarray(32, 64));
-    if (!inRange(s, _1n5, secp256k1N))
+    const s = bytesToNumberBE(sig.subarray(32, 64));
+    if (!ge(s))
       return false;
     const e = challenge(numTo32b(r), pointToBytes(P), m);
     const R = GmulAdd(P, s, modN(-e));
@@ -2156,25 +2015,24 @@ var schnorr = /* @__PURE__ */ (() => ({
   }
 }))();
 
-// relay-worker.js
+// src/relay-worker.js
 var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
 var PAY_TO_RELAY_ENABLED = false;
 var RELAY_ACCESS_PRICE_SATS = 212121;
-var PAID_PUBKEYS_PREFIX = "paid-pubkeys/";
 var relayInfo = {
   name: "Nosflare",
-  description: "A serverless Nostr relay through Cloudflare Worker and R2 bucket",
+  description: "A serverless Nostr relay through Cloudflare Worker and D1 database",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "5.24.37",
+  version: "6.0.0",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
   // privacy_policy: "https://example.com/privacy-policy.html",
   // terms_of_service: "https://example.com/terms.html",
-  // Server limitations
+  // Relay limitations
   limitation: {
     // max_message_length: 524288, // 512KB
     // max_subscriptions: 300,
@@ -2215,16 +2073,139 @@ var nip05Users = {
   "lux": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
   // ... more NIP-05 verified users
 };
-var eventHelpers = [
-  "https://event-helper-1.example.com",
-  "https://event-helper-2.example.com"
-  // ... add more helper workers
-];
-var reqHelpers = [
-  "https://req-helper-1.example.com",
-  "https://req-helper-2.example.com"
-  // ... add more helper workers
-];
+var enableAntiSpam = false;
+var enableGlobalDuplicateCheck = false;
+var antiSpamKinds = /* @__PURE__ */ new Set([
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  16,
+  17,
+  40,
+  41,
+  42,
+  43,
+  44,
+  64,
+  818,
+  1021,
+  1022,
+  1040,
+  1059,
+  1063,
+  1311,
+  1617,
+  1621,
+  1622,
+  1630,
+  1633,
+  1971,
+  1984,
+  1985,
+  1986,
+  1987,
+  2003,
+  2004,
+  2022,
+  4550,
+  5e3,
+  5999,
+  6e3,
+  6999,
+  7e3,
+  9e3,
+  9030,
+  9041,
+  9467,
+  9734,
+  9735,
+  9802,
+  1e4,
+  10001,
+  10002,
+  10003,
+  10004,
+  10005,
+  10006,
+  10007,
+  10009,
+  10015,
+  10030,
+  10050,
+  10063,
+  10096,
+  13194,
+  21e3,
+  22242,
+  23194,
+  23195,
+  24133,
+  24242,
+  27235,
+  3e4,
+  30001,
+  30002,
+  30003,
+  30004,
+  30005,
+  30007,
+  30008,
+  30009,
+  30015,
+  30017,
+  30018,
+  30019,
+  30020,
+  30023,
+  30024,
+  30030,
+  30040,
+  30041,
+  30063,
+  30078,
+  30311,
+  30315,
+  30402,
+  30403,
+  30617,
+  30618,
+  30818,
+  30819,
+  31890,
+  31922,
+  31923,
+  31924,
+  31925,
+  31989,
+  31990,
+  34235,
+  34236,
+  34237,
+  34550,
+  39e3,
+  39001,
+  39002,
+  39003,
+  39004,
+  39005,
+  39006,
+  39007,
+  39008,
+  39009
+  // Add other kinds you want to check for duplicates
+]);
 var blockedPubkeys = [
   "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
   "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
@@ -2235,39 +2216,16 @@ var blockedPubkeys = [
 var allowedPubkeys = [
   // ... pubkeys that are explicitly allowed
 ];
-function isPubkeyAllowed(pubkey) {
-  if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
-    return false;
-  }
-  return !blockedPubkeys.includes(pubkey);
-}
 var blockedEventKinds = /* @__PURE__ */ new Set([
   1064
 ]);
 var allowedEventKinds = /* @__PURE__ */ new Set([
   // ... kinds that are explicitly allowed
 ]);
-function isEventKindAllowed(kind) {
-  if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
-    return false;
-  }
-  return !blockedEventKinds.has(kind);
-}
 var blockedContent = /* @__PURE__ */ new Set([
   "~~ hello world! ~~"
   // ... more blocked content
 ]);
-function containsBlockedContent(event) {
-  const lowercaseContent = (event.content || "").toLowerCase();
-  const lowercaseTags = event.tags.map((tag) => tag.join("").toLowerCase());
-  for (const blocked of blockedContent) {
-    const blockedLower = blocked.toLowerCase();
-    if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
-      return true;
-    }
-  }
-  return false;
-}
 var checkValidNip05 = false;
 var blockedNip05Domains = /* @__PURE__ */ new Set([
   // Add domains that are explicitly blocked
@@ -2284,39 +2242,187 @@ var allowedTags = /* @__PURE__ */ new Set([
   // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
-function isTagAllowed(tag) {
-  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
-    return false;
+var dbInitialized = false;
+var dbInitPromise = null;
+async function initializeDatabase(db) {
+  if (dbInitialized)
+    return;
+  if (!dbInitPromise) {
+    dbInitPromise = doInitializeDatabase(db);
   }
-  return !blockedTags.has(tag);
+  return dbInitPromise;
 }
-addEventListener("fetch", (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
-  if (request.method === "POST" && url.searchParams.has("notify-zap") && PAY_TO_RELAY_ENABLED) {
-    event.respondWith(handlePaymentNotification(request));
-    return;
-  }
-  if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
-    event.respondWith(handleCheckPayment(request));
-    return;
-  }
-  if (url.pathname === "/") {
-    if (request.headers.get("Upgrade") === "websocket") {
-      event.respondWith(handleWebSocket(event, request));
-    } else if (request.headers.get("Accept") === "application/nostr+json") {
-      event.respondWith(handleRelayInfoRequest(request));
-    } else {
-      event.respondWith(serveHomePage());
+async function doInitializeDatabase(db) {
+  try {
+    const initCheck = await db.prepare(
+      "SELECT value FROM system_config WHERE key = 'db_initialized' LIMIT 1"
+    ).first().catch(() => null);
+    if (initCheck && initCheck.value === "1") {
+      console.log("Database already initialized, skipping schema creation");
+      dbInitialized = true;
+      return;
     }
-  } else if (url.pathname === "/.well-known/nostr.json") {
-    event.respondWith(handleNIP05Request(url));
-  } else if (url.pathname === "/favicon.ico") {
-    event.respondWith(serveFavicon(event));
-  } else {
-    event.respondWith(new Response("Invalid request", { status: 400 }));
+    console.log("Initializing D1 database schema...");
+    await db.prepare(`
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )
+        `).run();
+    const statements = [
+      // Main events table
+      `CREATE TABLE IF NOT EXISTS events (
+                id TEXT PRIMARY KEY,
+                pubkey TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                kind INTEGER NOT NULL,
+                tags TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sig TEXT NOT NULL,
+                deleted INTEGER DEFAULT 0,
+                created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+            )`,
+      // Indexes for events table
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
+      // Tags table for efficient tag queries
+      `CREATE TABLE IF NOT EXISTS tags (
+                event_id TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+            )`,
+      // Indexes for tags table
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
+      // Table for paid pubkeys
+      `CREATE TABLE IF NOT EXISTS paid_pubkeys (
+                pubkey TEXT PRIMARY KEY,
+                paid_at INTEGER NOT NULL,
+                amount_sats INTEGER,
+                created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+            )`,
+      // Table for content hashes (anti-spam)
+      `CREATE TABLE IF NOT EXISTS content_hashes (
+                hash TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                pubkey TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+            )`,
+      // Index for content hashes
+      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`
+    ];
+    for (const statement of statements) {
+      try {
+        await db.prepare(statement).run();
+        console.log(`Executed: ${statement.substring(0, 50)}...`);
+      } catch (error) {
+        console.error(`Error executing statement: ${error.message}`);
+        console.error(`Statement: ${statement}`);
+        throw error;
+      }
+    }
+    await db.prepare("PRAGMA foreign_keys = ON").run();
+    await db.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
+    ).run();
+    await db.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
+    ).run();
+    console.log("Database initialization completed successfully!");
+    dbInitialized = true;
+  } catch (error) {
+    console.error("Failed to initialize database:", error);
+    throw error;
   }
-});
+}
+var relayCache = {
+  _cache: {},
+  _subscriptions: {},
+  // Store subscriptions
+  _sessions: {},
+  // Store session bookmarks per websocket
+  get(key) {
+    const item = this._cache[key];
+    if (item && item.expires > Date.now()) {
+      return item.value;
+    }
+    return null;
+  },
+  set(key, value, ttl = 6e4) {
+    this._cache[key] = {
+      value,
+      expires: Date.now() + ttl
+    };
+  },
+  delete(key) {
+    delete this._cache[key];
+  },
+  addSubscription(wsId, subscriptionId, filters) {
+    if (!this._subscriptions[wsId]) {
+      this._subscriptions[wsId] = {};
+    }
+    this._subscriptions[wsId][subscriptionId] = filters;
+  },
+  getSubscription(wsId, subscriptionId) {
+    return this._subscriptions[wsId]?.[subscriptionId] || null;
+  },
+  deleteSubscription(wsId, subscriptionId) {
+    if (this._subscriptions[wsId]) {
+      delete this._subscriptions[wsId][subscriptionId];
+    }
+  },
+  clearSubscriptions(wsId) {
+    delete this._subscriptions[wsId];
+  },
+  getAllSubscriptions() {
+    return this._subscriptions;
+  },
+  // Session management
+  setSessionBookmark(wsId, bookmark) {
+    this._sessions[wsId] = bookmark;
+  },
+  getSessionBookmark(wsId) {
+    return this._sessions[wsId] || "first-unconstrained";
+  },
+  clearSession(wsId) {
+    delete this._sessions[wsId];
+  }
+};
+var rateLimiter = class {
+  constructor(rate, capacity) {
+    this.tokens = capacity;
+    this.lastRefillTime = Date.now();
+    this.capacity = capacity;
+    this.fillRate = rate;
+  }
+  removeToken() {
+    this.refill();
+    if (this.tokens < 1) {
+      return false;
+    }
+    this.tokens -= 1;
+    return true;
+  }
+  refill() {
+    const now = Date.now();
+    const elapsedTime = now - this.lastRefillTime;
+    const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
+    this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
+    this.lastRefillTime = now;
+  }
+};
+var pubkeyRateLimiter = new rateLimiter(100 / 6e4, 100);
+var excludedRateLimitKinds = [];
+var reqRateLimiter = new rateLimiter(1e4 / 6e4, 1e4);
+function shouldCheckForDuplicates(kind) {
+  return enableAntiSpam && antiSpamKinds.has(kind);
+}
 async function handleRelayInfoRequest(request) {
   const responseInfo = { ...relayInfo };
   if (PAY_TO_RELAY_ENABLED) {
@@ -2395,86 +2501,41 @@ async function handleNIP05Request(url) {
     }
   });
 }
-var relayCache = {
-  _cache: {},
-  _subscriptions: {},
-  // Store subscriptions
-  get(key) {
-    const item = this._cache[key];
-    if (item && item.expires > Date.now()) {
-      return item.value;
-    }
-    return null;
-  },
-  set(key, value, ttl = 6e4) {
-    this._cache[key] = {
-      value,
-      expires: Date.now() + ttl
-    };
-  },
-  delete(key) {
-    delete this._cache[key];
-  },
-  addSubscription(wsId, subscriptionId, filters) {
-    if (!this._subscriptions[wsId]) {
-      this._subscriptions[wsId] = {};
-    }
-    this._subscriptions[wsId][subscriptionId] = filters;
-  },
-  getSubscription(wsId, subscriptionId) {
-    return this._subscriptions[wsId]?.[subscriptionId] || null;
-  },
-  deleteSubscription(wsId, subscriptionId) {
-    if (this._subscriptions[wsId]) {
-      delete this._subscriptions[wsId][subscriptionId];
-    }
-  },
-  clearSubscriptions(wsId) {
-    delete this._subscriptions[wsId];
+function isPubkeyAllowed(pubkey) {
+  if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
+    return false;
   }
-};
-var rateLimiter = class {
-  constructor(rate, capacity) {
-    this.tokens = capacity;
-    this.lastRefillTime = Date.now();
-    this.capacity = capacity;
-    this.fillRate = rate;
-  }
-  removeToken() {
-    this.refill();
-    if (this.tokens < 1) {
-      return false;
-    }
-    this.tokens -= 1;
-    return true;
-  }
-  refill() {
-    const now = Date.now();
-    const elapsedTime = now - this.lastRefillTime;
-    const tokensToAdd = Math.floor(elapsedTime * this.fillRate);
-    this.tokens = Math.min(this.capacity, this.tokens + tokensToAdd);
-    this.lastRefillTime = now;
-  }
-};
-var pubkeyRateLimiter = new rateLimiter(100 / 6e4, 100);
-var excludedRateLimitKinds = [];
-var reqRateLimiter = new rateLimiter(1e4 / 6e4, 1e4);
-var MAX_CONCURRENT_CONNECTIONS = 6;
-var activeConnections = 0;
-async function withConnectionLimit(promiseFunction) {
-  while (activeConnections >= MAX_CONCURRENT_CONNECTIONS) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  activeConnections += 1;
-  try {
-    return await promiseFunction();
-  } finally {
-    activeConnections -= 1;
-  }
+  return !blockedPubkeys.includes(pubkey);
 }
-async function handleWebSocket(event, request) {
+function isEventKindAllowed(kind) {
+  if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
+    return false;
+  }
+  return !blockedEventKinds.has(kind);
+}
+function containsBlockedContent(event) {
+  const lowercaseContent = (event.content || "").toLowerCase();
+  const lowercaseTags = event.tags.map((tag) => tag.join("").toLowerCase());
+  for (const blocked of blockedContent) {
+    const blockedLower = blocked.toLowerCase();
+    if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
+      return true;
+    }
+  }
+  return false;
+}
+function isTagAllowed(tag) {
+  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
+    return false;
+  }
+  return !blockedTags.has(tag);
+}
+async function handleWebSocket(event, request, env) {
+  await initializeDatabase(env.relayDb);
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
+  const wsId = Math.random().toString(36).substr(2, 9);
+  server.id = wsId;
   server.addEventListener("message", async (messageEvent) => {
     event.waitUntil(
       (async () => {
@@ -2487,17 +2548,23 @@ async function handleWebSocket(event, request) {
           } else {
             messageData = JSON.parse(messageEvent.data);
           }
+          if (!Array.isArray(messageData)) {
+            sendError(server, "Invalid message format: expected JSON array");
+            return;
+          }
           const messageType = messageData[0];
           switch (messageType) {
             case "EVENT":
-              await processEvent(messageData[1], server);
+              await processEvent(messageData[1], server, env, event);
               break;
             case "REQ":
-              await processReq(messageData, server);
+              await processReq(messageData, server, env);
               break;
             case "CLOSE":
               await closeSubscription(messageData[1], server);
               break;
+            default:
+              sendError(server, `Unknown message type: ${messageType}`);
           }
         } catch (e) {
           sendError(server, "Failed to process the message");
@@ -2507,8 +2574,8 @@ async function handleWebSocket(event, request) {
     );
   });
   server.addEventListener("close", (event2) => {
-    const wsId = server.id || Math.random().toString(36).substr(2, 9);
     relayCache.clearSubscriptions(wsId);
+    relayCache.clearSession(wsId);
     console.log("WebSocket closed", event2.code, event2.reason);
   });
   server.addEventListener("error", (error) => {
@@ -2606,16 +2673,6 @@ async function serveHomePage() {
             width: 400px;
             height: auto;
             filter: drop-shadow(0 0 30px rgba(255, 69, 0, 0.5));
-        }
-        
-        h1 {
-            font-size: 3rem;
-            font-weight: 700;
-            margin-bottom: 1rem;
-            background: linear-gradient(135deg, #ff4500, #ff8c00);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
         }
         
         .tagline {
@@ -2745,12 +2802,6 @@ async function serveHomePage() {
         
         .toast.show {
             transform: translateY(0);
-        }
-        
-        .success-message {
-            color: #4CAF50;
-            font-size: 1.1rem;
-            margin-top: 1rem;
         }
     </style>
 </head>
@@ -2928,217 +2979,438 @@ async function serveHomePage() {
     }
   });
 }
-async function processEvent(event, server) {
+async function processEvent(event, server, env) {
   try {
     if (typeof event !== "object" || event === null || Array.isArray(event)) {
-      console.error(`[Event] Invalid JSON format for event: ${JSON.stringify(event)}. Expected a JSON object.`);
-      sendOK(server, null, false, "Invalid JSON format. Expected a JSON object.");
+      console.error(`Invalid JSON format for event: ${JSON.stringify(event)}. Expected a JSON object.`);
+      sendOK(server, null, false, "invalid: expected JSON object");
       return;
     }
-    console.log(`[Event] Processing event ${event.id}`);
+    console.log(`Processing event ${event.id}`);
     const cacheKey = `event:${event.id}`;
     const cachedEvent = relayCache.get(cacheKey);
     if (cachedEvent) {
-      console.log(`[Event] Duplicate event detected: ${event.id}. Dropping event.`);
-      sendOK(server, event.id, false, "Duplicate. Event dropped.");
+      console.log(`Duplicate event detected: ${event.id}. Dropping event.`);
+      sendOK(server, event.id, true, "duplicate: already have this event");
       return;
     }
     const isValidSignature = await verifyEventSignature(event);
     if (!isValidSignature) {
-      console.error(`[Event] Signature verification failed for event ${event.id}`);
-      sendOK(server, event.id, false, "Invalid: signature verification failed.");
+      console.error(`Signature verification failed for event ${event.id}`);
+      sendOK(server, event.id, false, "invalid: signature verification failed");
       return;
     } else {
-      console.log(`[Event] Signature verification passed for event ${event.id}`);
+      console.log(`Signature verification passed for event ${event.id}`);
     }
     if (PAY_TO_RELAY_ENABLED) {
-      const hasPaid = await hasPaidForRelay(event.pubkey);
+      const hasPaid = await hasPaidForRelay(event.pubkey, env);
       if (!hasPaid) {
         const protocol = "https:";
         const relayUrl = `${protocol}//${server.url || "relay.nosflare.com"}`;
-        console.error(`[Event] Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
+        console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
         sendOK(server, event.id, false, `blocked: payment required. Visit ${relayUrl} to pay for relay access.`);
         return;
       }
     }
-    relayCache.set(cacheKey, event, 6e4);
-    console.log(`[Event] Event ${event.id} cached with a TTL of 60 seconds`);
-    sendOK(server, event.id, true, "Event received successfully for processing.");
-    console.log(`[Event] Event ${event.id} acknowledged to the client`);
-    processEventInBackground(event, server);
-  } catch (error) {
-    console.error(`[Event] Error in processing event ${event.id}:`, error);
-    sendOK(server, event.id, false, `Error: EVENT processing failed - ${error.message}`);
-  }
-}
-async function processEventInBackground(event, server) {
-  try {
-    console.log(`[Event] Processing event ${event.id} in the background`);
     if (!isPubkeyAllowed(event.pubkey)) {
-      console.error(`[Event] Event denied. Pubkey ${event.pubkey} is not allowed.`);
-      return { success: false, error: `Pubkey ${event.pubkey} is not allowed.` };
+      console.error(`Event denied. Pubkey ${event.pubkey} is not allowed.`);
+      sendOK(server, event.id, false, `blocked: pubkey not allowed`);
+      return;
     }
     if (!isEventKindAllowed(event.kind)) {
-      console.error(`[Event] Event denied. Event kind ${event.kind} is not allowed.`);
-      return { success: false, error: `Event kind ${event.kind} is not allowed.` };
+      console.error(`Event denied. Event kind ${event.kind} is not allowed.`);
+      sendOK(server, event.id, false, `blocked: event kind ${event.kind} not allowed`);
+      return;
     }
     if (containsBlockedContent(event)) {
-      console.error(`[Event] Event denied. Content contains blocked phrases.`);
-      return { success: false, error: "Event contains blocked content." };
+      console.error(`Event denied. Content contains blocked phrases.`);
+      sendOK(server, event.id, false, "blocked: content contains blocked phrases");
+      return;
     }
     for (const tag of event.tags) {
       const tagKey = tag[0];
       if (!isTagAllowed(tagKey)) {
-        console.error(`[Event] Event denied. Tag '${tagKey}' is not allowed.`);
-        return { success: false, error: `Tag '${tagKey}' is not allowed.` };
+        console.error(`Event denied. Tag '${tagKey}' is not allowed.`);
+        sendOK(server, event.id, false, `blocked: tag '${tagKey}' not allowed`);
+        return;
       }
       if (blockedTags.has(tagKey)) {
-        console.error(`[Event] Event denied. Tag '${tagKey}' is blocked.`);
-        return { success: false, error: `Tag '${tagKey}' is blocked.` };
+        console.error(`Event denied. Tag '${tagKey}' is blocked.`);
+        sendOK(server, event.id, false, `blocked: tag '${tagKey}' is blocked`);
+        return;
       }
     }
     if (checkValidNip05 && event.kind !== 0) {
-      const isValidNIP05 = await validateNIP05FromKind0(event.pubkey);
+      const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
       if (!isValidNIP05) {
-        console.error(`[Event] Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
-        return { success: false, error: `NIP-05 validation failed for pubkey ${event.pubkey}.` };
+        console.error(`Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
+        sendOK(server, event.id, false, `invalid: NIP-05 validation failed`);
+        return;
       }
     }
     if (!excludedRateLimitKinds.includes(event.kind)) {
       if (!pubkeyRateLimiter.removeToken()) {
-        console.error(`[Event] Event denied. Rate limit exceeded for pubkey ${event.pubkey}.`);
-        return { success: false, error: "Rate limit exceeded. Please try again later." };
+        console.error(`Event denied. Rate limit exceeded for pubkey ${event.pubkey}.`);
+        sendOK(server, event.id, false, "rate-limited: slow down there chief");
+        return;
       }
     }
-    const wsId = server.id || Math.random().toString(36).substr(2, 9);
-    const subscriptions = relayCache._subscriptions[wsId];
-    if (subscriptions) {
-      let matched = false;
-      for (const [subscriptionId, filters] of Object.entries(subscriptions)) {
-        if (matchesFilters(event, filters)) {
-          matched = true;
-          console.log(`[Event] Event ${event.id} matched subscription ${subscriptionId}`);
-          server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-        }
+    if (event.kind === 5) {
+      console.log(`Processing deletion event for event ID: ${event.id}`);
+      const deletionResults = await processDeletionEvent(event, env);
+      if (deletionResults.success && deletionResults.deletedCount > 0) {
+        relayCache.set(cacheKey, event, 6e4);
+        console.log(`Event ${event.id} cached with a TTL of 60 seconds`);
+        sendOK(server, event.id, true, "Event successfully deleted");
+        console.log(`Deletion event ${event.id} processed successfully. Deleted ${deletionResults.deletedCount} events.`);
+      } else if (deletionResults.errors.length > 0) {
+        sendOK(server, event.id, false, `error: ${deletionResults.errors[0]}`);
+        console.error(`Failed to process deletion event ${event.id}: ${deletionResults.errors.join(", ")}`);
+      } else {
+        sendOK(server, event.id, true, "No matching events found to delete");
+        console.log(`Deletion event ${event.id} processed but no matching events found to delete.`);
       }
-      if (!matched) {
-        console.log(`[Event] Event ${event.id} did not match any subscriptions for wsId: ${wsId}`);
-      }
+      return;
     }
-    for (const [wsId2, wsSubscriptions] of Object.entries(relayCache._subscriptions)) {
-      for (const [subscriptionId, filters] of Object.entries(wsSubscriptions)) {
-        if (matchesFilters(event, filters)) {
-          const cacheKey = `req:${JSON.stringify(filters)}`;
-          const cachedEvents = relayCache.get(cacheKey) || [];
-          cachedEvents.push(event);
-          console.log(`[Event] Event ${event.id} added to cache for subscription ${subscriptionId}`);
-          relayCache.set(cacheKey, cachedEvents, 6e4);
-        }
-      }
+    console.log(`Saving event with ID: ${event.id} to D1...`);
+    const saveResult = await saveEventToD1(event, env);
+    if (!saveResult.success) {
+      console.error(`Failed to save event with ID: ${event.id}`);
+      sendOK(server, event.id, false, saveResult.error);
+      return;
     }
-    console.log(`[Event] Forwarding event ${event.id} to helper workers`);
-    await sendEventToHelper(event, server, event.id);
+    relayCache.set(cacheKey, event, 6e4);
+    console.log(`Event ${event.id} cached with a TTL of 60 seconds`);
+    sendOK(server, event.id, true, "Event received successfully for processing");
+    console.log(`Event with ID: ${event.id} processed successfully.`);
   } catch (error) {
-    console.error("[Event] Error in background event processing:", error);
-    return { success: false, error: `Error: ${error.message}` };
+    console.error(`Error in processing event ${event.id}:`, error);
+    sendOK(server, event.id, false, `error: ${error.message}`);
   }
 }
-async function processReq(message, server) {
+async function saveEventToD1(event, env) {
+  try {
+    const session = env.relayDb.withSession("first-primary");
+    const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
+    if (existingEvent) {
+      console.log(`Duplicate event: ${event.id}. Event dropped.`);
+      return { success: false, error: "duplicate: already have this event" };
+    }
+    if (shouldCheckForDuplicates(event.kind)) {
+      console.log(`Checking for duplicate content for kind ${event.kind}`);
+      const contentHash = await hashContent(event);
+      let duplicateCheckQuery;
+      if (enableGlobalDuplicateCheck) {
+        duplicateCheckQuery = session.prepare(
+          "SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1"
+        ).bind(contentHash);
+      } else {
+        duplicateCheckQuery = session.prepare(
+          "SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1"
+        ).bind(contentHash, event.pubkey);
+      }
+      const existingHash = await duplicateCheckQuery.first();
+      if (existingHash) {
+        console.log(`Duplicate content detected for event: ${event.id}`);
+        return { success: false, error: `duplicate: content already exists` };
+      }
+    }
+    const batch = [];
+    batch.push(
+      session.prepare(`
+                INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+        event.id,
+        event.pubkey,
+        event.created_at,
+        event.kind,
+        JSON.stringify(event.tags),
+        event.content,
+        event.sig
+      )
+    );
+    for (const tag of event.tags) {
+      const [tagName, tagValue] = tag;
+      if (tagName && tagValue) {
+        batch.push(
+          session.prepare(`
+                        INSERT INTO tags (event_id, tag_name, tag_value)
+                        VALUES (?, ?, ?)
+                    `).bind(event.id, tagName, tagValue)
+        );
+      }
+    }
+    if (shouldCheckForDuplicates(event.kind)) {
+      const contentHash = await hashContent(event);
+      batch.push(
+        session.prepare(`
+                    INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+                    VALUES (?, ?, ?, ?)
+                `).bind(contentHash, event.id, event.pubkey, event.created_at)
+      );
+    }
+    await session.batch(batch);
+    console.log(`Event ${event.id} saved successfully to D1.`);
+    return { success: true };
+  } catch (error) {
+    console.error(`Error saving event data in D1 for event ID: ${event.id}: ${error.message}`);
+    return { success: false, error: `error: could not save event` };
+  }
+}
+async function processDeletionEvent(deletionEvent, env) {
+  console.log(`Processing deletion event with ID: ${deletionEvent.id}`);
+  const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
+  const results = {
+    success: true,
+    deletedCount: 0,
+    errors: []
+  };
+  if (deletedEventIds.length === 0) {
+    console.log(`No event IDs found in deletion event ${deletionEvent.id}`);
+    return results;
+  }
+  const session = env.relayDb.withSession("first-primary");
+  for (const eventId of deletedEventIds) {
+    try {
+      console.log(`Attempting to delete event with ID: ${eventId}`);
+      const existingEvent = await session.prepare("SELECT pubkey FROM events WHERE id = ? LIMIT 1").bind(eventId).first();
+      if (!existingEvent) {
+        console.warn(`Event with ID: ${eventId} not found. Nothing to delete.`);
+        continue;
+      }
+      if (existingEvent.pubkey !== deletionEvent.pubkey) {
+        console.warn(`Event ${eventId} does not belong to pubkey ${deletionEvent.pubkey}. Skipping deletion.`);
+        results.errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
+        results.success = false;
+        continue;
+      }
+      const deleteResult = await session.prepare("UPDATE events SET deleted = 1 WHERE id = ?").bind(eventId).run();
+      if (deleteResult.meta.changes > 0) {
+        console.log(`Event ${eventId} marked as deleted successfully.`);
+        results.deletedCount++;
+      } else {
+        console.error(`Failed to mark event ${eventId} as deleted.`);
+        results.errors.push(`failed to delete event ${eventId}`);
+        results.success = false;
+      }
+    } catch (error) {
+      console.error(`Error processing deletion for event ${eventId}: ${error.message}`);
+      results.errors.push(`error deleting ${eventId}: ${error.message}`);
+      results.success = false;
+    }
+  }
+  return results;
+}
+async function processReq(message, server, env) {
+  if (!Array.isArray(message) || message.length < 3) {
+    sendError(server, "Invalid REQ message format");
+    return;
+  }
   const subscriptionId = message[1];
-  const filters = message[2] || {};
+  if (typeof subscriptionId !== "string" || subscriptionId === "" || subscriptionId.length > 64) {
+    sendError(server, "Invalid subscription ID: must be non-empty string of max 64 chars");
+    return;
+  }
+  const filters = message.slice(2);
+  if (filters.length === 0) {
+    sendClosed(server, subscriptionId, "error: at least one filter required");
+    return;
+  }
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
   if (!reqRateLimiter.removeToken()) {
     console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
-    sendError(server, "REQ message rate limit exceeded. Please slow down.");
-    sendEOSE(server, subscriptionId);
+    sendClosed(server, subscriptionId, "rate-limited: slow down there chief");
     return;
   }
-  try {
-    if (filters.ids) {
-      validateIds(filters.ids);
-    }
-  } catch (error) {
-    console.error(`Invalid event ID format in subscriptionId: ${subscriptionId} - ${error.message}`);
-    sendError(server, `Invalid event ID format: ${error.message}`);
-    sendEOSE(server, subscriptionId);
-    return;
-  }
-  try {
-    if (filters.authors) {
-      validateAuthors(filters.authors);
-    }
-  } catch (error) {
-    console.error(`Invalid author public key format in subscriptionId: ${subscriptionId} - ${error.message}`);
-    sendError(server, `Invalid author public key format: ${error.message}`);
-    sendEOSE(server, subscriptionId);
-    return;
-  }
-  if (filters.kinds) {
-    const invalidKinds = filters.kinds.filter((kind) => !isEventKindAllowed(kind));
-    if (invalidKinds.length > 0) {
-      console.error(`Blocked kinds in subscriptionId: ${subscriptionId} - ${invalidKinds.join(", ")}`);
-      sendError(server, `Blocked kinds in request: ${invalidKinds.join(", ")}`);
-      sendEOSE(server, subscriptionId);
+  for (const filter of filters) {
+    if (typeof filter !== "object" || filter === null) {
+      sendClosed(server, subscriptionId, "invalid: filter must be an object");
       return;
     }
+    try {
+      if (filter.ids) {
+        validateIds(filter.ids);
+      }
+    } catch (error) {
+      console.error(`Invalid event ID format in subscriptionId: ${subscriptionId} - ${error.message}`);
+      sendClosed(server, subscriptionId, `invalid: ${error.message}`);
+      return;
+    }
+    try {
+      if (filter.authors) {
+        validateAuthors(filter.authors);
+      }
+    } catch (error) {
+      console.error(`Invalid author public key format in subscriptionId: ${subscriptionId} - ${error.message}`);
+      sendClosed(server, subscriptionId, `invalid: ${error.message}`);
+      return;
+    }
+    if (filter.kinds) {
+      const invalidKinds = filter.kinds.filter((kind) => !isEventKindAllowed(kind));
+      if (invalidKinds.length > 0) {
+        console.error(`Blocked kinds in subscriptionId: ${subscriptionId} - ${invalidKinds.join(", ")}`);
+        sendClosed(server, subscriptionId, `blocked: kinds ${invalidKinds.join(", ")} not allowed`);
+        return;
+      }
+    }
+    if (filter.ids && filter.ids.length > 1e4) {
+      console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
+      sendClosed(server, subscriptionId, "invalid: too many event IDs (max 10000)");
+      return;
+    }
+    if (filter.limit && filter.limit > 1e4) {
+      console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 10000`);
+      sendClosed(server, subscriptionId, "invalid: limit too high (max 10000)");
+      return;
+    }
+    if (!filter.limit) {
+      filter.limit = 1e4;
+    }
   }
-  if (filters.ids && filters.ids.length > 1e4) {
-    console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
-    sendError(server, "The 'ids' filter must contain 10000 or fewer event IDs.");
-    sendEOSE(server, subscriptionId);
-    return;
-  }
-  if (filters.limit && filters.limit > 1e4) {
-    console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
-    sendError(server, "REQ limit exceeded. Maximum allowed limit is 10000.");
-    sendEOSE(server, subscriptionId);
-    return;
-  }
-  filters.limit = filters.limit || 1e4;
   relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
+  let allEvents = [];
   if (cachedEvents && cachedEvents.length > 0) {
     console.log(`Serving cached events for subscriptionId: ${subscriptionId}`);
-    for (const event of cachedEvents.slice(0, filters.limit)) {
-      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+    allEvents = cachedEvents;
+  } else {
+    try {
+      const bookmark = relayCache.getSessionBookmark(wsId);
+      const eventSet = /* @__PURE__ */ new Map();
+      for (const filter of filters) {
+        const result = await queryDatabase(subscriptionId, filter, bookmark, env);
+        for (const event of result.events) {
+          eventSet.set(event.id, event);
+        }
+        if (result.bookmark) {
+          relayCache.setSessionBookmark(wsId, result.bookmark);
+        }
+      }
+      allEvents = Array.from(eventSet.values());
+      allEvents.sort((a, b) => {
+        if (b.created_at !== a.created_at) {
+          return b.created_at - a.created_at;
+        }
+        return a.id.localeCompare(b.id);
+      });
+      if (allEvents.length > 0) {
+        relayCache.set(cacheKey, allEvents, 6e4);
+      }
+    } catch (error) {
+      console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
+      sendClosed(server, subscriptionId, `error: could not connect to the database`);
+      return;
     }
-    sendEOSE(server, subscriptionId);
-    return;
   }
+  const limit = Math.min(...filters.map((f) => f.limit || 1e4));
+  const eventsToSend = allEvents.slice(0, limit);
+  for (const event of eventsToSend) {
+    server.send(JSON.stringify(["EVENT", subscriptionId, event]));
+  }
+  sendEOSE(server, subscriptionId);
+}
+async function queryDatabase(subscriptionId, filters, bookmark = "first-unconstrained", env) {
+  console.log(`Processing request for subscription ID: ${subscriptionId} with bookmark: ${bookmark}`);
   try {
-    const shuffledHelpers = shuffleArray([...reqHelpers]);
-    const numHelpers = Math.min(shuffledHelpers.length, 6);
-    const filterChunks = splitFilters(filters, numHelpers);
-    const helperPromises = filterChunks.map((helperFilters, i) => {
-      const helper = shuffledHelpers[i];
-      return fetchEventsFromHelper(helper, subscriptionId, helperFilters, server);
-    });
-    const fetchedEvents = await Promise.all(helperPromises);
-    const events = fetchedEvents.flat();
-    if (events.length > 0) {
-      relayCache.set(cacheKey, events, 6e4);
+    const session = env.relayDb.withSession(bookmark);
+    const query = buildQuery(filters);
+    console.log(`Executing query: ${query.sql}`);
+    console.log(`Query parameters: ${JSON.stringify(query.params)}`);
+    const result = await session.prepare(query.sql).bind(...query.params).all();
+    if (result.meta) {
+      console.log({
+        servedByRegion: result.meta.served_by_region ?? "",
+        servedByPrimary: result.meta.served_by_primary ?? false
+      });
     }
-    for (const event of events.slice(0, filters.limit)) {
-      server.send(JSON.stringify(["EVENT", subscriptionId, event]));
-    }
-    sendEOSE(server, subscriptionId);
+    const events = result.results.map((row) => ({
+      id: row.id,
+      pubkey: row.pubkey,
+      created_at: row.created_at,
+      kind: row.kind,
+      tags: JSON.parse(row.tags),
+      content: row.content,
+      sig: row.sig
+    }));
+    console.log(`Found ${events.length} events for subscription ID: ${subscriptionId}`);
+    const newBookmark = session.getBookmark();
+    return {
+      events,
+      bookmark: newBookmark
+    };
   } catch (error) {
     console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
-    sendError(server, `Error fetching events: ${error.message}`);
-    sendEOSE(server, subscriptionId);
+    return { events: [], bookmark: null };
   }
+}
+function buildQuery(filters) {
+  let sql = "SELECT * FROM events WHERE deleted = 0";
+  const params = [];
+  const conditions = [];
+  if (filters.ids && filters.ids.length > 0) {
+    const placeholders = filters.ids.map(() => "?").join(",");
+    conditions.push(`id IN (${placeholders})`);
+    params.push(...filters.ids);
+  }
+  if (filters.authors && filters.authors.length > 0) {
+    const placeholders = filters.authors.map(() => "?").join(",");
+    conditions.push(`pubkey IN (${placeholders})`);
+    params.push(...filters.authors);
+  }
+  if (filters.kinds && filters.kinds.length > 0) {
+    const placeholders = filters.kinds.map(() => "?").join(",");
+    conditions.push(`kind IN (${placeholders})`);
+    params.push(...filters.kinds);
+  }
+  if (filters.since) {
+    conditions.push("created_at >= ?");
+    params.push(filters.since);
+  }
+  if (filters.until) {
+    conditions.push("created_at <= ?");
+    params.push(filters.until);
+  }
+  const tagConditions = [];
+  for (const [key, values] of Object.entries(filters)) {
+    if (key.startsWith("#") && values && values.length > 0) {
+      const tagName = key.substring(1);
+      const tagSubquery = `
+                id IN (
+                    SELECT event_id FROM tags 
+                    WHERE tag_name = ? AND tag_value IN (${values.map(() => "?").join(",")})
+                )
+            `;
+      tagConditions.push(tagSubquery);
+      params.push(tagName, ...values);
+    }
+  }
+  if (tagConditions.length > 0) {
+    conditions.push(`(${tagConditions.join(" OR ")})`);
+  }
+  if (conditions.length > 0) {
+    sql += " AND " + conditions.join(" AND ");
+  }
+  sql += " ORDER BY created_at DESC";
+  if (filters.limit) {
+    sql += " LIMIT ?";
+    params.push(Math.min(filters.limit, 1e4));
+  } else {
+    sql += " LIMIT 10000";
+  }
+  return { sql, params };
 }
 async function closeSubscription(subscriptionId, server) {
   const wsId = server.id || Math.random().toString(36).substr(2, 9);
   relayCache.deleteSubscription(wsId, subscriptionId);
   server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
 }
-async function validateNIP05FromKind0(pubkey) {
+async function validateNIP05FromKind0(pubkey, env) {
   try {
     let metadataEvent = relayCache.get(`metadata:${pubkey}`);
     if (!metadataEvent) {
-      metadataEvent = await fetchKind0EventForPubkey(pubkey);
+      metadataEvent = await fetchKind0EventForPubkey(pubkey, env);
       if (!metadataEvent) {
         console.error(`No kind 0 metadata event found for pubkey: ${pubkey}`);
         return false;
@@ -3158,17 +3430,14 @@ async function validateNIP05FromKind0(pubkey) {
     return false;
   }
 }
-async function fetchKind0EventForPubkey(pubkey) {
+async function fetchKind0EventForPubkey(pubkey, env) {
   try {
-    const shuffledHelpers = shuffleArray([...reqHelpers]);
     const filters = { kinds: [0], authors: [pubkey], limit: 1 };
-    for (const helper of shuffledHelpers) {
-      const events = await fetchEventsFromHelper(helper, null, filters);
-      if (events && events.length > 0) {
-        return events[0];
-      }
+    const result = await queryDatabase(null, filters, "first-unconstrained", env);
+    if (result.events && result.events.length > 0) {
+      return result.events[0];
     }
-    console.log(`No kind 0 event found from helpers, trying fallback relay: wss://relay.nostr.band`);
+    console.log(`No kind 0 event found locally, trying fallback relay: wss://relay.nostr.band`);
     const fallbackEvent = await fetchEventFromFallbackRelay(pubkey);
     if (fallbackEvent) {
       return fallbackEvent;
@@ -3178,31 +3447,30 @@ async function fetchKind0EventForPubkey(pubkey) {
   }
   return null;
 }
-async function hasPaidForRelay(pubkey) {
-  if (!PAY_TO_RELAY_ENABLED) return true;
+async function hasPaidForRelay(pubkey, env) {
+  if (!PAY_TO_RELAY_ENABLED)
+    return true;
   try {
-    const paidKey = `${PAID_PUBKEYS_PREFIX}${pubkey}.json`;
-    const paidRecord = await relayDb.get(paidKey);
-    if (paidRecord) {
-      const paidData = JSON.parse(await paidRecord.text());
-      return true;
-    }
-    return false;
+    const session = env.relayDb.withSession("first-unconstrained");
+    const query = `SELECT pubkey FROM paid_pubkeys WHERE pubkey = ? LIMIT 1`;
+    const result = await session.prepare(query).bind(pubkey).first();
+    return result !== null;
   } catch (error) {
     console.error(`Error checking paid status for ${pubkey}:`, error);
     return false;
   }
 }
-async function savePaidPubkey(pubkey) {
+async function savePaidPubkey(pubkey, env) {
   try {
-    const paidKey = `${PAID_PUBKEYS_PREFIX}${pubkey}.json`;
-    const paidData = {
-      pubkey,
-      paidAt: Math.floor(Date.now() / 1e3)
-    };
-    await relayDb.put(paidKey, JSON.stringify(paidData), {
-      httpMetadata: { contentType: "application/json" }
-    });
+    const session = env.relayDb.withSession("first-primary");
+    const query = `
+            INSERT INTO paid_pubkeys (pubkey, paid_at, amount_sats)
+            VALUES (?, ?, ?)
+            ON CONFLICT(pubkey) DO UPDATE SET
+                paid_at = excluded.paid_at,
+                amount_sats = excluded.amount_sats
+        `;
+    await session.prepare(query).bind(pubkey, Math.floor(Date.now() / 1e3), RELAY_ACCESS_PRICE_SATS).run();
     console.log(`Successfully saved paid pubkey: ${pubkey}`);
     return true;
   } catch (error) {
@@ -3210,7 +3478,7 @@ async function savePaidPubkey(pubkey) {
     return false;
   }
 }
-async function handleCheckPayment(request) {
+async function handleCheckPayment(request, env) {
   const url = new URL(request.url);
   const pubkey = url.searchParams.get("pubkey");
   if (!pubkey) {
@@ -3219,7 +3487,7 @@ async function handleCheckPayment(request) {
       headers: { "Content-Type": "application/json" }
     });
   }
-  const paid = await hasPaidForRelay(pubkey);
+  const paid = await hasPaidForRelay(pubkey, env);
   return new Response(JSON.stringify({ paid }), {
     status: 200,
     headers: {
@@ -3228,7 +3496,7 @@ async function handleCheckPayment(request) {
     }
   });
 }
-async function handlePaymentNotification(request) {
+async function handlePaymentNotification(request, env) {
   if (request.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -3244,7 +3512,7 @@ async function handlePaymentNotification(request) {
         }
       });
     }
-    const success = await savePaidPubkey(pubkey);
+    const success = await savePaidPubkey(pubkey, env);
     if (success) {
       return new Response(JSON.stringify({
         success: true,
@@ -3377,149 +3645,6 @@ async function fetchEventFromFallbackRelay(pubkey) {
     }, 1e4);
   });
 }
-async function fetchEventsFromHelper(helper, subscriptionId, filters, server) {
-  const logContext = {
-    helper,
-    subscriptionId,
-    filters
-  };
-  try {
-    console.log(`Requesting events from helper worker`, logContext);
-    const response = await withConnectionLimit(() => fetch(helper, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}`
-      },
-      body: JSON.stringify({ type: "REQ", subscriptionId, filters })
-    }));
-    if (response.ok) {
-      const contentType = response.headers.get("Content-Type");
-      let events;
-      if (contentType && contentType.includes("application/json")) {
-        events = await response.json();
-      } else {
-        const arrayBuffer = await response.arrayBuffer();
-        const textDecoder = new TextDecoder("utf-8");
-        const jsonString = textDecoder.decode(arrayBuffer);
-        try {
-          events = JSON.parse(jsonString);
-        } catch (error) {
-          console.error("Error parsing ArrayBuffer to JSON:", error);
-          throw new Error("Failed to parse response as JSON.");
-        }
-      }
-      console.log(`Successfully retrieved events from helper worker`, { ...logContext, eventCount: events.length });
-      return events;
-    } else {
-      console.error(`Error fetching events from helper worker`, { ...logContext, status: response.status, statusText: response.statusText });
-      throw new Error(`Failed to fetch events: ${response.status} - ${response.statusText}`);
-    }
-  } catch (error) {
-    console.error(`Error in fetchEventsFromHelper`, { ...logContext, error: error.message });
-    throw error;
-  }
-}
-async function sendEventToHelper(event, server, eventId) {
-  const randomHelper = eventHelpers[Math.floor(Math.random() * eventHelpers.length)];
-  const logContext = {
-    helper: randomHelper,
-    eventId,
-    pubkey: event.pubkey
-  };
-  try {
-    console.log(`Sending event to helper worker`, logContext);
-    const response = await withConnectionLimit(() => fetch(randomHelper, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}`
-      },
-      body: JSON.stringify({ type: "EVENT", event })
-    }));
-    if (response.ok) {
-      console.log(`Successfully sent event to helper worker`, logContext);
-    } else {
-      console.error(`Error sending event to helper worker`, {
-        ...logContext,
-        status: response.status,
-        statusText: response.statusText
-      });
-    }
-  } catch (error) {
-    console.error(`Error in sendEventToHelper`, {
-      ...logContext,
-      error: error.message
-    });
-  }
-}
-function splitFilters(filters, numChunks) {
-  const baseFilters = {};
-  const arrayFilters = {};
-  for (const key in filters) {
-    if (Array.isArray(filters[key])) {
-      arrayFilters[key] = filters[key];
-    } else {
-      baseFilters[key] = filters[key];
-    }
-  }
-  if (arrayFilters.kinds && arrayFilters.kinds.length <= 1 && (!arrayFilters.authors || arrayFilters.authors.length <= 1)) {
-    return [filters];
-  }
-  const filterChunks = Array(numChunks).fill().map(() => ({ ...baseFilters }));
-  const arrayKeys = Object.keys(arrayFilters);
-  if (arrayKeys.length === 1) {
-    const key = arrayKeys[0];
-    const arrayValues = arrayFilters[key];
-    const arrayChunks = splitArray(arrayValues, numChunks);
-    for (let i = 0; i < numChunks; i++) {
-      filterChunks[i][key] = arrayChunks[i];
-    }
-  } else {
-    for (const key in arrayFilters) {
-      const arrayValues = arrayFilters[key];
-      if (key === "authors") {
-        const arrayChunks = splitArray(arrayValues, numChunks);
-        for (let i = 0; i < numChunks; i++) {
-          filterChunks[i][key] = arrayChunks[i];
-        }
-      } else {
-        for (let i = 0; i < numChunks; i++) {
-          filterChunks[i][key] = arrayValues;
-        }
-      }
-    }
-  }
-  return filterChunks;
-}
-function matchesFilters(event, filters) {
-  if (filters.ids && !filters.ids.includes(event.id)) return false;
-  if (filters.authors && !filters.authors.includes(event.pubkey)) return false;
-  if (filters.kinds && !filters.kinds.includes(event.kind)) return false;
-  if (filters.since && event.created_at < filters.since) return false;
-  if (filters.until && event.created_at > filters.until) return false;
-  for (const [filterKey, filterValues] of Object.entries(filters)) {
-    if (filterKey.startsWith("#")) {
-      const tagKey = filterKey.slice(1);
-      const eventTags = event.tags.filter((tag) => tag[0] === tagKey).map((tag) => tag[1]);
-      if (!filterValues.some((value) => eventTags.includes(value))) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-function splitArray(arr, numChunks) {
-  const chunkSize = Math.ceil(arr.length / numChunks);
-  return Array(numChunks).fill().map((_, index) => arr.slice(index * chunkSize, (index + 1) * chunkSize));
-}
-function shuffleArray(array) {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
-}
 function validateIds(ids) {
   for (const id of ids) {
     if (!/^[a-f0-9]{64}$/.test(id)) {
@@ -3563,15 +3688,28 @@ function serializeEventForSigning(event) {
   return serializedEvent;
 }
 function hexToBytes2(hexString) {
-  if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
+  if (hexString.length % 2 !== 0)
+    throw new Error("Invalid hex string");
   const bytes2 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < bytes2.length; i++) {
     bytes2[i] = parseInt(hexString.substr(i * 2, 2), 16);
   }
   return bytes2;
 }
+async function hashContent(event) {
+  const contentToHash = enableGlobalDuplicateCheck ? JSON.stringify({ kind: event.kind, tags: event.tags, content: event.content }) : JSON.stringify({ pubkey: event.pubkey, kind: event.kind, tags: event.tags, content: event.content });
+  const buffer = new TextEncoder().encode(contentToHash);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hash2 = bytesToHex2(new Uint8Array(hashBuffer));
+  console.log(`Generated hash for event ID: ${event.id}: ${hash2}`);
+  return hash2;
+}
+function bytesToHex2(bytes2) {
+  return Array.from(bytes2).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 function sendOK(server, eventId, status, message) {
-  server.send(JSON.stringify(["OK", eventId, status, message]));
+  const formattedMessage = message || "";
+  server.send(JSON.stringify(["OK", eventId, status, formattedMessage]));
 }
 function sendError(server, message) {
   server.send(JSON.stringify(["NOTICE", message]));
@@ -3579,6 +3717,39 @@ function sendError(server, message) {
 function sendEOSE(server, subscriptionId) {
   server.send(JSON.stringify(["EOSE", subscriptionId]));
 }
+function sendClosed(server, subscriptionId, message) {
+  server.send(JSON.stringify(["CLOSED", subscriptionId, message]));
+}
+var relay_worker_default = {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    ctx.waitUntil(initializeDatabase(env.relayDb));
+    if (request.method === "POST" && url.searchParams.has("notify-zap") && PAY_TO_RELAY_ENABLED) {
+      return await handlePaymentNotification(request, env);
+    }
+    if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
+      return await handleCheckPayment(request, env);
+    }
+    if (url.pathname === "/") {
+      if (request.headers.get("Upgrade") === "websocket") {
+        return await handleWebSocket({ waitUntil: ctx.waitUntil }, request, env);
+      } else if (request.headers.get("Accept") === "application/nostr+json") {
+        return await handleRelayInfoRequest(request);
+      } else {
+        return await serveHomePage();
+      }
+    } else if (url.pathname === "/.well-known/nostr.json") {
+      return await handleNIP05Request(url);
+    } else if (url.pathname === "/favicon.ico") {
+      return await serveFavicon();
+    } else {
+      return new Response("Invalid request", { status: 400 });
+    }
+  }
+};
+export {
+  relay_worker_default as default
+};
 /*! Bundled license information:
 
 @noble/hashes/esm/utils.js:
