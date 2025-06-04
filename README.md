@@ -99,7 +99,7 @@ The current release of Nosflare is primarily focused on [basic protocol flow](ht
 
 ## Recommended Cloudflare Settings
 
-Ensure optimal performance of the relay by creating a Page Rule for enforcing a high cache rate through a "cache everything" rule and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
+Ensure optimal performance of the relay by changeing "CPU time limit" in Worker settings to `30000` and creating a Page Rule for enforcing a high cache rate through a "cache everything" rule and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
 
 Examples:
 
