@@ -85,9 +85,9 @@ If you have previously deployed a Nosflare-powered relay, there is a migration t
 
 ## Pay to relay
 
-![Pay to relay](images/ptr.gif)
-
 Nosflare allows for "pay to relay", which lets the relay operator accept Bitcoin lightning payments through Nostr zaps of SATS. The price can be whatever the relay operator chooses and sets detailed above in the optional settings section. This allows relay operators to turn their relay into a paid relay. Once enabled, every event sent to the relay will have its author's pubkey checked to see if they've paid for access.
+
+![Pay to relay](images/ptr.gif)
 
 ## Roadmap
 
