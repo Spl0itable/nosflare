@@ -3,7 +3,7 @@
 //    |  \| | | | \___ \| |_  | |     / _ \ | |_) |  _|  
 //    | |\  | |_| |___) |  _| | |___ / ___ \|  _ <| |___ 
 //    |_| \_|\___/|____/|_|   |_____/_/   \_\_| \_\_____|
-//    ═══════════════════(v6.0.0)═══════════════════════
+//    ═══════════════════(v6.0.1)═══════════════════════
 
 import { schnorr } from "@noble/curves/secp256k1";
 
@@ -15,8 +15,8 @@ import { schnorr } from "@noble/curves/secp256k1";
 
 // Pay to relay
 const relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv"; // Use your npub
-const PAY_TO_RELAY_ENABLED = false; // Set to true to enable pay to relay
-const RELAY_ACCESS_PRICE_SATS = 212121; // Price in SATS for relay access
+const PAY_TO_RELAY_ENABLED = true; // Set to false to disable pay to relay
+const RELAY_ACCESS_PRICE_SATS = 2121; // Price in SATS for relay access
 
 // Relay info
 const relayInfo = {
@@ -26,7 +26,7 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "6.0.0",
+    version: "6.0.1",
     icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
     // Optional fields (uncomment as needed):
@@ -94,19 +94,19 @@ const antiSpamKinds = new Set([
 
 // Blocked pubkeys
 // Add pubkeys in hex format to block write access
-const blockedPubkeys = [
+const blockedPubkeys = new Set([
     "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
     "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
     "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18",
     "05aee96dd41429a3ae97a9dac4dfc6867fdfacebca3f3bdc051e5004b0751f01",
     "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362"
-];
+]);
 
 // Allowed pubkeys
 // Add pubkeys in hex format to allow write access
-const allowedPubkeys = [
+const allowedPubkeys = new Set([
     // ... pubkeys that are explicitly allowed
-];
+]);
 
 // Blocked event kinds
 // Add comma-separated kinds Ex: 1064, 4, 22242
@@ -153,6 +153,13 @@ const blockedTags = new Set([
 const allowedTags = new Set([
     // "p", "e", "t"
     // ... tags that are explicitly allowed
+]);
+
+// Rate limit thresholds
+const PUBKEY_RATE_LIMIT = { rate: 100 / 60000, capacity: 100 }; // 100 EVENT messages per min
+const REQ_RATE_LIMIT = { rate: 10000 / 60000, capacity: 10000 }; // 10,000 REQ messages per min
+const excludedRateLimitKinds = new Set([
+    // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
 
 // *************************** //
@@ -315,7 +322,6 @@ const relayCache = {
         if (!this._subscriptions[wsId]) {
             this._subscriptions[wsId] = {};
         }
-        // NIP-01: Replace existing subscription with same ID
         this._subscriptions[wsId][subscriptionId] = filters;
     },
     getSubscription(wsId, subscriptionId) {
@@ -368,10 +374,6 @@ class rateLimiter {
         this.lastRefillTime = now;
     }
 }
-
-const pubkeyRateLimiter = new rateLimiter(100 / 60000, 100); // 100 EVENT messages per min
-const excludedRateLimitKinds = []; // kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
-const reqRateLimiter = new rateLimiter(10000 / 60000, 10000);  // 10,000 REQ messages per min
 
 // Check if anti-spam should be applied to this event kind
 function shouldCheckForDuplicates(kind) {
@@ -468,10 +470,10 @@ async function handleNIP05Request(url) {
 
 // Helper function for allowed pubkeys
 function isPubkeyAllowed(pubkey) {
-    if (allowedPubkeys.length > 0 && !allowedPubkeys.includes(pubkey)) {
+    if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
         return false;
     }
-    return !blockedPubkeys.includes(pubkey);
+    return !blockedPubkeys.has(pubkey);
 }
 
 // Helper function for allowed kinds
@@ -518,6 +520,11 @@ async function handleWebSocket(event, request, env) {
     // Generate unique websocket ID
     const wsId = Math.random().toString(36).substr(2, 9);
     server.id = wsId;
+    server.host = request.headers.get('host');
+
+    // Create rate limiters for this connection
+    server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
+    server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
 
     server.addEventListener("message", async (messageEvent) => {
         event.waitUntil(
@@ -1011,7 +1018,7 @@ async function processEvent(event, server, env) {
             const hasPaid = await hasPaidForRelay(event.pubkey, env);
             if (!hasPaid) {
                 const protocol = 'https:';
-                const relayUrl = `${protocol}//${server.url || 'relay.nosflare.com'}`;
+                const relayUrl = `${protocol}//${server.host || 'relay.nosflare.com'}`;
                 console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
                 sendOK(server, event.id, false, `blocked: payment required. Visit ${relayUrl} to pay for relay access.`);
                 return;
@@ -1069,8 +1076,8 @@ async function processEvent(event, server, env) {
         }
 
         // Rate limit all event kinds except excluded kinds
-        if (!excludedRateLimitKinds.includes(event.kind)) {
-            if (!pubkeyRateLimiter.removeToken()) {
+        if (!excludedRateLimitKinds.has(event.kind)) {
+            if (!server.pubkeyRateLimiter.removeToken()) {
                 console.error(`Event denied. Rate limit exceeded for pubkey ${event.pubkey}.`);
                 sendOK(server, event.id, false, "rate-limited: slow down there chief");
                 return;
@@ -1228,7 +1235,7 @@ async function saveEventToD1(event, env) {
 async function processDeletionEvent(deletionEvent, env) {
     console.log(`Processing deletion event with ID: ${deletionEvent.id}`);
     const deletedEventIds = deletionEvent.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
-    
+
     const results = {
         success: true,
         deletedCount: 0,
@@ -1246,7 +1253,7 @@ async function processDeletionEvent(deletionEvent, env) {
     for (const eventId of deletedEventIds) {
         try {
             console.log(`Attempting to delete event with ID: ${eventId}`);
-            
+
             // Check if the event exists and belongs to the same pubkey
             const existingEvent = await session.prepare("SELECT pubkey FROM events WHERE id = ? LIMIT 1")
                 .bind(eventId)
@@ -1315,7 +1322,7 @@ async function processReq(message, server, env) {
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
 
     // Check the REQ rate limiter
-    if (!reqRateLimiter.removeToken()) {
+    if (!server.reqRateLimiter.removeToken()) {
         console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
         sendClosed(server, subscriptionId, "rate-limited: slow down there chief");
         return;
@@ -1649,13 +1656,19 @@ async function fetchKind0EventForPubkey(pubkey, env) {
 
 // Helper function to check if a pubkey has paid
 async function hasPaidForRelay(pubkey, env) {
-    if (!PAY_TO_RELAY_ENABLED) return true; // If pay to relay is disabled, allow all
+    if (!PAY_TO_RELAY_ENABLED) return true; // If pay to relay is disabled allow all
 
     try {
-        // Use session for consistent reads
-        const session = env.relayDb.withSession('first-unconstrained');
-        const query = `SELECT pubkey FROM paid_pubkeys WHERE pubkey = ? LIMIT 1`;
+        const session = env.relayDb.withSession('first-primary');
+        const query = `SELECT pubkey, paid_at FROM paid_pubkeys WHERE pubkey = ? LIMIT 1`;
         const result = await session.prepare(query).bind(pubkey).first();
+
+        if (result) {
+            console.log(`Payment found for ${pubkey}, paid at: ${result.paid_at}`);
+        } else {
+            console.log(`No payment found for ${pubkey}`);
+        }
+
         return result !== null;
     } catch (error) {
         console.error(`Error checking paid status for ${pubkey}:`, error);

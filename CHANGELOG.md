@@ -1,3 +1,7 @@
+## v6.0.1 - 2025-06-05
+
+- Hotfix: corrected a case where it wouldn't fetch whether someone was paid or not
+
 ## v6.0.0 - 2025-06-04
 
 - New: deprecated usage of R2 bucket in place of D1 SQL database
