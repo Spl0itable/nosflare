@@ -228,6 +228,8 @@ async function doInitializeDatabase(db) {
             `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
             `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
+            `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_events_deleted_kind ON events(deleted, kind)`,
 
             // Tags table for efficient tag queries
             `CREATE TABLE IF NOT EXISTS tags (
@@ -243,14 +245,11 @@ async function doInitializeDatabase(db) {
 
             // Table for paid pubkeys
             `CREATE TABLE IF NOT EXISTS paid_pubkeys (
-        pubkey TEXT PRIMARY KEY,
-        paid_at INTEGER NOT NULL,
-        amount_sats INTEGER,
-        created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
-    )`,
-
-            // Index for paid pubkeys
-            `CREATE INDEX IF NOT EXISTS idx_paid_pubkeys_pubkey ON paid_pubkeys(pubkey)`,
+                pubkey TEXT PRIMARY KEY,
+                paid_at INTEGER NOT NULL,
+                amount_sats INTEGER,
+                created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+            )`,
 
             // Table for content hashes (anti-spam)
             `CREATE TABLE IF NOT EXISTS content_hashes (
