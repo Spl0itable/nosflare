@@ -1018,7 +1018,7 @@ async function processEvent(event, server, env) {
             const hasPaid = await hasPaidForRelay(event.pubkey, env);
             if (!hasPaid) {
                 const protocol = 'https:';
-                const relayUrl = `${protocol}//${server.host || 'relay.nosflare.com'}`;
+                const relayUrl = `${protocol}//${server.host}`;
                 console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
                 sendOK(server, event.id, false, `blocked: payment required. Visit ${relayUrl} to pay for relay access.`);
                 return;
