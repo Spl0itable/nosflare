@@ -617,6 +617,7 @@ async function serveHomePage() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A serverless Nostr relay through Cloudflare Worker and D1 database" />
     <title>Nosflare - Nostr Relay</title>
     <style>
         * {
