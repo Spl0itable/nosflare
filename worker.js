@@ -2446,11 +2446,13 @@ async function doInitializeDatabase(db) {
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
       // Table for paid pubkeys
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
-                pubkey TEXT PRIMARY KEY,
-                paid_at INTEGER NOT NULL,
-                amount_sats INTEGER,
-                created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
-            )`,
+        pubkey TEXT PRIMARY KEY,
+        paid_at INTEGER NOT NULL,
+        amount_sats INTEGER,
+        created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+    )`,
+      // Index for paid pubkeys
+      `CREATE INDEX IF NOT EXISTS idx_paid_pubkeys_pubkey ON paid_pubkeys(pubkey)`,
       // Table for content hashes (anti-spam)
       `CREATE TABLE IF NOT EXISTS content_hashes (
                 hash TEXT PRIMARY KEY,
@@ -3596,7 +3598,7 @@ async function fetchKind0EventForPubkey(pubkey, env) {
 async function hasPaidForRelay(pubkey, env) {
   if (!PAY_TO_RELAY_ENABLED) return true;
   try {
-    const session = env.relayDb.withSession("first-primary");
+    const session = env.relayDb.withSession("first-unconstrained");
     const query = `SELECT pubkey, paid_at FROM paid_pubkeys WHERE pubkey = ? LIMIT 1`;
     const result = await session.prepare(query).bind(pubkey).first();
     if (result) {
