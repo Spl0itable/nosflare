@@ -2211,7 +2211,7 @@ var relayInfo = {
   // }
 };
 var nip05Users = {
-  "lux": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
+  "Luxas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
   // ... more NIP-05 verified users
 };
 var enableAntiSpam = false;
