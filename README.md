@@ -70,12 +70,13 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 1. Log in to your Cloudflare dashboard.
 2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region
 3. In the newly created D1 database click Settings tab and click "Enable read replication". Ignore the warning, Nosflare has been extensively tested to support read replication. However, fallback support is included in case read replication is disabled.
-4. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
-5. On the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section.
-6. Depending what you picked in step 3, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
-7. Save and deploy the relay worker.
-8. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
-9. (optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
+4. Edit the `wrangler.jsonc` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard.
+5. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
+6. On the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section.
+7. Depending what you picked in step 3, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
+8. Save and deploy the relay worker.
+9. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
+10. (optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
 
 ## Migration
 
