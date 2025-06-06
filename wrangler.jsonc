@@ -16,5 +16,12 @@
   // CPU limits for paid plan
   "limits": {
     "cpu_ms": 30000
+  },
+  
+  // Enable logs
+  "observability": {
+    "logs": {
+      "enabled": true
+    }
   }
 }

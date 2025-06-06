@@ -3,7 +3,7 @@
 //    |  \| | | | \___ \| |_  | |     / _ \ | |_) |  _|  
 //    | |\  | |_| |___) |  _| | |___ / ___ \|  _ <| |___ 
 //    |_| \_|\___/|____/|_|   |_____/_/   \_\_| \_\_____|
-//    ═══════════════════(v6.0.1)═══════════════════════
+//    ═══════════════════(v6.0.2)═══════════════════════
 
 import { schnorr } from "@noble/curves/secp256k1";
 
@@ -26,7 +26,7 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "6.0.1",
+    version: "6.0.2",
     icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
     // Optional fields (uncomment as needed):
@@ -166,41 +166,34 @@ const excludedRateLimitKinds = new Set([
 // ** END EDITABLE SETTINGS ** //
 // *************************** //
 
-// Database initialization tracking
-let dbInitialized = false;
-let dbInitPromise = null;
-
 // Database initialization function
 async function initializeDatabase(db) {
-    // If already initialized in this worker instance, return immediately
-    if (dbInitialized) return;
-
-    // Get or create initialization promise for this database binding
-    if (!dbInitPromise) {
-        dbInitPromise = doInitializeDatabase(db);
-    }
-
-    return dbInitPromise;
-}
-
-// Automatically add necessary tables if they don't exist
-async function doInitializeDatabase(db) {
     try {
-        // First, check if database is already initialized
-        const initCheck = await db.prepare(
+        // Use session with read replica for checking initialization status
+        const session = db.withSession('first-unconstrained');
+
+        // Always check the database directly
+        const initCheck = await session.prepare(
             "SELECT value FROM system_config WHERE key = 'db_initialized' LIMIT 1"
         ).first().catch(() => null); // Catch error if table doesn't exist
 
         if (initCheck && initCheck.value === '1') {
             console.log("Database already initialized, skipping schema creation");
-            dbInitialized = true;
             return;
         }
+    } catch (error) {
+        console.log("Database not initialized or error checking status:", error.message);
+        // Continue with initialization
+    }
 
+    // Use primary for writes during initialization
+    const session = db.withSession('first-primary');
+
+    try {
         console.log("Initializing D1 database schema...");
 
         // Create system config table first
-        await db.prepare(`
+        await session.prepare(`
             CREATE TABLE IF NOT EXISTS system_config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -267,7 +260,7 @@ async function doInitializeDatabase(db) {
         // Execute each statement
         for (const statement of statements) {
             try {
-                await db.prepare(statement).run();
+                await session.prepare(statement).run();
                 console.log(`Executed: ${statement.substring(0, 50)}...`);
             } catch (error) {
                 console.error(`Error executing statement: ${error.message}`);
@@ -277,20 +270,19 @@ async function doInitializeDatabase(db) {
         }
 
         // Enable foreign keys
-        await db.prepare("PRAGMA foreign_keys = ON").run();
+        await session.prepare("PRAGMA foreign_keys = ON").run();
 
         // Mark database as initialized
-        await db.prepare(
+        await session.prepare(
             "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
         ).run();
 
         // Store schema version for future migrations
-        await db.prepare(
+        await session.prepare(
             "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
         ).run();
 
         console.log("Database initialization completed successfully!");
-        dbInitialized = true;
 
     } catch (error) {
         console.error("Failed to initialize database:", error);
@@ -305,50 +297,97 @@ const relayCache = {
     _sessions: {}, // Store session bookmarks per websocket
 
     get(key) {
-        const item = this._cache[key];
-        if (item && item.expires > Date.now()) {
-            return item.value;
+        try {
+            const item = this._cache[key];
+            if (item && item.expires > Date.now()) {
+                return item.value;
+            }
+        } catch (e) {
+            console.error("Error in cache get:", e);
         }
         return null;
     },
     set(key, value, ttl = 60000) {
-        this._cache[key] = {
-            value,
-            expires: Date.now() + ttl,
-        };
+        try {
+            this._cache[key] = {
+                value,
+                expires: Date.now() + ttl,
+            };
+        } catch (e) {
+            console.error("Error in cache set:", e);
+        }
     },
     delete(key) {
-        delete this._cache[key];
+        try {
+            delete this._cache[key];
+        } catch (e) {
+            console.error("Error in cache delete:", e);
+        }
     },
     addSubscription(wsId, subscriptionId, filters) {
-        if (!this._subscriptions[wsId]) {
-            this._subscriptions[wsId] = {};
+        try {
+            if (!this._subscriptions[wsId]) {
+                this._subscriptions[wsId] = {};
+            }
+            this._subscriptions[wsId][subscriptionId] = filters;
+        } catch (e) {
+            console.error("Error adding subscription:", e);
         }
-        this._subscriptions[wsId][subscriptionId] = filters;
     },
     getSubscription(wsId, subscriptionId) {
-        return this._subscriptions[wsId]?.[subscriptionId] || null;
+        try {
+            return this._subscriptions[wsId]?.[subscriptionId] || null;
+        } catch (e) {
+            console.error("Error getting subscription:", e);
+            return null;
+        }
     },
     deleteSubscription(wsId, subscriptionId) {
-        if (this._subscriptions[wsId]) {
-            delete this._subscriptions[wsId][subscriptionId];
+        try {
+            if (this._subscriptions[wsId]) {
+                delete this._subscriptions[wsId][subscriptionId];
+            }
+        } catch (e) {
+            console.error("Error deleting subscription:", e);
         }
     },
     clearSubscriptions(wsId) {
-        delete this._subscriptions[wsId];
+        try {
+            delete this._subscriptions[wsId];
+        } catch (e) {
+            console.error("Error clearing subscriptions:", e);
+        }
     },
     getAllSubscriptions() {
-        return this._subscriptions;
+        try {
+            return this._subscriptions;
+        } catch (e) {
+            console.error("Error getting all subscriptions:", e);
+            return {};
+        }
     },
     // Session management
     setSessionBookmark(wsId, bookmark) {
-        this._sessions[wsId] = bookmark;
+        try {
+            this._sessions[wsId] = bookmark;
+        } catch (e) {
+            console.error("Error setting session bookmark:", e);
+        }
     },
     getSessionBookmark(wsId) {
-        return this._sessions[wsId] || 'first-unconstrained';
+        try {
+            return this._sessions[wsId] || 'first-unconstrained';
+        } catch (e) {
+            console.error("Error getting session bookmark:", e);
+            return 'first-unconstrained';
+        }
     },
     clearSession(wsId) {
-        delete this._sessions[wsId];
+        try {
+            delete this._sessions[wsId];
+        } catch (e) {
+            console.error("Error clearing session:", e);
+        }
     }
 };
 
@@ -383,7 +422,7 @@ function shouldCheckForDuplicates(kind) {
 }
 
 // Helper function to serve relay info
-async function handleRelayInfoRequest(request) {
+function handleRelayInfoRequest(request) {
     const responseInfo = { ...relayInfo };
 
     // Add payment information if pay-to-relay is enabled
@@ -436,7 +475,7 @@ async function serveFavicon() {
 }
 
 // Helper function to handle serving NIP-05
-async function handleNIP05Request(url) {
+function handleNIP05Request(url) {
     const name = url.searchParams.get("name");
     if (!name) {
         return new Response(JSON.stringify({ error: "Missing 'name' parameter" }), {
@@ -512,11 +551,15 @@ function isTagAllowed(tag) {
 }
 
 // Handle websocket messages
-async function handleWebSocket(event, request, env) {
-    // Ensure database is initialized before handling WebSocket
-    await initializeDatabase(env.relayDb);
+function handleWebSocketUpgrade(request, env) {
+    const upgradeHeader = request.headers.get('Upgrade');
+    if (!upgradeHeader || upgradeHeader !== 'websocket') {
+        return new Response('Expected Upgrade: websocket', { status: 426 });
+    }
 
-    const { 0: client, 1: server } = new WebSocketPair();
+    const webSocketPair = new WebSocketPair();
+    const [client, server] = Object.values(webSocketPair);
+
     server.accept();
 
     // Generate unique websocket ID
@@ -524,60 +567,104 @@ async function handleWebSocket(event, request, env) {
     server.id = wsId;
     server.host = request.headers.get('host');
 
-    // Create rate limiters for this connection
+    // Create rate limiters for the connection
     server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
     server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
 
+    // Track if connection is still active
+    let isConnectionActive = true;
+
+    // Set up event handlers
     server.addEventListener("message", async (messageEvent) => {
-        event.waitUntil(
-            (async () => {
+        if (!isConnectionActive) return;
+
+        try {
+            let messageData;
+
+            if (messageEvent.data instanceof ArrayBuffer) {
+                const textDecoder = new TextDecoder("utf-8");
+                const decodedText = textDecoder.decode(messageEvent.data);
+                messageData = JSON.parse(decodedText);
+            } else {
+                messageData = JSON.parse(messageEvent.data);
+            }
+
+            if (!Array.isArray(messageData)) {
+                sendError(server, "Invalid message format: expected JSON array");
+                return;
+            }
+
+            const messageType = messageData[0];
+            switch (messageType) {
+                case "EVENT":
+                    await processEvent(messageData[1], server, env);
+                    break;
+                case "REQ":
+                    await processReq(messageData, server, env);
+                    break;
+                case "CLOSE":
+                    closeSubscription(messageData[1], server);
+                    break;
+                default:
+                    sendError(server, `Unknown message type: ${messageType}`);
+            }
+        } catch (e) {
+            console.error("Failed to process message:", e);
+            if (isConnectionActive) {
                 try {
-                    let messageData;
-
-                    if (messageEvent.data instanceof ArrayBuffer) {
-                        const textDecoder = new TextDecoder("utf-8");
-                        const decodedText = textDecoder.decode(messageEvent.data);
-                        messageData = JSON.parse(decodedText);
-                    } else {
-                        messageData = JSON.parse(messageEvent.data);
-                    }
-
-                    if (!Array.isArray(messageData)) {
-                        sendError(server, "Invalid message format: expected JSON array");
-                        return;
-                    }
-
-                    const messageType = messageData[0];
-                    switch (messageType) {
-                        case "EVENT":
-                            await processEvent(messageData[1], server, env, event);
-                            break;
-                        case "REQ":
-                            await processReq(messageData, server, env);
-                            break;
-                        case "CLOSE":
-                            await closeSubscription(messageData[1], server);
-                            break;
-                        // Add more cases as needed
-                        default:
-                            sendError(server, `Unknown message type: ${messageType}`);
-                    }
-                } catch (e) {
                     sendError(server, "Failed to process the message");
-                    console.error("Failed to process message:", e);
+                } catch (sendError) {
+                    console.error("Failed to send error message:", sendError);
                 }
-            })()
-        );
+            }
+        }
     });
 
     server.addEventListener("close", (event) => {
-        relayCache.clearSubscriptions(wsId);
-        relayCache.clearSession(wsId);
-        console.log("WebSocket closed", event.code, event.reason);
+        isConnectionActive = false;
+
+        try {
+            console.log(`WebSocket closed for ${wsId}`, event.code, event.reason);
+
+            if (relayCache && typeof relayCache.clearSubscriptions === 'function') {
+                relayCache.clearSubscriptions(wsId);
+            }
+            if (relayCache && typeof relayCache.clearSession === 'function') {
+                relayCache.clearSession(wsId);
+            }
+
+        } catch (error) {
+            console.error("Error in close handler:", error);
+        }
     });
 
     server.addEventListener("error", (error) => {
-        console.error("WebSocket error:", error);
+        isConnectionActive = false;
+
+        if (error instanceof ErrorEvent) {
+            console.error("WebSocket error:", {
+                message: error.message,
+                filename: error.filename,
+                lineno: error.lineno,
+                colno: error.colno,
+                error: error.error
+            });
+        } else {
+            console.error("WebSocket error:", error);
+        }
+
+        try {
+
+            if (relayCache && typeof relayCache.clearSubscriptions === 'function') {
+                relayCache.clearSubscriptions(wsId);
+            }
+            if (relayCache && typeof relayCache.clearSession === 'function') {
+                relayCache.clearSession(wsId);
+            }
+
+        } catch (e) {
+            console.error("Error cleaning up after WebSocket error:", e);
+        }
     });
 
     return new Response(null, {
@@ -587,7 +674,7 @@ async function handleWebSocket(event, request, env) {
 }
 
 // Handle serving landing page for HTTP requests
-async function serveHomePage() {
+function serveLandingPage() {
     const payToRelaySection = PAY_TO_RELAY_ENABLED ? `
         <div class="pay-section" id="paySection">
             <p style="margin-bottom: 1rem;">Pay to access this relay:</p>
@@ -1588,7 +1675,7 @@ function buildQuery(filters) {
 }
 
 // Handle CLOSE messages
-async function closeSubscription(subscriptionId, server) {
+function closeSubscription(subscriptionId, server) {
     const wsId = server.id || Math.random().toString(36).substr(2, 9);
     relayCache.deleteSubscription(wsId, subscriptionId);
 
@@ -1835,7 +1922,7 @@ async function validateNIP05(nip05Address, pubkey) {
 }
 
 // Fetches kind 0 event from other relay
-async function fetchEventFromFallbackRelay(pubkey) {
+function fetchEventFromFallbackRelay(pubkey) {
     return new Promise((resolve, reject) => {
         const fallbackRelayUrl = 'wss://relay.nostr.band';
         const ws = new WebSocket(fallbackRelayUrl);
@@ -2007,35 +2094,45 @@ function sendClosed(server, subscriptionId, message) {
 // ES Module export
 export default {
     async fetch(request, env, ctx) {
-        const url = new URL(request.url);
+        try {
+            const url = new URL(request.url);
 
-        // Initialize database on first request
-        ctx.waitUntil(initializeDatabase(env.relayDb));
-
-        // Handle payment notification from zap
-        if (request.method === 'POST' && url.searchParams.has('notify-zap') && PAY_TO_RELAY_ENABLED) {
-            return await handlePaymentNotification(request, env);
-        }
-
-        // API endpoint for checking payment status
-        if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
-            return await handleCheckPayment(request, env);
-        }
-
-        if (url.pathname === "/") {
-            if (request.headers.get("Upgrade") === "websocket") {
-                return await handleWebSocket({ waitUntil: ctx.waitUntil }, request, env);
-            } else if (request.headers.get("Accept") === "application/nostr+json") {
-                return await handleRelayInfoRequest(request);
-            } else {
-                return await serveHomePage();
+            // Handle payment notification from zap
+            if (request.method === 'POST' && url.searchParams.has('notify-zap') && PAY_TO_RELAY_ENABLED) {
+                return await handlePaymentNotification(request, env);
             }
-        } else if (url.pathname === "/.well-known/nostr.json") {
-            return await handleNIP05Request(url);
-        } else if (url.pathname === "/favicon.ico") {
-            return await serveFavicon();
-        } else {
-            return new Response("Invalid request", { status: 400 });
+
+            // API endpoint for checking payment status
+            if (url.pathname === "/api/check-payment" && PAY_TO_RELAY_ENABLED) {
+                return await handleCheckPayment(request, env);
+            }
+
+            // Serves landing page, websocket upgrade, etc
+            if (url.pathname === "/") {
+                if (request.headers.get("Upgrade") === "websocket") {
+                    return handleWebSocketUpgrade(request, env);
+                } else if (request.headers.get("Accept") === "application/nostr+json") {
+                    return handleRelayInfoRequest(request);
+                } else {
+                    // Initialize DB in background without blocking response
+                    ctx.waitUntil(
+                        initializeDatabase(env.relayDb)
+                            .catch(e => console.error("DB init error:", e))
+                    );
+
+                    // Return the landing page immediately
+                    return serveLandingPage();
+                }
+            } else if (url.pathname === "/.well-known/nostr.json") {
+                return handleNIP05Request(url);
+            } else if (url.pathname === "/favicon.ico") {
+                return await serveFavicon();
+            } else {
+                return new Response("Invalid request", { status: 400 });
+            }
+        } catch (error) {
+            console.error("Error in fetch handler:", error);
+            return new Response("Internal Server Error", { status: 500 });
         }
     }
 };

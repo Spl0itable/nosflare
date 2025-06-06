@@ -1,3 +1,7 @@
+## v6.0.2 - 2025-06-06
+
+- Hotfix: improved database initialization and websocket handler
+
 ## v6.0.1 - 2025-06-05
 
 - Hotfix: corrected a case where it wouldn't fetch whether someone was paid or not
