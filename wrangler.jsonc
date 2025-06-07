@@ -13,12 +13,17 @@
     }
   ],
   
-  // CPU limits for paid plan
+  // Smart Placement (keep as smart so it lowers latency)
+  "placement": {
+    "mode": "smart"
+  },
+  
+  // CPU limits (lower to 10 if not on paid Workers plan)
   "limits": {
     "cpu_ms": 30000
   },
   
-  // Enable logs
+  // Enable logs (on by default, but can disable)
   "observability": {
     "logs": {
       "enabled": true
