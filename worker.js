@@ -2026,7 +2026,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "6.0.2",
+  version: "6.0.3",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2344,16 +2344,13 @@ async function initializeDatabase(db) {
 }
 var relayCache = {
   _cache: {},
-  _subscriptions: {},
-  // Store subscriptions
-  _sessions: {},
-  // Store session bookmarks per websocket
   get(key) {
     try {
       const item = this._cache[key];
       if (item && item.expires > Date.now()) {
         return item.value;
       }
+      delete this._cache[key];
     } catch (e) {
       console.error("Error in cache get:", e);
     }
@@ -2374,71 +2371,6 @@ var relayCache = {
       delete this._cache[key];
     } catch (e) {
       console.error("Error in cache delete:", e);
-    }
-  },
-  addSubscription(wsId, subscriptionId, filters) {
-    try {
-      if (!this._subscriptions[wsId]) {
-        this._subscriptions[wsId] = {};
-      }
-      this._subscriptions[wsId][subscriptionId] = filters;
-    } catch (e) {
-      console.error("Error adding subscription:", e);
-    }
-  },
-  getSubscription(wsId, subscriptionId) {
-    try {
-      return this._subscriptions[wsId]?.[subscriptionId] || null;
-    } catch (e) {
-      console.error("Error getting subscription:", e);
-      return null;
-    }
-  },
-  deleteSubscription(wsId, subscriptionId) {
-    try {
-      if (this._subscriptions[wsId]) {
-        delete this._subscriptions[wsId][subscriptionId];
-      }
-    } catch (e) {
-      console.error("Error deleting subscription:", e);
-    }
-  },
-  clearSubscriptions(wsId) {
-    try {
-      delete this._subscriptions[wsId];
-    } catch (e) {
-      console.error("Error clearing subscriptions:", e);
-    }
-  },
-  getAllSubscriptions() {
-    try {
-      return this._subscriptions;
-    } catch (e) {
-      console.error("Error getting all subscriptions:", e);
-      return {};
-    }
-  },
-  // Session management
-  setSessionBookmark(wsId, bookmark) {
-    try {
-      this._sessions[wsId] = bookmark;
-    } catch (e) {
-      console.error("Error setting session bookmark:", e);
-    }
-  },
-  getSessionBookmark(wsId) {
-    try {
-      return this._sessions[wsId] || "first-unconstrained";
-    } catch (e) {
-      console.error("Error getting session bookmark:", e);
-      return "first-unconstrained";
-    }
-  },
-  clearSession(wsId) {
-    try {
-      delete this._sessions[wsId];
-    } catch (e) {
-      console.error("Error clearing session:", e);
     }
   }
 };
@@ -2583,15 +2515,24 @@ function handleWebSocketUpgrade(request, env) {
   const webSocketPair = new WebSocketPair();
   const [client, server] = Object.values(webSocketPair);
   server.accept();
-  const wsId = Math.random().toString(36).substr(2, 9);
-  server.id = wsId;
   server.host = request.headers.get("host");
   server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
   server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
-  let isConnectionActive = true;
+  let idleTimeout;
+  const IDLE_TIMEOUT_MS = 9e4;
+  const resetIdleTimeout = () => {
+    if (idleTimeout)
+      clearTimeout(idleTimeout);
+    idleTimeout = setTimeout(() => {
+      console.log("Closing WebSocket due to inactivity");
+      if (server.readyState === WebSocket.OPEN) {
+        server.close(1e3, "Idle timeout");
+      }
+    }, IDLE_TIMEOUT_MS);
+  };
+  resetIdleTimeout();
   server.addEventListener("message", async (messageEvent) => {
-    if (!isConnectionActive)
-      return;
+    resetIdleTimeout();
     try {
       let messageData;
       if (messageEvent.data instanceof ArrayBuffer) {
@@ -2614,59 +2555,20 @@ function handleWebSocketUpgrade(request, env) {
           await processReq(messageData, server, env);
           break;
         case "CLOSE":
-          closeSubscription(messageData[1], server);
+          const subscriptionId = messageData[1];
+          server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
           break;
         default:
           sendError(server, `Unknown message type: ${messageType}`);
       }
     } catch (e) {
       console.error("Failed to process message:", e);
-      if (isConnectionActive) {
-        try {
-          sendError(server, "Failed to process the message");
-        } catch (sendError2) {
-          console.error("Failed to send error message:", sendError2);
-        }
-      }
+      sendError(server, "Failed to process the message");
     }
   });
-  server.addEventListener("close", (event) => {
-    isConnectionActive = false;
-    try {
-      console.log(`WebSocket closed for ${wsId}`, event.code, event.reason);
-      if (relayCache && typeof relayCache.clearSubscriptions === "function") {
-        relayCache.clearSubscriptions(wsId);
-      }
-      if (relayCache && typeof relayCache.clearSession === "function") {
-        relayCache.clearSession(wsId);
-      }
-    } catch (error) {
-      console.error("Error in close handler:", error);
-    }
-  });
-  server.addEventListener("error", (error) => {
-    isConnectionActive = false;
-    if (error instanceof ErrorEvent) {
-      console.error("WebSocket error:", {
-        message: error.message,
-        filename: error.filename,
-        lineno: error.lineno,
-        colno: error.colno,
-        error: error.error
-      });
-    } else {
-      console.error("WebSocket error:", error);
-    }
-    try {
-      if (relayCache && typeof relayCache.clearSubscriptions === "function") {
-        relayCache.clearSubscriptions(wsId);
-      }
-      if (relayCache && typeof relayCache.clearSession === "function") {
-        relayCache.clearSession(wsId);
-      }
-    } catch (e) {
-      console.error("Error cleaning up after WebSocket error:", e);
-    }
+  server.addEventListener("close", () => {
+    if (idleTimeout)
+      clearTimeout(idleTimeout);
   });
   return new Response(null, {
     status: 101,
@@ -3305,7 +3207,6 @@ async function processReq(message, server, env) {
     sendClosed(server, subscriptionId, "error: at least one filter required");
     return;
   }
-  const wsId = server.id || Math.random().toString(36).substr(2, 9);
   if (!server.reqRateLimiter.removeToken()) {
     console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
     sendClosed(server, subscriptionId, "rate-limited: slow down there chief");
@@ -3356,7 +3257,6 @@ async function processReq(message, server, env) {
       filter.limit = 1e4;
     }
   }
-  relayCache.addSubscription(wsId, subscriptionId, filters);
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   let allEvents = [];
@@ -3365,15 +3265,11 @@ async function processReq(message, server, env) {
     allEvents = cachedEvents;
   } else {
     try {
-      const bookmark = relayCache.getSessionBookmark(wsId);
       const eventSet = /* @__PURE__ */ new Map();
       for (const filter of filters) {
-        const result = await queryDatabase(subscriptionId, filter, bookmark, env);
+        const result = await queryDatabase(subscriptionId, filter, env);
         for (const event of result.events) {
           eventSet.set(event.id, event);
-        }
-        if (result.bookmark) {
-          relayCache.setSessionBookmark(wsId, result.bookmark);
         }
       }
       allEvents = Array.from(eventSet.values());
@@ -3399,10 +3295,10 @@ async function processReq(message, server, env) {
   }
   sendEOSE(server, subscriptionId);
 }
-async function queryDatabase(subscriptionId, filters, bookmark = "first-unconstrained", env) {
-  console.log(`Processing request for subscription ID: ${subscriptionId} with bookmark: ${bookmark}`);
+async function queryDatabase(subscriptionId, filters, env) {
+  console.log(`Processing request for subscription ID: ${subscriptionId}`);
   try {
-    const session = env.relayDb.withSession(bookmark);
+    const session = env.relayDb.withSession("first-unconstrained");
     const query = buildQuery(filters);
     console.log(`Executing query: ${query.sql}`);
     console.log(`Query parameters: ${JSON.stringify(query.params)}`);
@@ -3423,14 +3319,10 @@ async function queryDatabase(subscriptionId, filters, bookmark = "first-unconstr
       sig: row.sig
     }));
     console.log(`Found ${events.length} events for subscription ID: ${subscriptionId}`);
-    const newBookmark = session.getBookmark();
-    return {
-      events,
-      bookmark: newBookmark
-    };
+    return { events };
   } catch (error) {
     console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
-    return { events: [], bookmark: null };
+    return { events: [] };
   }
 }
 function buildQuery(filters) {
@@ -3489,11 +3381,6 @@ function buildQuery(filters) {
   }
   return { sql, params };
 }
-function closeSubscription(subscriptionId, server) {
-  const wsId = server.id || Math.random().toString(36).substr(2, 9);
-  relayCache.deleteSubscription(wsId, subscriptionId);
-  server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
-}
 async function validateNIP05FromKind0(pubkey, env) {
   try {
     let metadataEvent = relayCache.get(`metadata:${pubkey}`);
@@ -3521,7 +3408,7 @@ async function validateNIP05FromKind0(pubkey, env) {
 async function fetchKind0EventForPubkey(pubkey, env) {
   try {
     const filters = { kinds: [0], authors: [pubkey], limit: 1 };
-    const result = await queryDatabase(null, filters, "first-unconstrained", env);
+    const result = await queryDatabase(null, filters, env);
     if (result.events && result.events.length > 0) {
       return result.events[0];
     }
@@ -3801,17 +3688,25 @@ function bytesToHex2(bytes2) {
   return Array.from(bytes2).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function sendOK(server, eventId, status, message) {
-  const formattedMessage = message || "";
-  server.send(JSON.stringify(["OK", eventId, status, formattedMessage]));
+  if (server.readyState === WebSocket.OPEN) {
+    const formattedMessage = message || "";
+    server.send(JSON.stringify(["OK", eventId, status, formattedMessage]));
+  }
 }
 function sendError(server, message) {
-  server.send(JSON.stringify(["NOTICE", message]));
+  if (server.readyState === WebSocket.OPEN) {
+    server.send(JSON.stringify(["NOTICE", message]));
+  }
 }
 function sendEOSE(server, subscriptionId) {
-  server.send(JSON.stringify(["EOSE", subscriptionId]));
+  if (server.readyState === WebSocket.OPEN) {
+    server.send(JSON.stringify(["EOSE", subscriptionId]));
+  }
 }
 function sendClosed(server, subscriptionId, message) {
-  server.send(JSON.stringify(["CLOSED", subscriptionId, message]));
+  if (server.readyState === WebSocket.OPEN) {
+    server.send(JSON.stringify(["CLOSED", subscriptionId, message]));
+  }
 }
 var relay_worker_default = {
   async fetch(request, env, ctx) {

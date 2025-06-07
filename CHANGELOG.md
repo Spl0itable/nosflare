@@ -1,3 +1,7 @@
+## v6.0.3 - 2025-06-07
+
+- Hotfix: improved caching, websocket inactivity, and removed bloat
+
 ## v6.0.2 - 2025-06-06
 
 - Hotfix: improved database initialization and websocket handler

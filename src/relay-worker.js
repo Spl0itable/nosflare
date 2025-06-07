@@ -3,7 +3,7 @@
 //    |  \| | | | \___ \| |_  | |     / _ \ | |_) |  _|  
 //    | |\  | |_| |___) |  _| | |___ / ___ \|  _ <| |___ 
 //    |_| \_|\___/|____/|_|   |_____/_/   \_\_| \_\_____|
-//    ═══════════════════(v6.0.2)═══════════════════════
+//    ═══════════════════(v6.0.3)═══════════════════════
 
 import { schnorr } from "@noble/curves/secp256k1";
 
@@ -26,7 +26,7 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "6.0.2",
+    version: "6.0.3",
     icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
     // Optional fields (uncomment as needed):
@@ -290,11 +290,9 @@ async function initializeDatabase(db) {
     }
 }
 
-// Use in-memory cache
+// Handle in-memory caching
 const relayCache = {
     _cache: {},
-    _subscriptions: {}, // Store subscriptions
-    _sessions: {}, // Store session bookmarks per websocket
 
     get(key) {
         try {
@@ -302,11 +300,13 @@ const relayCache = {
             if (item && item.expires > Date.now()) {
                 return item.value;
             }
+            delete this._cache[key];
         } catch (e) {
             console.error("Error in cache get:", e);
         }
         return null;
     },
+
     set(key, value, ttl = 60000) {
         try {
             this._cache[key] = {
@@ -317,76 +317,12 @@ const relayCache = {
             console.error("Error in cache set:", e);
         }
     },
+
     delete(key) {
         try {
             delete this._cache[key];
         } catch (e) {
             console.error("Error in cache delete:", e);
-        }
-    },
-    addSubscription(wsId, subscriptionId, filters) {
-        try {
-            if (!this._subscriptions[wsId]) {
-                this._subscriptions[wsId] = {};
-            }
-            this._subscriptions[wsId][subscriptionId] = filters;
-        } catch (e) {
-            console.error("Error adding subscription:", e);
-        }
-    },
-    getSubscription(wsId, subscriptionId) {
-        try {
-            return this._subscriptions[wsId]?.[subscriptionId] || null;
-        } catch (e) {
-            console.error("Error getting subscription:", e);
-            return null;
-        }
-    },
-    deleteSubscription(wsId, subscriptionId) {
-        try {
-            if (this._subscriptions[wsId]) {
-                delete this._subscriptions[wsId][subscriptionId];
-            }
-        } catch (e) {
-            console.error("Error deleting subscription:", e);
-        }
-    },
-    clearSubscriptions(wsId) {
-        try {
-            delete this._subscriptions[wsId];
-        } catch (e) {
-            console.error("Error clearing subscriptions:", e);
-        }
-    },
-    getAllSubscriptions() {
-        try {
-            return this._subscriptions;
-        } catch (e) {
-            console.error("Error getting all subscriptions:", e);
-            return {};
-        }
-    },
-    // Session management
-    setSessionBookmark(wsId, bookmark) {
-        try {
-            this._sessions[wsId] = bookmark;
-        } catch (e) {
-            console.error("Error setting session bookmark:", e);
-        }
-    },
-    getSessionBookmark(wsId) {
-        try {
-            return this._sessions[wsId] || 'first-unconstrained';
-        } catch (e) {
-            console.error("Error getting session bookmark:", e);
-            return 'first-unconstrained';
-        }
-    },
-    clearSession(wsId) {
-        try {
-            delete this._sessions[wsId];
-        } catch (e) {
-            console.error("Error clearing session:", e);
         }
     }
 };
@@ -561,22 +497,33 @@ function handleWebSocketUpgrade(request, env) {
     const [client, server] = Object.values(webSocketPair);
 
     server.accept();
-
-    // Generate unique websocket ID
-    const wsId = Math.random().toString(36).substr(2, 9);
-    server.id = wsId;
+    
     server.host = request.headers.get('host');
 
-    // Create rate limiters for the connection
+    // Create rate limiters for this connection instance
     server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
     server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
 
-    // Track if connection is still active
-    let isConnectionActive = true;
+    // Set up idle timeout
+    let idleTimeout;
+    const IDLE_TIMEOUT_MS = 90000; // 90 seconds of inactivity
 
-    // Set up event handlers
+    const resetIdleTimeout = () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        idleTimeout = setTimeout(() => {
+            console.log("Closing WebSocket due to inactivity");
+            if (server.readyState === WebSocket.OPEN) {
+                server.close(1000, "Idle timeout");
+            }
+        }, IDLE_TIMEOUT_MS);
+    };
+
+    // Start the idle timer
+    resetIdleTimeout();
+
     server.addEventListener("message", async (messageEvent) => {
-        if (!isConnectionActive) return;
+        // Reset idle timeout on any message
+        resetIdleTimeout();
 
         try {
             let messageData;
@@ -603,68 +550,21 @@ function handleWebSocketUpgrade(request, env) {
                     await processReq(messageData, server, env);
                     break;
                 case "CLOSE":
-                    closeSubscription(messageData[1], server);
+                    const subscriptionId = messageData[1];
+                    server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
                     break;
                 default:
                     sendError(server, `Unknown message type: ${messageType}`);
             }
         } catch (e) {
             console.error("Failed to process message:", e);
-            if (isConnectionActive) {
-                try {
-                    sendError(server, "Failed to process the message");
-                } catch (sendError) {
-                    console.error("Failed to send error message:", sendError);
-                }
-            }
+            sendError(server, "Failed to process the message");
         }
     });
 
-    server.addEventListener("close", (event) => {
-        isConnectionActive = false;
-
-        try {
-            console.log(`WebSocket closed for ${wsId}`, event.code, event.reason);
-
-            if (relayCache && typeof relayCache.clearSubscriptions === 'function') {
-                relayCache.clearSubscriptions(wsId);
-            }
-            if (relayCache && typeof relayCache.clearSession === 'function') {
-                relayCache.clearSession(wsId);
-            }
-
-        } catch (error) {
-            console.error("Error in close handler:", error);
-        }
-    });
-
-    server.addEventListener("error", (error) => {
-        isConnectionActive = false;
-
-        if (error instanceof ErrorEvent) {
-            console.error("WebSocket error:", {
-                message: error.message,
-                filename: error.filename,
-                lineno: error.lineno,
-                colno: error.colno,
-                error: error.error
-            });
-        } else {
-            console.error("WebSocket error:", error);
-        }
-
-        try {
-
-            if (relayCache && typeof relayCache.clearSubscriptions === 'function') {
-                relayCache.clearSubscriptions(wsId);
-            }
-            if (relayCache && typeof relayCache.clearSession === 'function') {
-                relayCache.clearSession(wsId);
-            }
-
-        } catch (e) {
-            console.error("Error cleaning up after WebSocket error:", e);
-        }
+    // Clean up on close
+    server.addEventListener("close", () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
     });
 
     return new Response(null, {
@@ -1228,7 +1128,6 @@ async function processEvent(event, server, env) {
 // Handle saving event to D1 database
 async function saveEventToD1(event, env) {
     try {
-        // Use session with primary for writes to ensure consistency
         const session = env.relayDb.withSession('first-primary');
 
         // Check for duplicate event ID
@@ -1409,8 +1308,6 @@ async function processReq(message, server, env) {
         return;
     }
 
-    const wsId = server.id || Math.random().toString(36).substr(2, 9);
-
     // Check the REQ rate limiter
     if (!server.reqRateLimiter.removeToken()) {
         console.error(`REQ rate limit exceeded for subscriptionId: ${subscriptionId}`);
@@ -1477,38 +1374,25 @@ async function processReq(message, server, env) {
         }
     }
 
-    // Store the subscription (replaces existing subscription with same ID)
-    relayCache.addSubscription(wsId, subscriptionId, filters);
-
     // Generate a unique cache key based on the filters
     const cacheKey = `req:${JSON.stringify(filters)}`;
     const cachedEvents = relayCache.get(cacheKey);
 
-    // Collect all matching events
     let allEvents = [];
 
-    // Serve cached events if available
     if (cachedEvents && cachedEvents.length > 0) {
         console.log(`Serving cached events for subscriptionId: ${subscriptionId}`);
         allEvents = cachedEvents;
     } else {
         try {
-            // Get the current session bookmark
-            const bookmark = relayCache.getSessionBookmark(wsId);
-
-            // Query database for each filter and combine results
+            // Query database
             const eventSet = new Map();
 
             for (const filter of filters) {
-                const result = await queryDatabase(subscriptionId, filter, bookmark, env);
+                const result = await queryDatabase(subscriptionId, filter, env);
 
                 for (const event of result.events) {
                     eventSet.set(event.id, event);
-                }
-
-                // Update session bookmark if provided
-                if (result.bookmark) {
-                    relayCache.setSessionBookmark(wsId, result.bookmark);
                 }
             }
 
@@ -1547,12 +1431,11 @@ async function processReq(message, server, env) {
 }
 
 // Query database with Session API
-async function queryDatabase(subscriptionId, filters, bookmark = 'first-unconstrained', env) {
-    console.log(`Processing request for subscription ID: ${subscriptionId} with bookmark: ${bookmark}`);
+async function queryDatabase(subscriptionId, filters, env) {
+    console.log(`Processing request for subscription ID: ${subscriptionId}`);
 
     try {
-        // Create a session with the provided bookmark
-        const session = env.relayDb.withSession(bookmark);
+        const session = env.relayDb.withSession('first-unconstrained');
 
         // Build the SQL query based on filters
         const query = buildQuery(filters);
@@ -1564,7 +1447,7 @@ async function queryDatabase(subscriptionId, filters, bookmark = 'first-unconstr
             .bind(...query.params)
             .all();
 
-        // Check where the query was served from
+        // Log where the query was served from (for debugging)
         if (result.meta) {
             console.log({
                 servedByRegion: result.meta.served_by_region ?? "",
@@ -1584,17 +1467,11 @@ async function queryDatabase(subscriptionId, filters, bookmark = 'first-unconstr
 
         console.log(`Found ${events.length} events for subscription ID: ${subscriptionId}`);
 
-        // Get the updated bookmark from the session
-        const newBookmark = session.getBookmark();
-
-        return {
-            events,
-            bookmark: newBookmark
-        };
+        return { events };
 
     } catch (error) {
         console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
-        return { events: [], bookmark: null };
+        return { events: [] };
     }
 }
 
@@ -1674,15 +1551,6 @@ function buildQuery(filters) {
     return { sql, params };
 }
 
-// Handle CLOSE messages
-function closeSubscription(subscriptionId, server) {
-    const wsId = server.id || Math.random().toString(36).substr(2, 9);
-    relayCache.deleteSubscription(wsId, subscriptionId);
-
-    // Notify the client that the subscription is closed
-    server.send(JSON.stringify(["CLOSED", subscriptionId, "Subscription closed"]));
-}
-
 // Fetches NIP-05 from kind 0 event
 async function validateNIP05FromKind0(pubkey, env) {
     try {
@@ -1725,7 +1593,7 @@ async function validateNIP05FromKind0(pubkey, env) {
 async function fetchKind0EventForPubkey(pubkey, env) {
     try {
         const filters = { kinds: [0], authors: [pubkey], limit: 1 };
-        const result = await queryDatabase(null, filters, 'first-unconstrained', env);
+        const result = await queryDatabase(null, filters, env);
 
         if (result.events && result.events.length > 0) {
             return result.events[0];
@@ -1769,7 +1637,6 @@ async function hasPaidForRelay(pubkey, env) {
 // Helper function to save paid pubkey to D1 database
 async function savePaidPubkey(pubkey, env) {
     try {
-        // Use session with primary for writes
         const session = env.relayDb.withSession('first-primary');
         const query = `
             INSERT INTO paid_pubkeys (pubkey, paid_at, amount_sats)
@@ -2075,20 +1942,28 @@ function bytesToHex(bytes) {
 
 // Sends event response to client
 function sendOK(server, eventId, status, message) {
-    const formattedMessage = message || "";
-    server.send(JSON.stringify(["OK", eventId, status, formattedMessage]));
+    if (server.readyState === WebSocket.OPEN) {
+        const formattedMessage = message || "";
+        server.send(JSON.stringify(["OK", eventId, status, formattedMessage]));
+    }
 }
 
 function sendError(server, message) {
-    server.send(JSON.stringify(["NOTICE", message]));
+    if (server.readyState === WebSocket.OPEN) {
+        server.send(JSON.stringify(["NOTICE", message]));
+    }
 }
 
 function sendEOSE(server, subscriptionId) {
-    server.send(JSON.stringify(["EOSE", subscriptionId]));
+    if (server.readyState === WebSocket.OPEN) {
+        server.send(JSON.stringify(["EOSE", subscriptionId]));
+    }
 }
 
 function sendClosed(server, subscriptionId, message) {
-    server.send(JSON.stringify(["CLOSED", subscriptionId, message]));
+    if (server.readyState === WebSocket.OPEN) {
+        server.send(JSON.stringify(["CLOSED", subscriptionId, message]));
+    }
 }
 
 // ES Module export
@@ -2114,13 +1989,13 @@ export default {
                 } else if (request.headers.get("Accept") === "application/nostr+json") {
                     return handleRelayInfoRequest(request);
                 } else {
-                    // Initialize DB in background without blocking response
+                    // Initialize DB in background
                     ctx.waitUntil(
                         initializeDatabase(env.relayDb)
                             .catch(e => console.error("DB init error:", e))
                     );
 
-                    // Return the landing page immediately
+                    // Return the landing page
                     return serveLandingPage();
                 }
             } else if (url.pathname === "/.well-known/nostr.json") {
