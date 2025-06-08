@@ -2383,8 +2383,8 @@ var allowedTags = /* @__PURE__ */ new Set([
   // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
-var PUBKEY_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
-var REQ_RATE_LIMIT = { rate: 1e4 / 6e4, capacity: 1e4 };
+var PUBKEY_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
+var REQ_RATE_LIMIT = { rate: 5e3 / 6e4, capacity: 5e3 };
 var excludedRateLimitKinds = /* @__PURE__ */ new Set([
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
@@ -3366,18 +3366,18 @@ async function processReq(message, server, env) {
         return;
       }
     }
-    if (filter.ids && filter.ids.length > 1e4) {
-      console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
+    if (filter.ids && filter.ids.length > 1e3) {
+      console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 1000`);
       sendClosed(server, subscriptionId, "invalid: too many event IDs (max 10000)");
       return;
     }
-    if (filter.limit && filter.limit > 1e4) {
-      console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 10000`);
-      sendClosed(server, subscriptionId, "invalid: limit too high (max 10000)");
+    if (filter.limit && filter.limit > 1e3) {
+      console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
+      sendClosed(server, subscriptionId, "invalid: limit too high (max 1000)");
       return;
     }
     if (!filter.limit) {
-      filter.limit = 1e4;
+      filter.limit = 1e3;
     }
   }
   let totalParams = 0;
@@ -3420,7 +3420,7 @@ async function processReq(message, server, env) {
       return;
     }
   }
-  const limit = Math.min(...filters.map((f) => f.limit || 1e4));
+  const limit = Math.min(...filters.map((f) => f.limit || 1e3));
   const eventsToSend = allEvents.slice(0, limit);
   for (const event of eventsToSend) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
@@ -3436,9 +3436,23 @@ async function queryDatabase(subscriptionId, filters, env) {
       console.log(`Query has ${paramCount} parameters, splitting into chunks...`);
       return await queryDatabaseChunked(subscriptionId, filters, env);
     }
+    if (filters.ids && filters.ids.length > 500) {
+      console.log(`Large ID filter detected: ${filters.ids.length} IDs. Truncating to 500.`);
+      filters.ids = filters.ids.slice(0, 500);
+    }
+    if (filters.authors && filters.authors.length > 500) {
+      console.log(`Large authors filter detected: ${filters.authors.length} authors. Truncating to 500.`);
+      filters.authors = filters.authors.slice(0, 500);
+    }
+    for (const [key, values] of Object.entries(filters)) {
+      if (key.startsWith("#") && values && values.length > 500) {
+        console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 500.`);
+        filters[key] = values.slice(0, 500);
+      }
+    }
     const query = buildQuery(filters);
     console.log(`Executing query: ${query.sql}`);
-    console.log(`Query parameters: ${JSON.stringify(query.params)}`);
+    console.log(`Query parameters count: ${query.params.length}`);
     const result = await session.prepare(query.sql).bind(...query.params).all();
     if (result.meta) {
       console.log({
@@ -3645,9 +3659,9 @@ function buildQuery(filters) {
   sql += " ORDER BY created_at DESC";
   if (filters.limit) {
     sql += " LIMIT ?";
-    params.push(Math.min(filters.limit, 1e4));
+    params.push(Math.min(filters.limit, 1e3));
   } else {
-    sql += " LIMIT 10000";
+    sql += " LIMIT 1000";
   }
   return { sql, params };
 }

@@ -156,8 +156,8 @@ const allowedTags = new Set([
 ]);
 
 // Rate limit thresholds
-const PUBKEY_RATE_LIMIT = { rate: 100 / 60000, capacity: 100 }; // 100 EVENT messages per min
-const REQ_RATE_LIMIT = { rate: 10000 / 60000, capacity: 10000 }; // 10,000 REQ messages per min
+const PUBKEY_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 100 EVENT messages per min
+const REQ_RATE_LIMIT = { rate: 5000 / 60000, capacity: 5000 }; // 10,000 REQ messages per min
 const excludedRateLimitKinds = new Set([
     // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
@@ -1330,22 +1330,22 @@ async function processReq(message, server, env) {
         }
 
         // Allow up to 10,000 event IDs
-        if (filter.ids && filter.ids.length > 10000) {
-            console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 10000`);
+        if (filter.ids && filter.ids.length > 1000) {
+            console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 1000`);
             sendClosed(server, subscriptionId, "invalid: too many event IDs (max 10000)");
             return;
         }
 
         // Allow up to a limit of 10,000 events
-        if (filter.limit && filter.limit > 10000) {
-            console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 10000`);
-            sendClosed(server, subscriptionId, "invalid: limit too high (max 10000)");
+        if (filter.limit && filter.limit > 1000) {
+            console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
+            sendClosed(server, subscriptionId, "invalid: limit too high (max 1000)");
             return;
         }
 
         // If no limit is provided, set it to 10,000
         if (!filter.limit) {
-            filter.limit = 10000;
+            filter.limit = 1000;
         }
     }
 
@@ -1405,7 +1405,7 @@ async function processReq(message, server, env) {
     }
 
     // Apply global limit across all filters
-    const limit = Math.min(...filters.map(f => f.limit || 10000));
+    const limit = Math.min(...filters.map(f => f.limit || 1000));
     const eventsToSend = allEvents.slice(0, limit);
 
     // Send the events to the client
@@ -1423,20 +1423,39 @@ async function queryDatabase(subscriptionId, filters, env) {
 
     try {
         const session = env.relayDb.withSession('first-unconstrained');
-
+        
         // Check if we need to split the query due to too many parameters
         const paramCount = countQueryParameters(filters);
-
+        
         if (paramCount > 900) { // Leave some margin below SQLite's 999 limit
             console.log(`Query has ${paramCount} parameters, splitting into chunks...`);
             return await queryDatabaseChunked(subscriptionId, filters, env);
         }
 
-        // Original query logic for smaller queries
+        // For queries under 900 params but still large, truncate to be safe
+        if (filters.ids && filters.ids.length > 500) {
+            console.log(`Large ID filter detected: ${filters.ids.length} IDs. Truncating to 500.`);
+            filters.ids = filters.ids.slice(0, 500);
+        }
+        
+        if (filters.authors && filters.authors.length > 500) {
+            console.log(`Large authors filter detected: ${filters.authors.length} authors. Truncating to 500.`);
+            filters.authors = filters.authors.slice(0, 500);
+        }
+        
+        // Check tag filters
+        for (const [key, values] of Object.entries(filters)) {
+            if (key.startsWith('#') && values && values.length > 500) {
+                console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 500.`);
+                filters[key] = values.slice(0, 500);
+            }
+        }
+
+        // Build and execute the query
         const query = buildQuery(filters);
 
         console.log(`Executing query: ${query.sql}`);
-        console.log(`Query parameters: ${JSON.stringify(query.params)}`);
+        console.log(`Query parameters count: ${query.params.length}`);
 
         const result = await session.prepare(query.sql)
             .bind(...query.params)
@@ -1574,7 +1593,6 @@ async function queryDatabaseChunked(subscriptionId, filters, env) {
     }
     // Handle tag chunking if needed
     else if (Object.keys(needsChunking.tags).length > 0) {
-        // For tag filters, we need a different approach
         // Process each large tag filter separately
         for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
             const tagValues = filters[tagKey];
@@ -1719,9 +1737,9 @@ function buildQuery(filters) {
 
     if (filters.limit) {
         sql += " LIMIT ?";
-        params.push(Math.min(filters.limit, 10000));
+        params.push(Math.min(filters.limit, 1000));
     } else {
-        sql += " LIMIT 10000";
+        sql += " LIMIT 1000";
     }
 
     return { sql, params };
