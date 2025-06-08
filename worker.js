@@ -2167,7 +2167,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "6.0.3",
+  version: "6.0.4",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2660,7 +2660,7 @@ function handleWebSocketUpgrade(request, env) {
   server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
   server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
   let idleTimeout;
-  const IDLE_TIMEOUT_MS = 3e4;
+  const IDLE_TIMEOUT_MS = 1e4;
   const resetIdleTimeout = () => {
     if (idleTimeout) clearTimeout(idleTimeout);
     idleTimeout = setTimeout(() => {
@@ -3396,6 +3396,15 @@ async function processReq(message, server, env) {
       filter.limit = 1e4;
     }
   }
+  let totalParams = 0;
+  for (const filter of filters) {
+    totalParams += countQueryParameters(filter);
+  }
+  if (totalParams > 5e3) {
+    console.error(`Too many total parameters in request: ${totalParams}`);
+    sendClosed(server, subscriptionId, "invalid: filter too complex (too many parameters)");
+    return;
+  }
   const cacheKey = `req:${JSON.stringify(filters)}`;
   const cachedEvents = relayCache.get(cacheKey);
   let allEvents = [];
@@ -3438,6 +3447,11 @@ async function queryDatabase(subscriptionId, filters, env) {
   console.log(`Processing request for subscription ID: ${subscriptionId}`);
   try {
     const session = env.relayDb.withSession("first-unconstrained");
+    const paramCount = countQueryParameters(filters);
+    if (paramCount > 900) {
+      console.log(`Query has ${paramCount} parameters, splitting into chunks...`);
+      return await queryDatabaseChunked(subscriptionId, filters, env);
+    }
     const query = buildQuery(filters);
     console.log(`Executing query: ${query.sql}`);
     console.log(`Query parameters: ${JSON.stringify(query.params)}`);
@@ -3463,6 +3477,139 @@ async function queryDatabase(subscriptionId, filters, env) {
     console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
     return { events: [] };
   }
+}
+function countQueryParameters(filters) {
+  let count = 0;
+  if (filters.ids) count += filters.ids.length;
+  if (filters.authors) count += filters.authors.length;
+  if (filters.kinds) count += filters.kinds.length;
+  if (filters.since) count += 1;
+  if (filters.until) count += 1;
+  for (const [key, values] of Object.entries(filters)) {
+    if (key.startsWith("#") && values && values.length > 0) {
+      count += 1 + values.length;
+    }
+  }
+  if (filters.limit) count += 1;
+  return count;
+}
+async function queryDatabaseChunked(subscriptionId, filters, env) {
+  const session = env.relayDb.withSession("first-unconstrained");
+  const allEvents = /* @__PURE__ */ new Map();
+  const needsChunking = {
+    ids: filters.ids && filters.ids.length > 200,
+    authors: filters.authors && filters.authors.length > 200,
+    kinds: filters.kinds && filters.kinds.length > 200,
+    tags: {}
+  };
+  for (const [key, values] of Object.entries(filters)) {
+    if (key.startsWith("#") && values && values.length > 200) {
+      needsChunking.tags[key] = true;
+    }
+  }
+  if (needsChunking.ids) {
+    const idChunks = chunkArray(filters.ids, 200);
+    for (const idChunk of idChunks) {
+      const chunkFilters = { ...filters, ids: idChunk };
+      const query = buildQuery(chunkFilters);
+      try {
+        const result = await session.prepare(query.sql).bind(...query.params).all();
+        for (const row of result.results) {
+          const event = {
+            id: row.id,
+            pubkey: row.pubkey,
+            created_at: row.created_at,
+            kind: row.kind,
+            tags: JSON.parse(row.tags),
+            content: row.content,
+            sig: row.sig
+          };
+          allEvents.set(event.id, event);
+        }
+      } catch (error) {
+        console.error(`Error in chunk query: ${error.message}`);
+      }
+    }
+  } else if (needsChunking.authors) {
+    const authorChunks = chunkArray(filters.authors, 200);
+    for (const authorChunk of authorChunks) {
+      const chunkFilters = { ...filters, authors: authorChunk };
+      const query = buildQuery(chunkFilters);
+      try {
+        const result = await session.prepare(query.sql).bind(...query.params).all();
+        for (const row of result.results) {
+          const event = {
+            id: row.id,
+            pubkey: row.pubkey,
+            created_at: row.created_at,
+            kind: row.kind,
+            tags: JSON.parse(row.tags),
+            content: row.content,
+            sig: row.sig
+          };
+          allEvents.set(event.id, event);
+        }
+      } catch (error) {
+        console.error(`Error in chunk query: ${error.message}`);
+      }
+    }
+  } else if (Object.keys(needsChunking.tags).length > 0) {
+    for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
+      const tagValues = filters[tagKey];
+      const tagChunks = chunkArray(tagValues, 200);
+      for (const tagChunk of tagChunks) {
+        const chunkFilters = { ...filters };
+        chunkFilters[tagKey] = tagChunk;
+        const query = buildQuery(chunkFilters);
+        try {
+          const result = await session.prepare(query.sql).bind(...query.params).all();
+          for (const row of result.results) {
+            const event = {
+              id: row.id,
+              pubkey: row.pubkey,
+              created_at: row.created_at,
+              kind: row.kind,
+              tags: JSON.parse(row.tags),
+              content: row.content,
+              sig: row.sig
+            };
+            allEvents.set(event.id, event);
+          }
+        } catch (error) {
+          console.error(`Error in chunk query: ${error.message}`);
+        }
+      }
+    }
+  } else {
+    const query = buildQuery(filters);
+    try {
+      const result = await session.prepare(query.sql).bind(...query.params).all();
+      for (const row of result.results) {
+        const event = {
+          id: row.id,
+          pubkey: row.pubkey,
+          created_at: row.created_at,
+          kind: row.kind,
+          tags: JSON.parse(row.tags),
+          content: row.content,
+          sig: row.sig
+        };
+        allEvents.set(event.id, event);
+      }
+    } catch (error) {
+      console.error(`Error in query: ${error.message}`);
+    }
+  }
+  const events = Array.from(allEvents.values());
+  console.log(`Found ${events.length} events (chunked) for subscription ID: ${subscriptionId}`);
+  return { events };
+}
+function chunkArray(array, chunkSize) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += chunkSize) {
+    chunks.push(array.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
 function buildQuery(filters) {
   let sql = "SELECT * FROM events WHERE deleted = 0";

@@ -3,7 +3,7 @@
 //    |  \| | | | \___ \| |_  | |     / _ \ | |_) |  _|  
 //    | |\  | |_| |___) |  _| | |___ / ___ \|  _ <| |___ 
 //    |_| \_|\___/|____/|_|   |_____/_/   \_\_| \_\_____|
-//    ═══════════════════(v6.0.3)═══════════════════════
+//    ═══════════════════(v6.0.4)═══════════════════════
 
 import { schnorr } from "@noble/curves/secp256k1";
 
@@ -26,7 +26,7 @@ const relayInfo = {
     contact: "lux@fed.wtf",
     supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
     software: "https://github.com/Spl0itable/nosflare",
-    version: "6.0.3",
+    version: "6.0.4",
     icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
     // Optional fields (uncomment as needed):
@@ -497,7 +497,7 @@ function handleWebSocketUpgrade(request, env) {
     const [client, server] = Object.values(webSocketPair);
 
     server.accept();
-    
+
     server.host = request.headers.get('host');
 
     // Create rate limiters for this connection instance
@@ -506,7 +506,7 @@ function handleWebSocketUpgrade(request, env) {
 
     // Set up idle timeout
     let idleTimeout;
-    const IDLE_TIMEOUT_MS = 30000; // 30 seconds of inactivity
+    const IDLE_TIMEOUT_MS = 10000; // 10 seconds of inactivity
 
     const resetIdleTimeout = () => {
         if (idleTimeout) clearTimeout(idleTimeout);
@@ -1374,6 +1374,18 @@ async function processReq(message, server, env) {
         }
     }
 
+    // Check total parameter count across all filters
+    let totalParams = 0;
+    for (const filter of filters) {
+        totalParams += countQueryParameters(filter);
+    }
+
+    if (totalParams > 5000) { // Set a reasonable upper limit
+        console.error(`Too many total parameters in request: ${totalParams}`);
+        sendClosed(server, subscriptionId, "invalid: filter too complex (too many parameters)");
+        return;
+    }
+
     // Generate a unique cache key based on the filters
     const cacheKey = `req:${JSON.stringify(filters)}`;
     const cachedEvents = relayCache.get(cacheKey);
@@ -1437,7 +1449,15 @@ async function queryDatabase(subscriptionId, filters, env) {
     try {
         const session = env.relayDb.withSession('first-unconstrained');
 
-        // Build the SQL query based on filters
+        // Check if we need to split the query due to too many parameters
+        const paramCount = countQueryParameters(filters);
+
+        if (paramCount > 900) { // Leave some margin below SQLite's 999 limit
+            console.log(`Query has ${paramCount} parameters, splitting into chunks...`);
+            return await queryDatabaseChunked(subscriptionId, filters, env);
+        }
+
+        // Original query logic for smaller queries
         const query = buildQuery(filters);
 
         console.log(`Executing query: ${query.sql}`);
@@ -1473,6 +1493,187 @@ async function queryDatabase(subscriptionId, filters, env) {
         console.error(`Error fetching events for subscriptionId: ${subscriptionId} - ${error.message}`);
         return { events: [] };
     }
+}
+
+// Helper function to count query parameters
+function countQueryParameters(filters) {
+    let count = 0;
+
+    if (filters.ids) count += filters.ids.length;
+    if (filters.authors) count += filters.authors.length;
+    if (filters.kinds) count += filters.kinds.length;
+    if (filters.since) count += 1;
+    if (filters.until) count += 1;
+
+    // Count tag filter parameters
+    for (const [key, values] of Object.entries(filters)) {
+        if (key.startsWith('#') && values && values.length > 0) {
+            count += 1 + values.length; // 1 for tag name + number of values
+        }
+    }
+
+    if (filters.limit) count += 1;
+
+    return count;
+}
+
+// Helper function to handle chunked queries
+async function queryDatabaseChunked(subscriptionId, filters, env) {
+    const session = env.relayDb.withSession('first-unconstrained');
+    const allEvents = new Map(); // Use Map to deduplicate
+
+    // Determine what needs chunking
+    const needsChunking = {
+        ids: filters.ids && filters.ids.length > 200,
+        authors: filters.authors && filters.authors.length > 200,
+        kinds: filters.kinds && filters.kinds.length > 200,
+        tags: {}
+    };
+
+    // Check tag filters for chunking needs
+    for (const [key, values] of Object.entries(filters)) {
+        if (key.startsWith('#') && values && values.length > 200) {
+            needsChunking.tags[key] = true;
+        }
+    }
+
+    // If IDs need chunking, process in batches
+    if (needsChunking.ids) {
+        const idChunks = chunkArray(filters.ids, 200);
+
+        for (const idChunk of idChunks) {
+            const chunkFilters = { ...filters, ids: idChunk };
+            const query = buildQuery(chunkFilters);
+
+            try {
+                const result = await session.prepare(query.sql)
+                    .bind(...query.params)
+                    .all();
+
+                for (const row of result.results) {
+                    const event = {
+                        id: row.id,
+                        pubkey: row.pubkey,
+                        created_at: row.created_at,
+                        kind: row.kind,
+                        tags: JSON.parse(row.tags),
+                        content: row.content,
+                        sig: row.sig
+                    };
+                    allEvents.set(event.id, event);
+                }
+            } catch (error) {
+                console.error(`Error in chunk query: ${error.message}`);
+            }
+        }
+    }
+    // If authors need chunking
+    else if (needsChunking.authors) {
+        const authorChunks = chunkArray(filters.authors, 200);
+
+        for (const authorChunk of authorChunks) {
+            const chunkFilters = { ...filters, authors: authorChunk };
+            const query = buildQuery(chunkFilters);
+
+            try {
+                const result = await session.prepare(query.sql)
+                    .bind(...query.params)
+                    .all();
+
+                for (const row of result.results) {
+                    const event = {
+                        id: row.id,
+                        pubkey: row.pubkey,
+                        created_at: row.created_at,
+                        kind: row.kind,
+                        tags: JSON.parse(row.tags),
+                        content: row.content,
+                        sig: row.sig
+                    };
+                    allEvents.set(event.id, event);
+                }
+            } catch (error) {
+                console.error(`Error in chunk query: ${error.message}`);
+            }
+        }
+    }
+    // Handle tag chunking if needed
+    else if (Object.keys(needsChunking.tags).length > 0) {
+        // For tag filters, we need a different approach
+        // Process each large tag filter separately
+        for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
+            const tagValues = filters[tagKey];
+            const tagChunks = chunkArray(tagValues, 200);
+
+            for (const tagChunk of tagChunks) {
+                const chunkFilters = { ...filters };
+                // Replace the large tag filter with the chunk
+                chunkFilters[tagKey] = tagChunk;
+
+                const query = buildQuery(chunkFilters);
+
+                try {
+                    const result = await session.prepare(query.sql)
+                        .bind(...query.params)
+                        .all();
+
+                    for (const row of result.results) {
+                        const event = {
+                            id: row.id,
+                            pubkey: row.pubkey,
+                            created_at: row.created_at,
+                            kind: row.kind,
+                            tags: JSON.parse(row.tags),
+                            content: row.content,
+                            sig: row.sig
+                        };
+                        allEvents.set(event.id, event);
+                    }
+                } catch (error) {
+                    console.error(`Error in chunk query: ${error.message}`);
+                }
+            }
+        }
+    }
+    // If no specific chunking needed but still too many params, execute as-is
+    else {
+        const query = buildQuery(filters);
+
+        try {
+            const result = await session.prepare(query.sql)
+                .bind(...query.params)
+                .all();
+
+            for (const row of result.results) {
+                const event = {
+                    id: row.id,
+                    pubkey: row.pubkey,
+                    created_at: row.created_at,
+                    kind: row.kind,
+                    tags: JSON.parse(row.tags),
+                    content: row.content,
+                    sig: row.sig
+                };
+                allEvents.set(event.id, event);
+            }
+        } catch (error) {
+            console.error(`Error in query: ${error.message}`);
+        }
+    }
+
+    const events = Array.from(allEvents.values());
+    console.log(`Found ${events.length} events (chunked) for subscription ID: ${subscriptionId}`);
+
+    return { events };
+}
+
+// Helper function to chunk arrays
+function chunkArray(array, chunkSize) {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += chunkSize) {
+        chunks.push(array.slice(i, i + chunkSize));
+    }
+    return chunks;
 }
 
 // Build SQL query from filters

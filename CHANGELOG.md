@@ -1,3 +1,7 @@
+## v6.0.4 - 2025-06-07
+
+- Hotfix: case where too many params in query could overload sqlite
+
 ## v6.0.3 - 2025-06-07
 
 - Hotfix: improved caching, websocket inactivity, and removed bloat
