@@ -506,7 +506,7 @@ function handleWebSocketUpgrade(request, env) {
 
     // Set up idle timeout
     let idleTimeout;
-    const IDLE_TIMEOUT_MS = 90000; // 90 seconds of inactivity
+    const IDLE_TIMEOUT_MS = 30000; // 30 seconds of inactivity
 
     const resetIdleTimeout = () => {
         if (idleTimeout) clearTimeout(idleTimeout);
