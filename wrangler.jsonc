@@ -13,6 +13,11 @@
     }
   ],
   
+  // Smart Placement (keep as smart so it lowers latency)
+  "placement": {
+    "mode": "smart"
+  },
+  
   // CPU limits (lower to 10 if not on paid Workers plan)
   "limits": {
     "cpu_ms": 30000
