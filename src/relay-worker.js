@@ -504,27 +504,7 @@ function handleWebSocketUpgrade(request, env) {
     server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
     server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
 
-    // Set up idle timeout
-    let idleTimeout;
-    const IDLE_TIMEOUT_MS = 60000; // 60 seconds of inactivity
-
-    const resetIdleTimeout = () => {
-        if (idleTimeout) clearTimeout(idleTimeout);
-        idleTimeout = setTimeout(() => {
-            console.log("Closing WebSocket due to inactivity");
-            if (server.readyState === WebSocket.OPEN) {
-                server.close(1000, "Idle timeout");
-            }
-        }, IDLE_TIMEOUT_MS);
-    };
-
-    // Start the idle timer
-    resetIdleTimeout();
-
     server.addEventListener("message", async (messageEvent) => {
-        // Reset idle timeout on any message
-        resetIdleTimeout();
-
         try {
             let messageData;
 
@@ -560,11 +540,6 @@ function handleWebSocketUpgrade(request, env) {
             console.error("Failed to process message:", e);
             sendError(server, "Failed to process the message");
         }
-    });
-
-    // Clean up on close
-    server.addEventListener("close", () => {
-        if (idleTimeout) clearTimeout(idleTimeout);
     });
 
     return new Response(null, {

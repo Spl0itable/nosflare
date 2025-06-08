@@ -2659,20 +2659,7 @@ function handleWebSocketUpgrade(request, env) {
   server.host = request.headers.get("host");
   server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
   server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
-  let idleTimeout;
-  const IDLE_TIMEOUT_MS = 6e4;
-  const resetIdleTimeout = () => {
-    if (idleTimeout) clearTimeout(idleTimeout);
-    idleTimeout = setTimeout(() => {
-      console.log("Closing WebSocket due to inactivity");
-      if (server.readyState === WebSocket.OPEN) {
-        server.close(1e3, "Idle timeout");
-      }
-    }, IDLE_TIMEOUT_MS);
-  };
-  resetIdleTimeout();
   server.addEventListener("message", async (messageEvent) => {
-    resetIdleTimeout();
     try {
       let messageData;
       if (messageEvent.data instanceof ArrayBuffer) {
@@ -2705,9 +2692,6 @@ function handleWebSocketUpgrade(request, env) {
       console.error("Failed to process message:", e);
       sendError(server, "Failed to process the message");
     }
-  });
-  server.addEventListener("close", () => {
-    if (idleTimeout) clearTimeout(idleTimeout);
   });
   return new Response(null, {
     status: 101,
