@@ -80,7 +80,7 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 
 ## Migration
 
-If you have previously deployed a Nosflare-powered relay, there is a migration tool that can easily migrate all data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucke with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
+If you had previously deployed a Nosflare-powered relay, there is a migration tool that can easily migrate all data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucke with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
 
 ![Migrate from R2 bucket to D1 database](images/migration.png)
 
@@ -96,7 +96,6 @@ The current release of Nosflare is primarily focused on [basic protocol flow](ht
 
 - [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) for full searchable text
 - [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) for replaceable events
-- Support for Cloudflare's [Durable Objects](https://developers.cloudflare.com/durable-objects/), which will allow for real-time delivery of events data to subscribed REQs. Currently, due to the stateless nature of Cloudflare Workers, the clients need to continuosly poll with new REQs to fetch new data rather than being able to stream it.
 
 ## Recommended Cloudflare Settings
 
