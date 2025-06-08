@@ -2660,7 +2660,7 @@ function handleWebSocketUpgrade(request, env) {
   server.pubkeyRateLimiter = new rateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
   server.reqRateLimiter = new rateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
   let idleTimeout;
-  const IDLE_TIMEOUT_MS = 3e4;
+  const IDLE_TIMEOUT_MS = 6e4;
   const resetIdleTimeout = () => {
     if (idleTimeout) clearTimeout(idleTimeout);
     idleTimeout = setTimeout(() => {
