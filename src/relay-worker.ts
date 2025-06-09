@@ -3,7 +3,7 @@ import { Env, NostrEvent, NostrFilter, QueryResult } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
-// Import config values
+// Only import config values that are actually used in this file
 const {
   relayInfo,
   PAY_TO_RELAY_ENABLED,
@@ -17,6 +17,95 @@ const {
   blockedNip05Domains,
   allowedNip05Domains,
 } = config;
+
+// Database initialization
+async function initializeDatabase(db: D1Database): Promise<void> {
+  try {
+    const session = db.withSession('first-unconstrained');
+    const initCheck = await session.prepare(
+      "SELECT value FROM system_config WHERE key = 'db_initialized' LIMIT 1"
+    ).first().catch(() => null);
+
+    if (initCheck && initCheck.value === '1') {
+      console.log("Database already initialized");
+      return;
+    }
+  } catch (error) {
+    console.log("Database not initialized, creating schema...");
+  }
+
+  const session = db.withSession('first-primary');
+
+  try {
+    await session.prepare(`
+      CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
+      )
+    `).run();
+
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        pubkey TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        kind INTEGER NOT NULL,
+        tags TEXT NOT NULL,
+        content TEXT NOT NULL,
+        sig TEXT NOT NULL,
+        deleted INTEGER DEFAULT 0,
+        created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_deleted_kind ON events(deleted, kind)`,
+      `CREATE TABLE IF NOT EXISTS tags (
+        event_id TEXT NOT NULL,
+        tag_name TEXT NOT NULL,
+        tag_value TEXT NOT NULL,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
+      `CREATE TABLE IF NOT EXISTS paid_pubkeys (
+        pubkey TEXT PRIMARY KEY,
+        paid_at INTEGER NOT NULL,
+        amount_sats INTEGER,
+        created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+      )`,
+      `CREATE TABLE IF NOT EXISTS content_hashes (
+        hash TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        pubkey TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`
+    ];
+
+    for (const statement of statements) {
+      await session.prepare(statement).run();
+    }
+
+    await session.prepare("PRAGMA foreign_keys = ON").run();
+    await session.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
+    ).run();
+    await session.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
+    ).run();
+
+    console.log("Database initialization completed!");
+  } catch (error) {
+    console.error("Failed to initialize database:", error);
+    throw error;
+  }
+}
 
 // Event verification
 async function verifyEventSignature(event: NostrEvent): Promise<boolean> {
@@ -192,7 +281,7 @@ async function fetchKind0EventForPubkey(pubkey: string, env: Env): Promise<Nostr
   try {
     const filters = [{ kinds: [0], authors: [pubkey], limit: 1 }];
     const result = await queryEvents(filters, 'first-unconstrained', env);
-    
+
     if (result.events && result.events.length > 0) {
       return result.events[0];
     }
@@ -215,7 +304,7 @@ async function validateNIP05FromKind0(pubkey: string, env: Env): Promise<boolean
   try {
     // Fetch kind 0 event for the pubkey
     const metadataEvent = await fetchKind0EventForPubkey(pubkey, env);
-    
+
     if (!metadataEvent) {
       console.error(`No kind 0 metadata event found for pubkey: ${pubkey}`);
       return false;
@@ -286,7 +375,7 @@ async function validateNIP05(nip05Address: string, pubkey: string): Promise<bool
 // Event processing
 async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string }> {
   try {
-    // Check for duplicate event ID
+    // Check cache for duplicate event ID
     const existingEvent = await env.relayDb.withSession('first-unconstrained')
       .prepare("SELECT id FROM events WHERE id = ? LIMIT 1")
       .bind(event.id)
@@ -378,11 +467,10 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
   }
 }
 
-// Helper function to handle kind 5
 async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   console.log(`Processing deletion event ${event.id}`);
   const deletedEventIds = event.tags.filter(tag => tag[0] === "e").map(tag => tag[1]);
-  
+
   if (deletedEventIds.length === 0) {
     return { success: true, message: "No events to delete" };
   }
@@ -426,9 +514,9 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
     return { success: false, message: errors[0] };
   }
 
-  return { 
-    success: true, 
-    message: deletedCount > 0 ? `Event successfully deleted` : "No matching events found to delete" 
+  return {
+    success: true,
+    message: deletedCount > 0 ? `Event successfully deleted` : "No matching events found to delete"
   };
 }
 
@@ -466,7 +554,7 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 // Helper function to handle chunked queries
 async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
   const session = env.relayDb.withSession(bookmark);
-  const allEvents = new Map<string, NostrEvent>();
+  const allEvents = new Map<string, NostrEvent>(); // Use Map to deduplicate
 
   // Determine what needs chunking
   const needsChunking = {
@@ -624,7 +712,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     for (const filter of filters) {
       // Check if we need to use chunked query
       const paramCount = countQueryParameters(filter);
-      
+
       if (paramCount > 900) { // Leave some margin below SQLite's 999 limit
         console.log(`Query has ${paramCount} parameters, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
@@ -640,12 +728,12 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
         console.log(`Large ID filter detected: ${safeFilter.ids.length} IDs. Truncating to 500.`);
         safeFilter.ids = safeFilter.ids.slice(0, 500);
       }
-      
+
       if (safeFilter.authors && safeFilter.authors.length > 500) {
         console.log(`Large authors filter detected: ${safeFilter.authors.length} authors. Truncating to 500.`);
         safeFilter.authors = safeFilter.authors.slice(0, 500);
       }
-      
+
       // Check tag filters
       for (const [key, values] of Object.entries(safeFilter)) {
         if (key.startsWith('#') && Array.isArray(values) && values.length > 500) {
@@ -1242,10 +1330,10 @@ async function handlePaymentNotification(request: Request, env: Env): Promise<Re
 }
 
 // Export functions for use by Durable Object
-export { 
-  verifyEventSignature, 
-  hasPaidForRelay, 
-  processEvent, 
+export {
+  verifyEventSignature,
+  hasPaidForRelay,
+  processEvent,
   queryEvents
 };
 
@@ -1274,7 +1362,11 @@ export default {
         } else if (request.headers.get("Accept") === "application/nostr+json") {
           return handleRelayInfoRequest(request);
         } else {
-          // Serve the landing page
+          // Initialize database in background
+          ctx.waitUntil(
+            initializeDatabase(env.relayDb)
+              .catch(e => console.error("DB init error:", e))
+          );
           return serveLandingPage();
         }
       } else if (url.pathname === "/.well-known/nostr.json") {

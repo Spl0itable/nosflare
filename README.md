@@ -76,7 +76,7 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 5. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
 6. if not using a connected git repo, then on the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section. This binding will occur automatically and can be skipped if pushing from git to the worker.
 7. Depending what you picked in step 4, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
-8. Save and deploy the relay worker. There will be a one-time worker that's automatically created in order to initialize the database with the correct tables. 
+8. Save and deploy the relay worker. Visit the relay URL through HTTP request (from browser) to the landing page. This will trigger the database initialization to build the necessary database tables.
 9. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
 10. (Optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
 
