@@ -20,7 +20,7 @@ This relay implementation also includes support for [Durable Objects](https://de
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers and R2 bucket enabled.
+- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers paid plan to enable D1 database and Durable Objects.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
 - (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
 
