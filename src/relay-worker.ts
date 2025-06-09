@@ -215,7 +215,7 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
       }
     };
 
-    ws.onopen = () => {
+    ws.addEventListener('open', () => {
       console.log("WebSocket connection to fallback relay opened.");
       const subscriptionId = Math.random().toString(36).substr(2, 9);
       const filters = {
@@ -225,10 +225,11 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
       };
       const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
       ws.send(reqMessage);
-    };
+    });
 
-    ws.onmessage = (event: MessageEvent) => {
+    ws.addEventListener('message', event => {
       try {
+        // @ts-ignore - Cloudflare Workers WebSocket event has data property
         const message = JSON.parse(event.data) as NostrMessage;
 
         // Handle EVENT message
@@ -251,21 +252,21 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
         console.error(`Error processing fallback relay event for pubkey ${pubkey}: ${error}`);
         reject(error);
       }
-    };
+    });
 
-    ws.onerror = (error: Event) => {
+    ws.addEventListener('error', (error: Event) => {
       console.error(`WebSocket error with fallback relay:`, error);
       ws.close();
       hasClosed = true;
       reject(error);
-    };
+    });
 
-    ws.onclose = () => {
+    ws.addEventListener('close', () => {
       hasClosed = true;
       console.log('Fallback relay WebSocket connection closed.');
-    };
+    });
 
-    // Timeout if no response is received within 5 seconds
+    // Timeout remains the same
     setTimeout(() => {
       if (!hasClosed) {
         console.log('Timeout reached. Closing WebSocket connection to fallback relay.');

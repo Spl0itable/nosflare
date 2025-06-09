@@ -2769,7 +2769,7 @@ function fetchEventFromFallbackRelay(pubkey) {
         console.log("WebSocket connection to fallback relay closed");
       }
     }, "closeWebSocket");
-    ws.onopen = () => {
+    ws.addEventListener("open", () => {
       console.log("WebSocket connection to fallback relay opened.");
       const subscriptionId = Math.random().toString(36).substr(2, 9);
       const filters = {
@@ -2779,8 +2779,8 @@ function fetchEventFromFallbackRelay(pubkey) {
       };
       const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
       ws.send(reqMessage);
-    };
-    ws.onmessage = (event) => {
+    });
+    ws.addEventListener("message", (event) => {
       try {
         const message = JSON.parse(event.data);
         if (message[0] === "EVENT" && message[1]) {
@@ -2799,17 +2799,17 @@ function fetchEventFromFallbackRelay(pubkey) {
         console.error(`Error processing fallback relay event for pubkey ${pubkey}: ${error}`);
         reject(error);
       }
-    };
-    ws.onerror = (error) => {
+    });
+    ws.addEventListener("error", (error) => {
       console.error(`WebSocket error with fallback relay:`, error);
       ws.close();
       hasClosed = true;
       reject(error);
-    };
-    ws.onclose = () => {
+    });
+    ws.addEventListener("close", () => {
       hasClosed = true;
       console.log("Fallback relay WebSocket connection closed.");
-    };
+    });
     setTimeout(() => {
       if (!hasClosed) {
         console.log("Timeout reached. Closing WebSocket connection to fallback relay.");
