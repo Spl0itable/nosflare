@@ -1,13 +1,22 @@
 {
-    "name": "Nosflare",
-    "version": "6.0.4",
-    "main": "worker.js",
-    "scripts": {
-      "build:relay": "esbuild src/relay-worker.js --bundle --outfile=worker.js --platform=neutral --target=es2020 --format=esm --allow-overwrite",
-      "build": "npm run build:relay"
-    },
-    "dependencies": {
-      "@noble/curves": "^1.0.0",
-      "esbuild": "^0.12.1"
-    }
+  "name": "nosflare",
+  "version": "7.0.0",
+  "main": "worker.js",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --outfile=worker.js --platform=neutral --target=es2020 --format=esm --minify=false --keep-names --external:node:*",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241022.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^3.0.0"
   }
+}

@@ -1,3 +1,9 @@
+## v7.0.0 - 2025-06-09
+
+- New: refactored code into typescript
+- New: uses cloudflare durable object to handle websocket connection for real-time updates
+- New: includes a database initialization script to build D1 database tables on first build
+
 ## v6.0.4 - 2025-06-07
 
 - Hotfix: case where too many params in query could overload sqlite

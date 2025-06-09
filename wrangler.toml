@@ -1,0 +1,29 @@
+# Change name if you feel like it
+name = "nosflare"
+compatibility_date = "2025-01-04"
+main = "worker.js"
+
+# Durable Objects binding
+[[durable_objects.bindings]]
+name = "RELAY_WEBSOCKET"
+class_name = "RelayWebSocket"
+
+# D1 Database binding
+# Important! Change name and id settings to your own
+[[d1_databases]]
+binding = "relayDb"
+database_name = "nostr-relay"
+database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
+
+# CPU limits (lower to 10 if not on paid Workers plan)
+[limits]
+cpu_ms = 30000
+
+# Enable logs (on by default, but can disable)
+[observability.logs]
+enabled = true
+
+# Durable Object migration
+[[migrations]]
+tag = "v1"
+new_classes = ["RelayWebSocket"]

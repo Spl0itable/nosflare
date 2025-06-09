@@ -10,6 +10,8 @@ This relay implementation is designed to be easy to deploy, scalable, and cost-e
 
 Nosflare includes support for [Session API](https://developers.cloudflare.com/d1/worker-api/d1-database/#withsession), which enables Cloudflare's global read replication. This can lower latency for read queries and scale read throughput by adding read-only database copies, called read replicas, across regions globally closer to clients.
 
+This relay implementation also includes support for [Durable Objects](https://developers.cloudflare.com/durable-objects/), which is used for the long-lived websocket connection and broadcasting new events to all clients. This allows for real-time delivery of new events.
+
 ## Supported NIPs
 
 - Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40.
@@ -33,10 +35,10 @@ npm install -g esbuild
 
 ### Building
 
-Clone this repo to your machine, then `cd` into its directory, and open `src/relay-worker.js` in a file editor. Edit the contents of `relayInfo` and enable any optional settings as desired by uncommenting them to customize the relay name, icon, limitations, etc.
+Either fork this repo or clone it to your machine (but forking is recommended so you can deploy from your own git repo), then either open the project in your favorite text editor or `cd` into its directory, and open `src/config.ts` in a text editor. Edit the contents of `relayInfo` and enable any optional settings as desired by uncommenting them to customize the relay name, icon, limitations, etc.
  
 *Optional:*
-- In the `relay-worker.js` file: Edit the "Pay to relay" settings if you would like to charge people for access to the relay via payment in Bitcoin through a Nostr zap. This feature is enabled by default. You will want to set `PAY_TO_RELAY_ENABLED` to `false` state if you would like to disable it. Edit `relayNpub` with your own npub and enter the desired price in SATS in `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
+- In the `src/config.ts` file: Edit the "Pay to relay" settings if you would like to charge people for access to the relay via payment in Bitcoin through a Nostr zap. This feature is enabled by default. You will want to set `PAY_TO_RELAY_ENABLED` to `false` state if you would like to disable it. Edit `relayNpub` with your own npub and enter the desired price in SATS in `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
@@ -51,7 +53,7 @@ Nosflare has a default static HTML page that renders when someone visits the rel
 
 Nosflare has two optional robust spam filtering mechanisms: NIP-05 Nostr address validation and deriving hashes of event content. 
 
-The NIP-05 validation is disabled by default and must be set to `true` in `checkValidNip05` and is handled within the `processEvent` function in the `relay-worker.js` file. There you will see the code block for "NIP-05 validation". Furthermore, you can explicitly list domains you'd like to allow or block from publishing events.
+The NIP-05 validation is disabled by default and must be set to `true` in `checkValidNip05` in the `src/config.ts` file and is handled within the `processEvent` function in the `src/relay-worker.ts` file. There you will see the code block for "NIP-05 validation". Furthermore, you can explicitly list domains you'd like to allow or block from publishing events.
 
 Additionally, there's an optional setting `enableAntiSpam` that is disabled by default. Setting it to `true` subjects each event submitted to the relay to generate a hash based on the author's pubkey and the content of the event. A variety of kinds are included in the duplicate checker, but can be removed from the list to skip them. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note.
 
@@ -61,20 +63,20 @@ Even further, you can have even more granular control over the spam filtering by
 
 ### Deployment
 
-Once you've made the desired edits, from the project's directory within CLI use the command `npm run build` to bundle the worker script. This will use the edited `src/relay-worker.js` file to overwrite the `worker.js` file. You can then either copy the contens of the `worker.js` file and paste it directly into the Worker code editor in the Cloudflare dashboard. Or, if files are git pushed to a repo, you can link the repo to the Worker and it will automatically build using the `worker.js` script to the Worker. Thereafter, any changes saved to the git repo will be pushed to update the Worker automatically.
+Once you've made the desired edits, from the project's directory within CLI use the command `npm run build` to bundle the worker script. This will use the edited `src/config.ts` file to overwrite the `worker.js` file. You can then either copy the contens of the `worker.js` file and paste it directly into the Worker code editor in the Cloudflare dashboard. Or, if files are git pushed to a repo, you can link the repo to the Worker and it will automatically build using the `worker.js` script to the Worker. Thereafter, any changes saved to the git repo will be pushed to update the Worker automatically.
 
-You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard. We'll focus on using the Cloudflare dashboard, but many steps for using Wrangler CLI is somewhat similar:
+You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard. We'll focus on a mix of using the Cloudflare dashboard and connected git repo, but many steps for using Wrangler CLI is somewhat similar:
 
 #### Cloudflare Dashboard
 
 1. Log in to your Cloudflare dashboard.
 2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region
 3. In the newly created D1 database click Settings tab and click "Enable read replication". Ignore the warning, Nosflare has been extensively tested to support read replication. However, fallback support is included in case read replication is disabled.
-4. (Optional) If using a worker connected to a git repo, edit the `wrangler.jsonc` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard.
+4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name.
 5. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
-6. On the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section. This binding will occur automatically and can be skipped if pushing from git to the worker.
+6. if not using a connected git repo, then on the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section. This binding will occur automatically and can be skipped if pushing from git to the worker.
 7. Depending what you picked in step 4, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
-8. Save and deploy the relay worker. Visit the relay URL through HTTP request (from browser) to the landing page. This will trigger the database initialization to build the necessary database tables.
+8. Save and deploy the relay worker. There will be a one-time worker that's automatically created in order to initialize the database with the correct tables. 
 9. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
 10. (Optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
 
