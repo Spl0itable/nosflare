@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+worker.js
+worker.js.map
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+
+# Wrangler
+.wrangler/
+.dev.vars
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

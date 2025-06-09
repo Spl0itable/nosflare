@@ -1,5 +1,5 @@
 # Change name if you feel like it
-name = "nosflare"
+name = "nosflare-do"
 compatibility_date = "2025-01-04"
 main = "worker.js"
 
@@ -12,8 +12,8 @@ class_name = "RelayWebSocket"
 # Important! Change name and id settings to your own
 [[d1_databases]]
 binding = "relayDb"
-database_name = "nostr-relay"
-database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
+database_name = "nosflare-staging"
+database_id = "78a29944-6b99-40f8-8205-a3b967f8b721"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
