@@ -3,7 +3,7 @@ import { Env, NostrEvent, NostrFilter, QueryResult } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
-// Only import config values that are actually used in this file
+// Import config values
 const {
   relayInfo,
   PAY_TO_RELAY_ENABLED,
@@ -467,6 +467,7 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
   }
 }
 
+// Helper function for kind 5
 async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   console.log(`Processing deletion event ${event.id}`);
   const deletedEventIds = event.tags.filter(tag => tag[0] === "e").map(tag => tag[1]);
