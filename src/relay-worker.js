@@ -156,8 +156,8 @@ const allowedTags = new Set([
 ]);
 
 // Rate limit thresholds
-const PUBKEY_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 100 EVENT messages per min
-const REQ_RATE_LIMIT = { rate: 5000 / 60000, capacity: 5000 }; // 10,000 REQ messages per min
+const PUBKEY_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 50 EVENT messages per min
+const REQ_RATE_LIMIT = { rate: 5000 / 60000, capacity: 5000 }; // 5,000 REQ messages per min
 const excludedRateLimitKinds = new Set([
     // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
@@ -1329,23 +1329,23 @@ async function processReq(message, server, env) {
             }
         }
 
-        // Allow up to 10,000 event IDs
-        if (filter.ids && filter.ids.length > 1000) {
-            console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 1000`);
-            sendClosed(server, subscriptionId, "invalid: too many event IDs (max 10000)");
+        // Allow up to 5,000 event IDs
+        if (filter.ids && filter.ids.length > 5000) {
+            console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 5000`);
+            sendClosed(server, subscriptionId, "invalid: too many event IDs (max 5000)");
             return;
         }
 
-        // Allow up to a limit of 10,000 events
-        if (filter.limit && filter.limit > 1000) {
-            console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
-            sendClosed(server, subscriptionId, "invalid: limit too high (max 1000)");
+        // Allow up to a limit of 5,000 events
+        if (filter.limit && filter.limit > 5000) {
+            console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 5000`);
+            sendClosed(server, subscriptionId, "invalid: limit too high (max 5000)");
             return;
         }
 
-        // If no limit is provided, set it to 10,000
+        // If no limit is provided, set it to 5,000
         if (!filter.limit) {
-            filter.limit = 1000;
+            filter.limit = 5000;
         }
     }
 
@@ -1405,7 +1405,7 @@ async function processReq(message, server, env) {
     }
 
     // Apply global limit across all filters
-    const limit = Math.min(...filters.map(f => f.limit || 1000));
+    const limit = Math.min(...filters.map(f => f.limit || 5000));
     const eventsToSend = allEvents.slice(0, limit);
 
     // Send the events to the client
@@ -1737,9 +1737,9 @@ function buildQuery(filters) {
 
     if (filters.limit) {
         sql += " LIMIT ?";
-        params.push(Math.min(filters.limit, 1000));
+        params.push(Math.min(filters.limit, 5000));
     } else {
-        sql += " LIMIT 1000";
+        sql += " LIMIT 5000";
     }
 
     return { sql, params };
@@ -2048,14 +2048,14 @@ function fetchEventFromFallbackRelay(pubkey) {
             console.log('Fallback relay WebSocket connection closed.');
         };
 
-        // Timeout if no response is received within 10 seconds
+        // Timeout if no response is received within 5 seconds
         setTimeout(() => {
             if (!hasClosed) {
                 console.log('Timeout reached. Closing WebSocket connection to fallback relay.');
                 closeWebSocket(null);
                 reject(new Error(`No response from fallback relay for pubkey ${pubkey}`));
             }
-        }, 10000);
+        }, 5000);
     });
 }
 

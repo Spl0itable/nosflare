@@ -3366,18 +3366,18 @@ async function processReq(message, server, env) {
         return;
       }
     }
-    if (filter.ids && filter.ids.length > 1e3) {
-      console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 1000`);
-      sendClosed(server, subscriptionId, "invalid: too many event IDs (max 10000)");
+    if (filter.ids && filter.ids.length > 5e3) {
+      console.error(`Too many event IDs in subscriptionId: ${subscriptionId} - Maximum is 5000`);
+      sendClosed(server, subscriptionId, "invalid: too many event IDs (max 5000)");
       return;
     }
-    if (filter.limit && filter.limit > 1e3) {
-      console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 1000`);
-      sendClosed(server, subscriptionId, "invalid: limit too high (max 1000)");
+    if (filter.limit && filter.limit > 5e3) {
+      console.error(`REQ limit exceeded in subscriptionId: ${subscriptionId} - Maximum allowed is 5000`);
+      sendClosed(server, subscriptionId, "invalid: limit too high (max 5000)");
       return;
     }
     if (!filter.limit) {
-      filter.limit = 1e3;
+      filter.limit = 5e3;
     }
   }
   let totalParams = 0;
@@ -3420,7 +3420,7 @@ async function processReq(message, server, env) {
       return;
     }
   }
-  const limit = Math.min(...filters.map((f) => f.limit || 1e3));
+  const limit = Math.min(...filters.map((f) => f.limit || 5e3));
   const eventsToSend = allEvents.slice(0, limit);
   for (const event of eventsToSend) {
     server.send(JSON.stringify(["EVENT", subscriptionId, event]));
@@ -3659,9 +3659,9 @@ function buildQuery(filters) {
   sql += " ORDER BY created_at DESC";
   if (filters.limit) {
     sql += " LIMIT ?";
-    params.push(Math.min(filters.limit, 1e3));
+    params.push(Math.min(filters.limit, 5e3));
   } else {
-    sql += " LIMIT 1000";
+    sql += " LIMIT 5000";
   }
   return { sql, params };
 }
@@ -3905,7 +3905,7 @@ function fetchEventFromFallbackRelay(pubkey) {
         closeWebSocket(null);
         reject(new Error(`No response from fallback relay for pubkey ${pubkey}`));
       }
-    }, 1e4);
+    }, 5e3);
   });
 }
 function validateIds(ids) {
