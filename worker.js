@@ -2775,9 +2775,7 @@ function fetchEventFromFallbackRelay(pubkey) {
       const filters = {
         kinds: [0],
         authors: [pubkey],
-        // Only for the specified pubkey
         limit: 1
-        // We only need one event (the latest kind 0 event)
       };
       const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
       ws.send(reqMessage);

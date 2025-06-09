@@ -103,3 +103,26 @@ export class RateLimiter {
     this.lastRefillTime = now;
   }
 }
+
+// NIP-05 response type
+export interface Nip05Response {
+  names: Record<string, string>;
+  relays?: Record<string, string[]>;
+}
+
+// WebSocket message types for Nostr protocol
+export type NostrMessage = 
+  | ["EVENT", string, NostrEvent]
+  | ["EOSE", string]
+  | ["OK", string, boolean, string]
+  | ["NOTICE", string]
+  | ["REQ", string, ...NostrFilter[]]
+  | ["CLOSE", string];
+
+// WebSocket event types (for Cloudflare Workers)
+export interface WebSocketEventMap {
+  "close": CloseEvent;
+  "error": Event;
+  "message": MessageEvent;
+  "open": Event;
+}

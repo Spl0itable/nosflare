@@ -1,5 +1,5 @@
 import { schnorr } from "@noble/curves/secp256k1";
-import { Env, NostrEvent, NostrFilter, QueryResult } from './types';
+import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
@@ -220,16 +220,16 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
       const subscriptionId = Math.random().toString(36).substr(2, 9);
       const filters = {
         kinds: [0],
-        authors: [pubkey], // Only for the specified pubkey
-        limit: 1 // We only need one event (the latest kind 0 event)
+        authors: [pubkey],
+        limit: 1
       };
       const reqMessage = JSON.stringify(["REQ", subscriptionId, filters]);
       ws.send(reqMessage);
     };
 
-    ws.onmessage = (event) => {
+    ws.onmessage = (event: MessageEvent) => {
       try {
-        const message = JSON.parse(event.data);
+        const message = JSON.parse(event.data) as NostrMessage;
 
         // Handle EVENT message
         if (message[0] === "EVENT" && message[1]) {
@@ -253,7 +253,7 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
       }
     };
 
-    ws.onerror = (error) => {
+    ws.onerror = (error: Event) => {
       console.error(`WebSocket error with fallback relay:`, error);
       ws.close();
       hasClosed = true;
@@ -356,7 +356,7 @@ async function validateNIP05(nip05Address: string, pubkey: string): Promise<bool
       return false;
     }
 
-    const nip05Data = await response.json();
+    const nip05Data = await response.json() as Nip05Response;
 
     if (!nip05Data.names || !nip05Data.names[name]) {
       console.error(`NIP-05 data does not contain a matching public key for ${name}`);
