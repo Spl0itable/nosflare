@@ -31,6 +31,7 @@ Nosflare requires the [@noble/curves](https://github.com/paulmillr/noble-curves)
 ```
 npm install @noble/curves
 npm install -g esbuild
+npm install --save-dev typescript @cloudflare/workers-types @types/node
 ```
 
 ### Building
