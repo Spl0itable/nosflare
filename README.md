@@ -26,7 +26,7 @@ This relay implementation also uses [Durable Objects](https://developers.cloudfl
 
 ### Dependencies
 
-Nosflare requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations, the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler, and [Typescript](https://www.typescriptlang.org):
+Nosflare requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations, the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler, and [TypeScript](https://www.typescriptlang.org):
 
 ```
 npm install @noble/curves
