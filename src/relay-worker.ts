@@ -266,7 +266,6 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
       console.log('Fallback relay WebSocket connection closed.');
     });
 
-    // Timeout remains the same
     setTimeout(() => {
       if (!hasClosed) {
         console.log('Timeout reached. Closing WebSocket connection to fallback relay.');
@@ -556,7 +555,7 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 // Helper function to handle chunked queries
 async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
   const session = env.relayDb.withSession(bookmark);
-  const allEvents = new Map<string, NostrEvent>(); // Use Map to deduplicate
+  const allEvents = new Map<string, NostrEvent>();
 
   // Determine what needs chunking
   const needsChunking = {
@@ -715,7 +714,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
       // Check if we need to use chunked query
       const paramCount = countQueryParameters(filter);
 
-      if (paramCount > 900) { // Leave some margin below SQLite's 999 limit
+      if (paramCount > 900) { // Leaves some margin below SQLite's 999 limit
         console.log(`Query has ${paramCount} parameters, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {

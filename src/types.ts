@@ -16,7 +16,7 @@ export interface NostrFilter {
   since?: number;
   until?: number;
   limit?: number;
-  [key: string]: any; // For tag filters like #e, #p, etc.
+  [key: string]: any;
 }
 
 export interface RelayInfo {
@@ -70,7 +70,7 @@ export interface WebSocketSession {
   pubkeyRateLimiter: RateLimiter;
   reqRateLimiter: RateLimiter;
   bookmark: string;
-  host?: string; // Add this line
+  host?: string;
 }
 
 export class RateLimiter {
@@ -119,10 +119,19 @@ export type NostrMessage =
   | ["REQ", string, ...NostrFilter[]]
   | ["CLOSE", string];
 
-// WebSocket event types (for Cloudflare Workers)
+// WebSocket event types for Cloudflare Workers
 export interface WebSocketEventMap {
   "close": CloseEvent;
   "error": Event;
   "message": MessageEvent;
   "open": Event;
+}
+
+// Request body types for internal RPC calls
+export interface BroadcastEventRequest {
+  event: NostrEvent;
+}
+
+export interface DurableObject {
+  fetch(request: Request): Promise<Response>;
 }

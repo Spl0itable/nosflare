@@ -1,6 +1,6 @@
 import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env } from './types';
-import { 
-  PUBKEY_RATE_LIMIT, 
+import {
+  PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
   PAY_TO_RELAY_ENABLED,
   isPubkeyAllowed,
@@ -27,7 +27,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Handle internal RPC calls from the worker
     if (url.pathname === '/broadcast-event' && request.method === 'POST') {
-      const { event } = await request.json();
+      const { event } = await request.json() as BroadcastEventRequest;
       await this.broadcastEvent(event);
       return new Response(JSON.stringify({ success: true }), {
         headers: { 'Content-Type': 'application/json' }
@@ -72,7 +72,7 @@ export class RelayWebSocket implements DurableObject {
     webSocket.addEventListener('message', async (event) => {
       try {
         let message: any;
-        
+
         if (typeof event.data === 'string') {
           message = JSON.parse(event.data);
         } else if (event.data instanceof ArrayBuffer) {
@@ -82,7 +82,7 @@ export class RelayWebSocket implements DurableObject {
         } else {
           throw new Error('Unsupported message format');
         }
-        
+
         await this.handleMessage(session, message);
       } catch (error) {
         console.error('Error handling message:', error);
@@ -142,9 +142,9 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // Check required fields
-      if (!event.id || !event.pubkey || !event.sig || !event.created_at || 
-          event.kind === undefined || !Array.isArray(event.tags) || 
-          event.content === undefined) {
+      if (!event.id || !event.pubkey || !event.sig || !event.created_at ||
+        event.kind === undefined || !Array.isArray(event.tags) ||
+        event.content === undefined) {
         this.sendOK(session.webSocket, event.id || '', false, 'invalid: missing required fields');
         return;
       }
@@ -210,11 +210,11 @@ export class RelayWebSocket implements DurableObject {
 
       // Process the event (save to database)
       const result = await processEvent(event, session.id, this.env);
-      
+
       if (result.success) {
         // Send OK to the sender
         this.sendOK(session.webSocket, event.id, true, result.message);
-        
+
         // Broadcast to all matching subscriptions
         await this.broadcastEvent(event);
       } else {
@@ -277,7 +277,7 @@ export class RelayWebSocket implements DurableObject {
 
       // Check blocked kinds
       if (filter.kinds) {
-        const blockedKinds = filter.kinds.filter(kind => !isEventKindAllowed(kind));
+        const blockedKinds = filter.kinds.filter((kind: number) => !isEventKindAllowed(kind));
         if (blockedKinds.length > 0) {
           console.error(`Blocked kinds in subscription: ${blockedKinds.join(', ')}`);
           this.sendClosed(session.webSocket, subscriptionId, `blocked: kinds ${blockedKinds.join(', ')} not allowed`);
@@ -286,19 +286,19 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // Validate limits
-      if (filter.ids && filter.ids.length > 10000) {
-        this.sendClosed(session.webSocket, subscriptionId, 'invalid: too many event IDs (max 10000)');
+      if (filter.ids && filter.ids.length > 5000) {
+        this.sendClosed(session.webSocket, subscriptionId, 'invalid: too many event IDs (max 5000)');
         return;
       }
 
-      if (filter.limit && filter.limit > 10000) {
-        this.sendClosed(session.webSocket, subscriptionId, 'invalid: limit too high (max 10000)');
+      if (filter.limit && filter.limit > 5000) {
+        this.sendClosed(session.webSocket, subscriptionId, 'invalid: limit too high (max 5000)');
         return;
       }
 
       // Set default limit if not provided
       if (!filter.limit) {
-        filter.limit = 10000;
+        filter.limit = 5000;
       }
     }
 
@@ -309,7 +309,7 @@ export class RelayWebSocket implements DurableObject {
     try {
       // Query events from database
       const result = await queryEvents(filters, session.bookmark, this.env);
-      
+
       // Update session bookmark
       if (result.bookmark) {
         session.bookmark = result.bookmark;
@@ -346,7 +346,7 @@ export class RelayWebSocket implements DurableObject {
 
   private async broadcastEvent(event: NostrEvent): Promise<void> {
     let broadcastCount = 0;
-    
+
     for (const [sessionId, session] of this.sessions) {
       for (const [subscriptionId, filters] of session.subscriptions) {
         if (this.matchesFilters(event, filters)) {
@@ -359,7 +359,7 @@ export class RelayWebSocket implements DurableObject {
         }
       }
     }
-    
+
     if (broadcastCount > 0) {
       console.log(`Event ${event.id} broadcast to ${broadcastCount} subscriptions`);
     }
@@ -400,7 +400,7 @@ export class RelayWebSocket implements DurableObject {
         const eventTagValues = event.tags
           .filter(tag => tag[0] === tagName)
           .map(tag => tag[1]);
-        
+
         // Check if any of the filter values match any of the event's tag values
         const hasMatch = values.some(v => eventTagValues.includes(v));
         if (!hasMatch) {
