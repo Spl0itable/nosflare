@@ -3629,7 +3629,8 @@ var _RelayWebSocket = class _RelayWebSocket {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/broadcast-event" && request.method === "POST") {
-      const { event } = await request.json();
+      const data = await request.json();
+      const { event } = data;
       await this.broadcastEvent(event);
       return new Response(JSON.stringify({ success: true }), {
         headers: { "Content-Type": "application/json" }

@@ -27,7 +27,8 @@ export class RelayWebSocket implements DurableObject {
 
     // Handle internal RPC calls from the worker
     if (url.pathname === '/broadcast-event' && request.method === 'POST') {
-      const { event } = await request.json() as BroadcastEventRequest;
+      const data = await request.json() as BroadcastEventRequest;
+      const { event } = data;
       await this.broadcastEvent(event);
       return new Response(JSON.stringify({ success: true }), {
         headers: { 'Content-Type': 'application/json' }
