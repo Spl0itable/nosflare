@@ -1,4 +1,4 @@
-import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env } from './types';
+import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, BroadcastEventRequest } from './types';
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
