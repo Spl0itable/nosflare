@@ -1,3 +1,7 @@
+## v7.0.1 - 2025-06-11
+
+- Hotfix: improved large query chunking
+
 ## v7.0.0 - 2025-06-09
 
 - New: refactored code into typescript

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.0.0",
+  version: "7.0.1",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2861,14 +2861,14 @@ async function processDeletionEvent(event, env) {
 }
 __name(processDeletionEvent, "processDeletionEvent");
 function countQueryParameters(filters) {
-  let count = 0;
+  let count = 1;
   if (filters.ids) count += filters.ids.length;
   if (filters.authors) count += filters.authors.length;
   if (filters.kinds) count += filters.kinds.length;
   if (filters.since) count += 1;
   if (filters.until) count += 1;
   for (const [key, values] of Object.entries(filters)) {
-    if (key.startsWith("#") && values && values.length > 0) {
+    if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
       count += 1 + values.length;
     }
   }
@@ -2887,93 +2887,106 @@ __name(chunkArray, "chunkArray");
 async function queryDatabaseChunked(filters, bookmark, env) {
   const session = env.relayDb.withSession(bookmark);
   const allEvents = /* @__PURE__ */ new Map();
+  const CHUNK_SIZE = 50;
+  const baseFilter = { ...filters };
   const needsChunking = {
-    ids: filters.ids && filters.ids.length > 200,
-    authors: filters.authors && filters.authors.length > 200,
-    kinds: filters.kinds && filters.kinds.length > 200,
+    ids: false,
+    authors: false,
+    kinds: false,
     tags: {}
   };
+  if (filters.ids && filters.ids.length > CHUNK_SIZE) {
+    needsChunking.ids = true;
+    delete baseFilter.ids;
+  }
+  if (filters.authors && filters.authors.length > CHUNK_SIZE) {
+    needsChunking.authors = true;
+    delete baseFilter.authors;
+  }
+  if (filters.kinds && filters.kinds.length > CHUNK_SIZE) {
+    needsChunking.kinds = true;
+    delete baseFilter.kinds;
+  }
   for (const [key, values] of Object.entries(filters)) {
-    if (key.startsWith("#") && values && values.length > 200) {
+    if (key.startsWith("#") && Array.isArray(values) && values.length > CHUNK_SIZE) {
       needsChunking.tags[key] = true;
+      delete baseFilter[key];
     }
   }
+  const processStringChunks = /* @__PURE__ */ __name(async (filterType, values) => {
+    const chunks = chunkArray(values, CHUNK_SIZE);
+    for (const chunk of chunks) {
+      const chunkFilter = { ...baseFilter };
+      if (filterType === "ids") {
+        chunkFilter.ids = chunk;
+      } else if (filterType === "authors") {
+        chunkFilter.authors = chunk;
+      } else if (filterType.startsWith("#")) {
+        chunkFilter[filterType] = chunk;
+      }
+      const query = buildQuery(chunkFilter);
+      try {
+        console.log(`Executing chunk query with ${query.params.length} parameters`);
+        const result = await session.prepare(query.sql).bind(...query.params).all();
+        for (const row of result.results) {
+          const event = {
+            id: row.id,
+            pubkey: row.pubkey,
+            created_at: row.created_at,
+            kind: row.kind,
+            tags: JSON.parse(row.tags),
+            content: row.content,
+            sig: row.sig
+          };
+          allEvents.set(event.id, event);
+        }
+      } catch (error) {
+        console.error(`Error in chunk query: ${error}`);
+      }
+    }
+  }, "processStringChunks");
+  const processNumberChunks = /* @__PURE__ */ __name(async (filterType, values) => {
+    const chunks = chunkArray(values, CHUNK_SIZE);
+    for (const chunk of chunks) {
+      const chunkFilter = { ...baseFilter };
+      chunkFilter.kinds = chunk;
+      const query = buildQuery(chunkFilter);
+      try {
+        console.log(`Executing chunk query with ${query.params.length} parameters`);
+        const result = await session.prepare(query.sql).bind(...query.params).all();
+        for (const row of result.results) {
+          const event = {
+            id: row.id,
+            pubkey: row.pubkey,
+            created_at: row.created_at,
+            kind: row.kind,
+            tags: JSON.parse(row.tags),
+            content: row.content,
+            sig: row.sig
+          };
+          allEvents.set(event.id, event);
+        }
+      } catch (error) {
+        console.error(`Error in chunk query: ${error}`);
+      }
+    }
+  }, "processNumberChunks");
   if (needsChunking.ids && filters.ids) {
-    const idChunks = chunkArray(filters.ids, 200);
-    for (const idChunk of idChunks) {
-      const chunkFilters = { ...filters, ids: idChunk };
-      const query = buildQuery(chunkFilters);
-      try {
-        const result = await session.prepare(query.sql).bind(...query.params).all();
-        for (const row of result.results) {
-          const event = {
-            id: row.id,
-            pubkey: row.pubkey,
-            created_at: row.created_at,
-            kind: row.kind,
-            tags: JSON.parse(row.tags),
-            content: row.content,
-            sig: row.sig
-          };
-          allEvents.set(event.id, event);
-        }
-      } catch (error) {
-        console.error(`Error in chunk query: ${error}`);
-      }
+    await processStringChunks("ids", filters.ids);
+  }
+  if (needsChunking.authors && filters.authors) {
+    await processStringChunks("authors", filters.authors);
+  }
+  if (needsChunking.kinds && filters.kinds) {
+    await processNumberChunks("kinds", filters.kinds);
+  }
+  for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
+    const tagValues = filters[tagKey];
+    if (Array.isArray(tagValues) && tagValues.every((v) => typeof v === "string")) {
+      await processStringChunks(tagKey, tagValues);
     }
-  } else if (needsChunking.authors && filters.authors) {
-    const authorChunks = chunkArray(filters.authors, 200);
-    for (const authorChunk of authorChunks) {
-      const chunkFilters = { ...filters, authors: authorChunk };
-      const query = buildQuery(chunkFilters);
-      try {
-        const result = await session.prepare(query.sql).bind(...query.params).all();
-        for (const row of result.results) {
-          const event = {
-            id: row.id,
-            pubkey: row.pubkey,
-            created_at: row.created_at,
-            kind: row.kind,
-            tags: JSON.parse(row.tags),
-            content: row.content,
-            sig: row.sig
-          };
-          allEvents.set(event.id, event);
-        }
-      } catch (error) {
-        console.error(`Error in chunk query: ${error}`);
-      }
-    }
-  } else if (Object.keys(needsChunking.tags).length > 0) {
-    for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
-      const tagValues = filters[tagKey];
-      if (Array.isArray(tagValues)) {
-        const tagChunks = chunkArray(tagValues, 200);
-        for (const tagChunk of tagChunks) {
-          const chunkFilters = { ...filters };
-          chunkFilters[tagKey] = tagChunk;
-          const query = buildQuery(chunkFilters);
-          try {
-            const result = await session.prepare(query.sql).bind(...query.params).all();
-            for (const row of result.results) {
-              const event = {
-                id: row.id,
-                pubkey: row.pubkey,
-                created_at: row.created_at,
-                kind: row.kind,
-                tags: JSON.parse(row.tags),
-                content: row.content,
-                sig: row.sig
-              };
-              allEvents.set(event.id, event);
-            }
-          } catch (error) {
-            console.error(`Error in chunk query: ${error}`);
-          }
-        }
-      }
-    }
-  } else {
+  }
+  if (!needsChunking.ids && !needsChunking.authors && !needsChunking.kinds && Object.keys(needsChunking.tags).length === 0) {
     const query = buildQuery(filters);
     try {
       const result = await session.prepare(query.sql).bind(...query.params).all();
@@ -3005,7 +3018,8 @@ async function queryEvents(filters, bookmark, env) {
     const eventSet = /* @__PURE__ */ new Map();
     for (const filter of filters) {
       const paramCount = countQueryParameters(filter);
-      if (paramCount > 900) {
+      console.log(`Filter parameter count: ${paramCount}`);
+      if (paramCount > 200) {
         console.log(`Query has ${paramCount} parameters, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {
@@ -3014,41 +3028,54 @@ async function queryEvents(filters, bookmark, env) {
         continue;
       }
       const safeFilter = { ...filter };
-      if (safeFilter.ids && safeFilter.ids.length > 500) {
-        console.log(`Large ID filter detected: ${safeFilter.ids.length} IDs. Truncating to 500.`);
-        safeFilter.ids = safeFilter.ids.slice(0, 500);
+      if (safeFilter.ids && safeFilter.ids.length > 100) {
+        console.log(`Large ID filter detected: ${safeFilter.ids.length} IDs. Truncating to 100.`);
+        safeFilter.ids = safeFilter.ids.slice(0, 100);
       }
-      if (safeFilter.authors && safeFilter.authors.length > 500) {
-        console.log(`Large authors filter detected: ${safeFilter.authors.length} authors. Truncating to 500.`);
-        safeFilter.authors = safeFilter.authors.slice(0, 500);
+      if (safeFilter.authors && safeFilter.authors.length > 100) {
+        console.log(`Large authors filter detected: ${safeFilter.authors.length} authors. Truncating to 100.`);
+        safeFilter.authors = safeFilter.authors.slice(0, 100);
       }
       for (const [key, values] of Object.entries(safeFilter)) {
-        if (key.startsWith("#") && Array.isArray(values) && values.length > 500) {
-          console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 500.`);
-          safeFilter[key] = values.slice(0, 500);
+        if (key.startsWith("#") && Array.isArray(values) && values.length > 100) {
+          console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 100.`);
+          safeFilter[key] = values.slice(0, 100);
         }
       }
       const query = buildQuery(safeFilter);
       console.log(`Executing query: ${query.sql}`);
       console.log(`Query parameters count: ${query.params.length}`);
-      const result = await session.prepare(query.sql).bind(...query.params).all();
-      if (result.meta) {
-        console.log({
-          servedByRegion: result.meta.served_by_region ?? "",
-          servedByPrimary: result.meta.served_by_primary ?? false
-        });
-      }
-      for (const row of result.results) {
-        const event = {
-          id: row.id,
-          pubkey: row.pubkey,
-          created_at: row.created_at,
-          kind: row.kind,
-          tags: JSON.parse(row.tags),
-          content: row.content,
-          sig: row.sig
-        };
-        eventSet.set(event.id, event);
+      try {
+        const result = await session.prepare(query.sql).bind(...query.params).all();
+        if (result.meta) {
+          console.log({
+            servedByRegion: result.meta.served_by_region ?? "",
+            servedByPrimary: result.meta.served_by_primary ?? false
+          });
+        }
+        for (const row of result.results) {
+          const event = {
+            id: row.id,
+            pubkey: row.pubkey,
+            created_at: row.created_at,
+            kind: row.kind,
+            tags: JSON.parse(row.tags),
+            content: row.content,
+            sig: row.sig
+          };
+          eventSet.set(event.id, event);
+        }
+      } catch (error) {
+        console.error(`Query execution error: ${error.message}`);
+        if (error.message.includes("too many SQL variables")) {
+          console.log("Still hit parameter limit, falling back to chunked query");
+          const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
+          for (const event of chunkedResult.events) {
+            eventSet.set(event.id, event);
+          }
+        } else {
+          throw error;
+        }
       }
     }
     const events = Array.from(eventSet.values()).sort((a, b) => {
