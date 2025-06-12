@@ -426,43 +426,52 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
       }
     }
 
-    // Insert event and related data
-    const batch = [
-      session.prepare(`
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig)
-    ];
+    // Insert the main event first
+    await session.prepare(`
+      INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig).run();
 
-    // Insert tags
+    // Process tags in chunks if there are many
+    const TAG_CHUNK_SIZE = 50;
+    const tagInserts = [];
+    
     for (const tag of event.tags) {
       if (tag[0] && tag[1]) {
-        batch.push(
-          session.prepare(`
-            INSERT INTO tags (event_id, tag_name, tag_value)
-            VALUES (?, ?, ?)
-          `).bind(event.id, tag[0], tag[1])
-        );
+        tagInserts.push({ tag_name: tag[0], tag_value: tag[1] });
       }
     }
 
-    // Insert content hash (only if anti-spam is enabled)
-    if (shouldCheckForDuplicates(event.kind)) {
-      const contentHash = await hashContent(event);
-      batch.push(
+    // Insert tags in chunks
+    for (let i = 0; i < tagInserts.length; i += TAG_CHUNK_SIZE) {
+      const chunk = tagInserts.slice(i, i + TAG_CHUNK_SIZE);
+      const batch = chunk.map(t => 
         session.prepare(`
-          INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-          VALUES (?, ?, ?, ?)
-        `).bind(contentHash, event.id, event.pubkey, event.created_at)
+          INSERT INTO tags (event_id, tag_name, tag_value)
+          VALUES (?, ?, ?)
+        `).bind(event.id, t.tag_name, t.tag_value)
       );
+      
+      if (batch.length > 0) {
+        await session.batch(batch);
+      }
     }
 
-    await session.batch(batch);
+    // Insert content hash separately (only if anti-spam is enabled)
+    if (shouldCheckForDuplicates(event.kind)) {
+      const contentHash = await hashContent(event);
+      await session.prepare(`
+        INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
+    }
+
     console.log(`Event ${event.id} saved successfully to D1.`);
     return { success: true, message: "Event received successfully for processing" };
 
   } catch (error: any) {
     console.error(`Error saving event: ${error.message}`);
+    console.error(`Event details: ID=${event.id}, Tags count=${event.tags.length}`);
     return { success: false, message: "error: could not save event" };
   }
 }
