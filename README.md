@@ -12,7 +12,7 @@ Nosflare uses the [Session API](https://developers.cloudflare.com/d1/worker-api/
 
 This relay implementation also uses [Durable Objects](https://developers.cloudflare.com/durable-objects/), which is used for the long-lived websocket connection and broadcasting new events to all clients. This allows for real-time delivery of new events.
 
-## One-click deploy
+## One-click Deploy
 
 Don't know how to code or operate a server but still want to run your own Nostr relay? Nosflare Deploy is the easiest, no-code, one-click deployment of your very own relay using your own Cloudflare account for a one-time setup fee of 21,420 sats!
 
@@ -95,7 +95,7 @@ If you had previously deployed a Nosflare-powered relay, there is a migration to
 
 ![Migrate from R2 bucket to D1 database](images/migration.png)
 
-## Pay to relay
+## Pay To Relay
 
 Nosflare allows for "pay to relay", which lets the relay operator accept Bitcoin lightning payments through Nostr zaps of SATS. The price can be whatever the relay operator chooses and sets detailed above in the optional settings section. This allows relay operators to turn their relay into a paid relay. Once enabled, every event sent to the relay will have its author's pubkey checked to see if they've paid for access.
 
