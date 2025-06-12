@@ -12,6 +12,14 @@ Nosflare uses the [Session API](https://developers.cloudflare.com/d1/worker-api/
 
 This relay implementation also uses [Durable Objects](https://developers.cloudflare.com/durable-objects/), which is used for the long-lived websocket connection and broadcasting new events to all clients. This allows for real-time delivery of new events.
 
+## One-click deploy
+
+Don't know how to code or operate a server but still want to run your own Nostr relay? Nosflare Deploy is the easiest, no-code, one-click deployment of your very own relay using your own Cloudflare account for a one-time setup fee of 21,420 sats!
+
+You can even make as many updates to your relay as you like after it has been deployed at no extra cost. This is truly democratizing relay ownership! [Deploy here](https://deploy.nosflare.com/)
+
+Or, continue below to manually deploy Nosflare...
+
 ## Supported NIPs
 
 - Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40.
