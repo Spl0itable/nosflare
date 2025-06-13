@@ -919,7 +919,7 @@ function serveLandingPage(): Response {
     <div class="pay-section" id="paySection">
       <p style="margin-bottom: 1rem;">Pay to access this relay:</p>
       <button id="payButton" class="pay-button" data-npub="${relayNpub}" data-relays="wss://relay.damus.io,wss://relay.primal.net,wss://sendit.nosflare.com" data-sats-amount="${RELAY_ACCESS_PRICE_SATS}">
-        <img src="https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/pwb-button-min.png" alt="Pay with Bitcoin" style="height: 60px;">
+        <img src="https://nosflare.com/images/pwb-button-min.png" alt="Pay with Bitcoin" style="height: 60px;">
       </button>
       <p class="price-info">${RELAY_ACCESS_PRICE_SATS.toLocaleString()} sats</p>
     </div>
@@ -1123,7 +1123,7 @@ function serveLandingPage(): Response {
 </head>
 <body>
     <div class="container">
-        <img src="https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/nosflare.png" alt="Nosflare Logo" class="logo">
+        <img src="https://nosflare.com/images/nosflare.png" alt="Nosflare Logo" class="logo">
         <p class="tagline">A serverless Nostr relay powered by Cloudflare</p>
         
         ${payToRelaySection}
