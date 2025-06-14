@@ -341,21 +341,6 @@ export class RelayWebSocket implements DurableObject {
 
     await Promise.allSettled(discoveryPromises);
 
-    // Clean up stale peers (not seen in 15 minutes)
-    const staleThreshold = Date.now() - 900000; // 15 minutes
-    const stalePeers: string[] = [];
-
-    for (const [peerId, peerInfo] of this.knownPeers) {
-      if (peerInfo.lastSeen < staleThreshold) {
-        stalePeers.push(peerId);
-        this.knownPeers.delete(peerId);
-      }
-    }
-
-    if (stalePeers.length > 0) {
-      console.log(`Removed ${stalePeers.length} stale peers: ${stalePeers.join(', ')}`);
-    }
-
     // Check if peers actually changed
     let peersChanged = false;
 
@@ -377,12 +362,9 @@ export class RelayWebSocket implements DurableObject {
 
     // Only write to storage if peers actually changed
     if (peersChanged) {
-      console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
+      console.log(`DO ${this.doName} discovered ${this.knownPeers.size} total peers (changed from ${previousPeers.size})`);
       await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
     }
-
-    // Always update alarm for next check
-    await this.state.storage.setAlarm(Date.now() + 300000); // 5 minutes
   }
 
   private async handleSession(webSocket: WebSocket, request: Request): Promise<void> {
