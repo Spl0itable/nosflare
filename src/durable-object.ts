@@ -170,6 +170,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Start peer discovery when first client connects
     if (this.sessions.size === 1 && !this.peerDiscoveryInterval) {
+      // @ts-ignore
       await this.startPeerDiscovery();
     }
 
@@ -288,27 +289,55 @@ export class RelayWebSocket implements DurableObject {
     });
   }
 
-  private async startPeerDiscovery(): Promise<void> {
-    console.log(`DO ${this.doName} starting peer discovery`);
-
-    // Initial discovery
-    await this.discoverPeers();
-
-    // Periodic discovery every 5 minutes
-    this.peerDiscoveryInterval = setInterval(() => {
-      this.discoverPeers().catch(console.error);
-    }, 300000);
-  }
-
-  private async discoverPeers() {
+  private async discoverPeers(): Promise<void> {
     // Store the current state to detect changes
     const previousPeers = new Map(this.knownPeers);
 
-    // Try to discover from all allowed endpoints
-    const discoveryPromises = RelayWebSocket.ALLOWED_ENDPOINTS
-      .filter(endpoint => endpoint !== this.doName) // Skip self
-      // @ts-ignore
-      .map(endpoint => this.discoverFromEndpoint(endpoint));
+    // Use the predefined allowed endpoints
+    const discoveryEndpoints = RelayWebSocket.ALLOWED_ENDPOINTS;
+
+    const discoveryPromises = discoveryEndpoints
+      .filter(endpoint => endpoint !== this.doName)
+      .map(async (endpoint) => {
+        try {
+          const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
+          const stub = this.env.RELAY_WEBSOCKET.get(id);
+
+          // Include the target DO name in the URL
+          const url = new URL('https://internal/exchange-peers');
+          url.searchParams.set('doName', endpoint);
+
+          const response = await Promise.race([
+            stub.fetch(new Request(url.toString(), {
+              method: 'POST',
+              body: JSON.stringify({
+                myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
+                myId: `${this.region}:${this.doId}`
+              })
+            })),
+            new Promise<Response>((_, reject) =>
+              setTimeout(() => reject(new Error('Timeout')), 2000)
+            )
+          ]);
+
+          if (response.ok) {
+            // @ts-ignore
+            const { peers } = await response.json();
+            for (const peer of peers || []) {
+              const [region, doId] = peer.split(':');
+              if (doId && doId !== this.doId) {
+                this.knownPeers.set(peer, {
+                  region,
+                  doId,
+                  lastSeen: Date.now()
+                });
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore discovery failures
+        }
+      });
 
     await Promise.allSettled(discoveryPromises);
 
@@ -348,7 +377,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Only write to storage if peers actually changed
     if (peersChanged) {
-      console.log(`Peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
+      console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
       await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
     }
 

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.2",
+  version: "7.1.3",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4153,16 +4153,43 @@ var _RelayWebSocket = class _RelayWebSocket {
       headers: { "Content-Type": "application/json" }
     });
   }
-  async startPeerDiscovery() {
-    console.log(`DO ${this.doName} starting peer discovery`);
-    await this.discoverPeers();
-    this.peerDiscoveryInterval = setInterval(() => {
-      this.discoverPeers().catch(console.error);
-    }, 3e5);
-  }
   async discoverPeers() {
     const previousPeers = new Map(this.knownPeers);
-    const discoveryPromises = _RelayWebSocket.ALLOWED_ENDPOINTS.filter((endpoint) => endpoint !== this.doName).map((endpoint) => this.discoverFromEndpoint(endpoint));
+    const discoveryEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
+    const discoveryPromises = discoveryEndpoints.filter((endpoint) => endpoint !== this.doName).map(async (endpoint) => {
+      try {
+        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
+        const stub = this.env.RELAY_WEBSOCKET.get(id);
+        const url = new URL("https://internal/exchange-peers");
+        url.searchParams.set("doName", endpoint);
+        const response = await Promise.race([
+          stub.fetch(new Request(url.toString(), {
+            method: "POST",
+            body: JSON.stringify({
+              myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
+              myId: `${this.region}:${this.doId}`
+            })
+          })),
+          new Promise(
+            (_, reject) => setTimeout(() => reject(new Error("Timeout")), 2e3)
+          )
+        ]);
+        if (response.ok) {
+          const { peers } = await response.json();
+          for (const peer of peers || []) {
+            const [region, doId] = peer.split(":");
+            if (doId && doId !== this.doId) {
+              this.knownPeers.set(peer, {
+                region,
+                doId,
+                lastSeen: Date.now()
+              });
+            }
+          }
+        }
+      } catch (error) {
+      }
+    });
     await Promise.allSettled(discoveryPromises);
     const staleThreshold = Date.now() - 9e5;
     const stalePeers = [];
@@ -4188,7 +4215,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     if (peersChanged) {
-      console.log(`Peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
+      console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
       await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
     }
     await this.state.storage.setAlarm(Date.now() + 3e5);
