@@ -3897,7 +3897,6 @@ async function getOptimalDO(cf, env, url) {
   let bestHint;
   if (country === "US" && region && region !== "unknown") {
     bestHint = usStateToHint[region] || "enam";
-    console.log(`US state routing: ${region} -> ${bestHint}`);
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }

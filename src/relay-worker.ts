@@ -1458,7 +1458,6 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   let bestHint: string;
   if (country === 'US' && region && region !== 'unknown') {
     bestHint = usStateToHint[region] || 'enam';
-    console.log(`US state routing: ${region} -> ${bestHint}`);
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
