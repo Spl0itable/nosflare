@@ -4153,6 +4153,13 @@ var _RelayWebSocket = class _RelayWebSocket {
       headers: { "Content-Type": "application/json" }
     });
   }
+  async startPeerDiscovery() {
+    console.log(`DO ${this.doName} starting peer discovery`);
+    await this.discoverPeers();
+    this.peerDiscoveryInterval = setInterval(() => {
+      this.discoverPeers().catch(console.error);
+    }, 3e5);
+  }
   async discoverPeers() {
     const previousPeers = new Map(this.knownPeers);
     const discoveryEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
@@ -4191,6 +4198,17 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     });
     await Promise.allSettled(discoveryPromises);
+    const staleThreshold = Date.now() - 9e5;
+    const stalePeers = [];
+    for (const [peerId, peerInfo] of this.knownPeers) {
+      if (peerInfo.lastSeen < staleThreshold) {
+        stalePeers.push(peerId);
+        this.knownPeers.delete(peerId);
+      }
+    }
+    if (stalePeers.length > 0) {
+      console.log(`Removed ${stalePeers.length} stale peers: ${stalePeers.join(", ")}`);
+    }
     let peersChanged = false;
     if (previousPeers.size !== this.knownPeers.size) {
       peersChanged = true;
@@ -4204,9 +4222,10 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     if (peersChanged) {
-      console.log(`DO ${this.doName} discovered ${this.knownPeers.size} total peers (changed from ${previousPeers.size})`);
+      console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
       await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
     }
+    await this.state.storage.setAlarm(Date.now() + 3e5);
   }
   async handleSession(webSocket, request) {
     webSocket.accept();
