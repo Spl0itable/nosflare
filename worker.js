@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.4",
+  version: "7.1.3",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3765,159 +3765,150 @@ async function getOptimalDO(cf, env, url) {
   const region = cf?.region || "unknown";
   const colo = cf?.colo || "unknown";
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
-  const REGIONS = [
-    { name: "WNAM", hint: "wnam" },
-    { name: "ENAM", hint: "enam" },
-    { name: "WEUR", hint: "weur" },
-    { name: "EEUR", hint: "eeur" },
-    { name: "APAC", hint: "apac" },
-    { name: "OC", hint: "oc" },
-    { name: "SAM", hint: "sam" },
-    { name: "AFR", hint: "afr" },
-    { name: "ME", hint: "me" }
+  const ALL_ENDPOINTS = [
+    { name: "relay-WNAM-primary", hint: "wnam" },
+    { name: "relay-ENAM-primary", hint: "enam" },
+    { name: "relay-WEUR-primary", hint: "weur" },
+    { name: "relay-EEUR-primary", hint: "eeur" },
+    { name: "relay-APAC-primary", hint: "apac" },
+    { name: "relay-OC-primary", hint: "oc" },
+    { name: "relay-SAM-primary", hint: "sam" },
+    { name: "relay-AFR-primary", hint: "afr" },
+    { name: "relay-ME-primary", hint: "me" }
   ];
-  const countryToRegion = {
+  const countryToHint = {
     // North America
-    "US": "ENAM",
-    "CA": "ENAM",
-    "MX": "WNAM",
-    // South America
-    "BR": "SAM",
-    "AR": "SAM",
-    "CL": "SAM",
-    "CO": "SAM",
-    "PE": "SAM",
+    "US": "enam",
+    "CA": "enam",
+    "MX": "wnam",
+    // South America (all use 'sam' which redirects to 'enam')
+    "BR": "sam",
+    "AR": "sam",
+    "CL": "sam",
+    "CO": "sam",
+    "PE": "sam",
     // Western Europe
-    "GB": "WEUR",
-    "FR": "WEUR",
-    "DE": "WEUR",
-    "ES": "WEUR",
-    "IT": "WEUR",
-    "NL": "WEUR",
-    "BE": "WEUR",
-    "CH": "WEUR",
-    "AT": "WEUR",
+    "GB": "weur",
+    "FR": "weur",
+    "DE": "weur",
+    "ES": "weur",
+    "IT": "weur",
+    "NL": "weur",
+    "BE": "weur",
+    "CH": "weur",
+    "AT": "weur",
     // Eastern Europe
-    "PL": "EEUR",
-    "RU": "EEUR",
-    "UA": "EEUR",
-    "RO": "EEUR",
-    "CZ": "EEUR",
-    "HU": "EEUR",
-    "GR": "EEUR",
-    "BG": "EEUR",
+    "PL": "eeur",
+    "RU": "eeur",
+    "UA": "eeur",
+    "RO": "eeur",
+    "CZ": "eeur",
+    "HU": "eeur",
+    "GR": "eeur",
+    "BG": "eeur",
     // Asia-Pacific
-    "JP": "APAC",
-    "CN": "APAC",
-    "KR": "APAC",
-    "IN": "APAC",
-    "SG": "APAC",
-    "TH": "APAC",
-    "ID": "APAC",
-    "MY": "APAC",
-    "VN": "APAC",
-    "PH": "APAC",
+    "JP": "apac",
+    "CN": "apac",
+    "KR": "apac",
+    "IN": "apac",
+    "SG": "apac",
+    "TH": "apac",
+    "ID": "apac",
+    "MY": "apac",
+    "VN": "apac",
+    "PH": "apac",
     // Oceania
-    "AU": "OC",
-    "NZ": "OC",
-    // Middle East
-    "AE": "ME",
-    "SA": "ME",
-    "IL": "ME",
-    "TR": "ME",
-    "EG": "ME",
-    // Africa
-    "ZA": "AFR",
-    "NG": "AFR",
-    "KE": "AFR",
-    "MA": "AFR"
+    "AU": "oc",
+    "NZ": "oc",
+    // Middle East (uses 'me' which redirects to nearby)
+    "AE": "me",
+    "SA": "me",
+    "IL": "me",
+    "TR": "me",
+    "EG": "me",
+    // Africa (uses 'afr' which redirects to nearby)
+    "ZA": "afr",
+    "NG": "afr",
+    "KE": "afr",
+    "MA": "afr"
   };
-  const usStateToRegion = {
+  const usStateToHint = {
     // Western states -> WNAM
-    "California": "WNAM",
-    "Oregon": "WNAM",
-    "Washington": "WNAM",
-    "Nevada": "WNAM",
-    "Arizona": "WNAM",
-    "Utah": "WNAM",
-    "Idaho": "WNAM",
-    "Montana": "WNAM",
-    "Wyoming": "WNAM",
-    "Colorado": "WNAM",
-    "New Mexico": "WNAM",
-    "Alaska": "WNAM",
-    "Hawaii": "WNAM",
+    "California": "wnam",
+    "Oregon": "wnam",
+    "Washington": "wnam",
+    "Nevada": "wnam",
+    "Arizona": "wnam",
+    "Utah": "wnam",
+    "Idaho": "wnam",
+    "Montana": "wnam",
+    "Wyoming": "wnam",
+    "Colorado": "wnam",
+    "New Mexico": "wnam",
+    "Alaska": "wnam",
+    "Hawaii": "wnam",
     // Eastern states -> ENAM
-    "New York": "ENAM",
-    "Florida": "ENAM",
-    "Texas": "ENAM",
-    "Illinois": "ENAM",
-    "Georgia": "ENAM",
-    "Pennsylvania": "ENAM",
-    "Ohio": "ENAM",
-    "Michigan": "ENAM",
-    "North Carolina": "ENAM",
-    "Virginia": "ENAM",
-    "Massachusetts": "ENAM",
-    "New Jersey": "ENAM",
-    "Maryland": "ENAM",
-    "Connecticut": "ENAM",
-    "Maine": "ENAM",
-    "New Hampshire": "ENAM",
-    "Vermont": "ENAM",
-    "Rhode Island": "ENAM",
-    "South Carolina": "ENAM",
-    "Tennessee": "ENAM",
-    "Alabama": "ENAM",
-    "Mississippi": "ENAM",
-    "Louisiana": "ENAM",
-    "Arkansas": "ENAM",
-    "Missouri": "ENAM",
-    "Iowa": "ENAM",
-    "Minnesota": "ENAM",
-    "Wisconsin": "ENAM",
-    "Indiana": "ENAM",
-    "Kentucky": "ENAM",
-    "West Virginia": "ENAM",
-    "Delaware": "ENAM",
-    "Oklahoma": "ENAM",
-    "Kansas": "ENAM",
-    "Nebraska": "ENAM",
-    "South Dakota": "ENAM",
-    "North Dakota": "ENAM"
+    "New York": "enam",
+    "Florida": "enam",
+    "Texas": "enam",
+    "Illinois": "enam",
+    "Georgia": "enam",
+    "Pennsylvania": "enam",
+    "Ohio": "enam",
+    "Michigan": "enam",
+    "North Carolina": "enam",
+    "Virginia": "enam",
+    "Massachusetts": "enam",
+    "New Jersey": "enam",
+    "Maryland": "enam",
+    "Connecticut": "enam",
+    "Maine": "enam",
+    "New Hampshire": "enam",
+    "Vermont": "enam",
+    "Rhode Island": "enam",
+    "South Carolina": "enam",
+    "Tennessee": "enam",
+    "Alabama": "enam",
+    "Mississippi": "enam",
+    "Louisiana": "enam",
+    "Arkansas": "enam",
+    "Missouri": "enam",
+    "Iowa": "enam",
+    "Minnesota": "enam",
+    "Wisconsin": "enam",
+    "Indiana": "enam",
+    "Kentucky": "enam",
+    "West Virginia": "enam",
+    "Delaware": "enam",
+    "Oklahoma": "enam",
+    "Kansas": "enam",
+    "Nebraska": "enam",
+    "South Dakota": "enam",
+    "North Dakota": "enam"
   };
-  const continentToRegion = {
-    "NA": "ENAM",
-    "SA": "SAM",
-    "EU": "WEUR",
-    "AS": "APAC",
-    "AF": "AFR",
-    "OC": "OC"
+  const continentToHint = {
+    "NA": "enam",
+    "SA": "sam",
+    "EU": "weur",
+    "AS": "apac",
+    "AF": "afr",
+    "OC": "oc"
   };
-  let bestRegion;
+  let bestHint;
   if (country === "US" && region && region !== "unknown") {
-    bestRegion = usStateToRegion[region] || "ENAM";
+    bestHint = usStateToHint[region] || "enam";
   } else {
-    bestRegion = countryToRegion[country] || continentToRegion[continent] || "ENAM";
+    bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
-  const regionConfig = REGIONS.find((r) => r.name === bestRegion) || REGIONS[1];
-  const clientIP = cf?.ip || Math.random().toString();
-  const hash2 = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clientIP));
-  const hashArray = new Uint8Array(hash2);
-  const instanceNumber = hashArray[0] % 6 + 1;
-  const primaryDoName = `relay-${regionConfig.name}-${instanceNumber}`;
-  const orderedDOs = [];
-  for (let i = 0; i < 6; i++) {
-    const num2 = (instanceNumber - 1 + i) % 6 + 1;
-    orderedDOs.push({
-      name: `relay-${regionConfig.name}-${num2}`,
-      hint: regionConfig.hint
-    });
-  }
-  for (const doInstance of orderedDOs) {
+  const primaryEndpoint = ALL_ENDPOINTS.find((ep) => ep.hint === bestHint) || ALL_ENDPOINTS[1];
+  const orderedEndpoints = [
+    primaryEndpoint,
+    ...ALL_ENDPOINTS.filter((ep) => ep.name !== primaryEndpoint.name)
+  ];
+  for (const endpoint of orderedEndpoints) {
     try {
-      const id2 = env.RELAY_WEBSOCKET.idFromName(doInstance.name);
-      const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: doInstance.hint });
+      const id2 = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
+      const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: endpoint.hint });
       const testResponse = await Promise.race([
         stub2.fetch(new Request("https://internal/health")),
         new Promise(
@@ -3925,18 +3916,17 @@ async function getOptimalDO(cf, env, url) {
         )
       ]);
       if (testResponse.ok) {
-        console.log(`Connected to DO: ${doInstance.name} (hint: ${doInstance.hint})`);
-        return { stub: stub2, doName: doInstance.name };
+        console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
+        return { stub: stub2, doName: endpoint.name };
       }
     } catch (error) {
-      console.log(`Failed to connect to ${doInstance.name}: ${error}`);
+      console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
   }
-  const fallbackName = "relay-ENAM-1";
-  const id = env.RELAY_WEBSOCKET.idFromName(fallbackName);
-  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: "enam" });
-  console.log(`Using fallback DO: ${fallbackName}`);
-  return { stub, doName: fallbackName };
+  const fallback = ALL_ENDPOINTS[1];
+  const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
+  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
+  return { stub, doName: fallback.name };
 }
 __name(getOptimalDO, "getOptimalDO");
 var relay_worker_default = {
@@ -4235,6 +4225,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
       await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
     }
+    await this.state.storage.setAlarm(Date.now() + 3e5);
   }
   async handleSession(webSocket, request) {
     webSocket.accept();
@@ -4502,20 +4493,16 @@ var _RelayWebSocket = class _RelayWebSocket {
     const successful = results.filter((r) => r.status === "fulfilled").length;
     console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
-  // Helper to get region from DO name (e.g., "relay-WNAM-3" -> "WNAM")
-  getRegionFromDoName(doName) {
-    const parts = doName.split("-");
-    return parts.length >= 2 ? parts[1] : "unknown";
-  }
   async sendToSpecificDO(region, doName, event, hopCount) {
     try {
-      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
-        throw new Error(`Invalid DO name: ${doName}`);
+      const actualDoName = _RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName) ? doName : `relay-${region.split("-")[0]}-${region.split("-")[1]}-primary`;
+      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
+        throw new Error(`Invalid DO name: ${actualDoName}`);
       }
-      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
+      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
       const stub = this.env.RELAY_WEBSOCKET.get(id);
       const url = new URL("https://internal/do-broadcast");
-      url.searchParams.set("doName", doName);
+      url.searchParams.set("doName", actualDoName);
       return await stub.fetch(new Request(url.toString(), {
         method: "POST",
         body: JSON.stringify({
@@ -4535,7 +4522,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (hopCount >= 3) return;
     const eligibleEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS.filter((endpoint) => endpoint !== this.doName).sort(() => Math.random() - 0.5).slice(0, 3);
     const gossipPromises = eligibleEndpoints.map(
-      (endpoint) => this.sendToSpecificDO(this.getRegionFromDoName(endpoint), endpoint, event, hopCount).catch(() => {
+      (endpoint) => this.sendToSpecificDO(endpoint, endpoint, event, hopCount).catch(() => {
       })
     );
     await Promise.allSettled(gossipPromises);
@@ -4637,71 +4624,26 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
-// Define allowed endpoints - 6 DOs per region (54 total)
+// Define allowed endpoints as a class constant (all 9 location hints)
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
-  // Western North America (6 instances)
-  "relay-WNAM-1",
-  "relay-WNAM-2",
-  "relay-WNAM-3",
-  "relay-WNAM-4",
-  "relay-WNAM-5",
-  "relay-WNAM-6",
-  // Eastern North America (6 instances)
-  "relay-ENAM-1",
-  "relay-ENAM-2",
-  "relay-ENAM-3",
-  "relay-ENAM-4",
-  "relay-ENAM-5",
-  "relay-ENAM-6",
-  // Western Europe (6 instances)
-  "relay-WEUR-1",
-  "relay-WEUR-2",
-  "relay-WEUR-3",
-  "relay-WEUR-4",
-  "relay-WEUR-5",
-  "relay-WEUR-6",
-  // Eastern Europe (6 instances)
-  "relay-EEUR-1",
-  "relay-EEUR-2",
-  "relay-EEUR-3",
-  "relay-EEUR-4",
-  "relay-EEUR-5",
-  "relay-EEUR-6",
-  // Asia-Pacific (6 instances)
-  "relay-APAC-1",
-  "relay-APAC-2",
-  "relay-APAC-3",
-  "relay-APAC-4",
-  "relay-APAC-5",
-  "relay-APAC-6",
-  // Oceania (6 instances)
-  "relay-OC-1",
-  "relay-OC-2",
-  "relay-OC-3",
-  "relay-OC-4",
-  "relay-OC-5",
-  "relay-OC-6",
-  // South America (6 instances)
-  "relay-SAM-1",
-  "relay-SAM-2",
-  "relay-SAM-3",
-  "relay-SAM-4",
-  "relay-SAM-5",
-  "relay-SAM-6",
-  // Africa (6 instances)
-  "relay-AFR-1",
-  "relay-AFR-2",
-  "relay-AFR-3",
-  "relay-AFR-4",
-  "relay-AFR-5",
-  "relay-AFR-6",
-  // Middle East (6 instances)
-  "relay-ME-1",
-  "relay-ME-2",
-  "relay-ME-3",
-  "relay-ME-4",
-  "relay-ME-5",
-  "relay-ME-6"
+  "relay-WNAM-primary",
+  // Western North America
+  "relay-ENAM-primary",
+  // Eastern North America
+  "relay-WEUR-primary",
+  // Western Europe
+  "relay-EEUR-primary",
+  // Eastern Europe
+  "relay-APAC-primary",
+  // Asia-Pacific
+  "relay-OC-primary",
+  // Oceania
+  "relay-SAM-primary",
+  // South America (redirects to enam)
+  "relay-AFR-primary",
+  // Africa (redirects to nearby)
+  "relay-ME-primary"
+  // Middle East (redirects to nearby)
 ];
 var RelayWebSocket = _RelayWebSocket;
 export {
