@@ -1,3 +1,7 @@
+## v7.1.4 - 2025-06-14
+
+- Hotfix: increased multi-regional Durable Object instances
+
 ## v7.1.3 - 2025-06-14
 
 - Hotfix: set peer caching

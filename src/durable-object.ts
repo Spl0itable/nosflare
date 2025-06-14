@@ -22,17 +22,26 @@ export class RelayWebSocket implements DurableObject {
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
   private peerDiscoveryInterval?: number;
 
-  // Define allowed endpoints as a class constant (all 9 location hints)
+  // Define allowed endpoints - 6 DOs per region (54 total)
   private static readonly ALLOWED_ENDPOINTS = [
-    'relay-WNAM-primary',  // Western North America
-    'relay-ENAM-primary',  // Eastern North America
-    'relay-WEUR-primary',  // Western Europe
-    'relay-EEUR-primary',  // Eastern Europe
-    'relay-APAC-primary',  // Asia-Pacific
-    'relay-OC-primary',    // Oceania
-    'relay-SAM-primary',   // South America (redirects to enam)
-    'relay-AFR-primary',   // Africa (redirects to nearby)
-    'relay-ME-primary'     // Middle East (redirects to nearby)
+    // Western North America (6 instances)
+    'relay-WNAM-1', 'relay-WNAM-2', 'relay-WNAM-3', 'relay-WNAM-4', 'relay-WNAM-5', 'relay-WNAM-6',
+    // Eastern North America (6 instances)
+    'relay-ENAM-1', 'relay-ENAM-2', 'relay-ENAM-3', 'relay-ENAM-4', 'relay-ENAM-5', 'relay-ENAM-6',
+    // Western Europe (6 instances)
+    'relay-WEUR-1', 'relay-WEUR-2', 'relay-WEUR-3', 'relay-WEUR-4', 'relay-WEUR-5', 'relay-WEUR-6',
+    // Eastern Europe (6 instances)
+    'relay-EEUR-1', 'relay-EEUR-2', 'relay-EEUR-3', 'relay-EEUR-4', 'relay-EEUR-5', 'relay-EEUR-6',
+    // Asia-Pacific (6 instances)
+    'relay-APAC-1', 'relay-APAC-2', 'relay-APAC-3', 'relay-APAC-4', 'relay-APAC-5', 'relay-APAC-6',
+    // Oceania (6 instances)
+    'relay-OC-1', 'relay-OC-2', 'relay-OC-3', 'relay-OC-4', 'relay-OC-5', 'relay-OC-6',
+    // South America (6 instances)
+    'relay-SAM-1', 'relay-SAM-2', 'relay-SAM-3', 'relay-SAM-4', 'relay-SAM-5', 'relay-SAM-6',
+    // Africa (6 instances)
+    'relay-AFR-1', 'relay-AFR-2', 'relay-AFR-3', 'relay-AFR-4', 'relay-AFR-5', 'relay-AFR-6',
+    // Middle East (6 instances)
+    'relay-ME-1', 'relay-ME-2', 'relay-ME-3', 'relay-ME-4', 'relay-ME-5', 'relay-ME-6'
   ];
 
   constructor(state: DurableObjectState, env: Env) {
@@ -391,9 +400,6 @@ export class RelayWebSocket implements DurableObject {
       console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
       await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
     }
-
-    // Always update alarm for next check
-    await this.state.storage.setAlarm(Date.now() + 300000); // 5 minutes
   }
 
   private async handleSession(webSocket: WebSocket, request: Request): Promise<void> {
@@ -726,7 +732,7 @@ export class RelayWebSocket implements DurableObject {
     const broadcasts: Promise<Response>[] = [];
     const processedPeers = new Set<string>();
 
-    // Broadcast to all allowed endpoints except ourselves
+    // Broadcast to ALL other DOs (53 others)
     for (const endpoint of RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
 
@@ -748,24 +754,25 @@ export class RelayWebSocket implements DurableObject {
     console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
 
+  // Helper to get region from DO name (e.g., "relay-WNAM-3" -> "WNAM")
+  private getRegionFromDoName(doName: string): string {
+    const parts = doName.split('-');
+    return parts.length >= 2 ? parts[1] : 'unknown';
+  }
+
   private async sendToSpecificDO(region: string, doName: string, event: NostrEvent, hopCount: number): Promise<Response> {
     try {
       // Ensure we're only using allowed endpoints
-      const actualDoName = RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)
-        ? doName
-        : `relay-${region.split('-')[0]}-${region.split('-')[1]}-primary`;
-
-      // Double-check it's in our allowed list
-      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
-        throw new Error(`Invalid DO name: ${actualDoName}`);
+      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
+        throw new Error(`Invalid DO name: ${doName}`);
       }
 
-      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
+      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
       const stub = this.env.RELAY_WEBSOCKET.get(id);
 
       // Include the target DO name in the URL
       const url = new URL('https://internal/do-broadcast');
-      url.searchParams.set('doName', actualDoName);
+      url.searchParams.set('doName', doName);
 
       return await stub.fetch(new Request(url.toString(), {
         method: 'POST',
@@ -793,7 +800,7 @@ export class RelayWebSocket implements DurableObject {
       .slice(0, 3); // Gossip to max 3 peers
 
     const gossipPromises = eligibleEndpoints.map(endpoint =>
-      this.sendToSpecificDO(endpoint, endpoint, event, hopCount)
+      this.sendToSpecificDO(this.getRegionFromDoName(endpoint), endpoint, event, hopCount)
         .catch(() => {/* Ignore gossip failures */ })
     );
 
