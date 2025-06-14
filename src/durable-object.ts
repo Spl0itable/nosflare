@@ -300,59 +300,63 @@ export class RelayWebSocket implements DurableObject {
     }, 300000);
   }
 
-  private async discoverPeers(): Promise<void> {
-    // Use the predefined allowed endpoints
-    const discoveryEndpoints = RelayWebSocket.ALLOWED_ENDPOINTS;
+  private async discoverPeers() {
+    // Store the current state to detect changes
+    const previousPeers = new Map(this.knownPeers);
 
-    const discoveryPromises = discoveryEndpoints
-      .filter(endpoint => endpoint !== this.doName)
-      .map(async (endpoint) => {
-        try {
-          const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
-          const stub = this.env.RELAY_WEBSOCKET.get(id);
-
-          // Include the target DO name in the URL
-          const url = new URL('https://internal/exchange-peers');
-          url.searchParams.set('doName', endpoint);
-
-          const response = await Promise.race([
-            stub.fetch(new Request(url.toString(), {
-              method: 'POST',
-              body: JSON.stringify({
-                myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
-                myId: `${this.region}:${this.doId}`
-              })
-            })),
-            new Promise<Response>((_, reject) =>
-              setTimeout(() => reject(new Error('Timeout')), 2000)
-            )
-          ]);
-
-          if (response.ok) {
-            // @ts-ignore
-            const { peers } = await response.json();
-            for (const peer of peers || []) {
-              const [region, doId] = peer.split(':');
-              if (doId && doId !== this.doId) {
-                this.knownPeers.set(peer, {
-                  region,
-                  doId,
-                  lastSeen: Date.now()
-                });
-              }
-            }
-          }
-        } catch (error) {
-          // Ignore discovery failures
-        }
-      });
+    // Try to discover from all allowed endpoints
+    const discoveryPromises = RelayWebSocket.ALLOWED_ENDPOINTS
+      .filter(endpoint => endpoint !== this.doName) // Skip self
+      // @ts-ignore
+      .map(endpoint => this.discoverFromEndpoint(endpoint));
 
     await Promise.allSettled(discoveryPromises);
 
-    console.log(`DO ${this.doName} discovered ${this.knownPeers.size} total peers`);
+    // Clean up stale peers (not seen in 15 minutes)
+    const staleThreshold = Date.now() - 900000; // 15 minutes
+    const stalePeers: string[] = [];
 
-    // Save updated peer list
-    await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
+    for (const [peerId, peerInfo] of this.knownPeers) {
+      if (peerInfo.lastSeen < staleThreshold) {
+        stalePeers.push(peerId);
+        this.knownPeers.delete(peerId);
+      }
+    }
+
+    if (stalePeers.length > 0) {
+      console.log(`Removed ${stalePeers.length} stale peers: ${stalePeers.join(', ')}`);
+    }
+
+    // Check if peers actually changed
+    let peersChanged = false;
+
+    // Different size = definitely changed
+    if (previousPeers.size !== this.knownPeers.size) {
+      peersChanged = true;
+    } else {
+      // Same size - check if any peer data is different
+      for (const [peerId, peerInfo] of this.knownPeers) {
+        const previousPeer = previousPeers.get(peerId);
+        if (!previousPeer ||
+          previousPeer.region !== peerInfo.region ||
+          previousPeer.doId !== peerInfo.doId) {
+          peersChanged = true;
+          break;
+        }
+      }
+    }
+
+    // Only write to storage if peers actually changed
+    if (peersChanged) {
+      console.log(`Peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
+      await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
+    }
+
+    // Always update alarm for next check
+    await this.state.storage.setAlarm(Date.now() + 300000); // 5 minutes
+
+    // Log current peer status (optional - remove if too verbose)
+    console.log(`Peer discovery complete. Known peers: ${this.knownPeers.size}/8`);
   }
 
   private async handleSession(webSocket: WebSocket, request: Request): Promise<void> {
