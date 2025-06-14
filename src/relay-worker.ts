@@ -1373,52 +1373,99 @@ async function handlePaymentNotification(request: Request, env: Env): Promise<Re
   }
 }
 
-// Multi-region DO selection logic
+// Multi-region DO selection logic with location hints
 async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: DurableObjectStub; doName: string }> {
-  // Extract location info from Cloudflare request
-  const region = cf?.region || 'US';
-  const colo = cf?.colo || 'LAX';
   const continent = cf?.continent || 'NA';
   const country = cf?.country || 'US';
+  const region = cf?.region || 'unknown';
+  const colo = cf?.colo || 'unknown';
   
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
   
-  // Define the allowed DO endpoints (one per continent)
-  const allowedEndpoints = [
-    'relay-NA-US-primary',
-    'relay-EU-GB-primary',
-    'relay-AS-JP-primary',
-    'relay-OC-AU-primary',
-    'relay-SA-BR-primary',
-    'relay-AF-ZA-primary'
-  ];
-  
-  // Map continents to their endpoints
-  const continentMap: Record<string, string> = {
-    'NA': 'relay-NA-US-primary',
-    'EU': 'relay-EU-GB-primary',
-    'AS': 'relay-AS-JP-primary',
-    'OC': 'relay-OC-AU-primary',
-    'SA': 'relay-SA-BR-primary',
-    'AF': 'relay-AF-ZA-primary'
+  // Map user locations to best DO location hint
+  const countryToHint: Record<string, string> = {
+    // North America
+    'US': 'enam', 'CA': 'enam',
+    'MX': 'wnam',
+    
+    // South America (all use 'sam' which redirects to 'enam')
+    'BR': 'sam', 'AR': 'sam', 'CL': 'sam', 'CO': 'sam', 'PE': 'sam',
+    
+    // Western Europe
+    'GB': 'weur', 'FR': 'weur', 'DE': 'weur', 'ES': 'weur', 'IT': 'weur',
+    'NL': 'weur', 'BE': 'weur', 'CH': 'weur', 'AT': 'weur',
+    
+    // Eastern Europe
+    'PL': 'eeur', 'RU': 'eeur', 'UA': 'eeur', 'RO': 'eeur', 'CZ': 'eeur',
+    'HU': 'eeur', 'GR': 'eeur', 'BG': 'eeur',
+    
+    // Asia-Pacific
+    'JP': 'apac', 'CN': 'apac', 'KR': 'apac', 'IN': 'apac', 'SG': 'apac',
+    'TH': 'apac', 'ID': 'apac', 'MY': 'apac', 'VN': 'apac', 'PH': 'apac',
+    
+    // Oceania
+    'AU': 'oc', 'NZ': 'oc',
+    
+    // Middle East (uses 'me' which redirects to nearby)
+    'AE': 'me', 'SA': 'me', 'IL': 'me', 'TR': 'me', 'EG': 'me',
+    
+    // Africa (uses 'afr' which redirects to nearby)
+    'ZA': 'afr', 'NG': 'afr', 'KE': 'afr', 'MA': 'afr',
   };
   
-  // Get the primary endpoint for user's continent
-  const primaryEndpoint = continentMap[continent] || 'relay-NA-US-primary';
+  // US state-level routing
+  const usStateToHint: Record<string, string> = {
+    'CA': 'wnam', 'OR': 'wnam', 'WA': 'wnam', 'NV': 'wnam', 'AZ': 'wnam',
+    'NY': 'enam', 'FL': 'enam', 'TX': 'enam', 'IL': 'enam', 'GA': 'enam',
+  };
   
-  // Create ordered list: primary endpoint first, then others
+  // Determine best hint
+  let bestHint: string;
+  if (country === 'US' && region) {
+    bestHint = usStateToHint[region] || 'enam';
+  } else {
+    // @ts-ignore
+    bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
+  }
+  
+  // Map hint to endpoint name
+  const hintToEndpoint: Record<string, string> = {
+    'wnam': 'relay-WNAM-primary',
+    'enam': 'relay-ENAM-primary',
+    'sam': 'relay-SAM-primary',
+    'weur': 'relay-WEUR-primary',
+    'eeur': 'relay-EEUR-primary',
+    'apac': 'relay-APAC-primary',
+    'oc': 'relay-OC-primary',
+    'afr': 'relay-AFR-primary',
+    'me': 'relay-ME-primary',
+  };
+  
+  const primaryEndpoint = hintToEndpoint[bestHint] || 'relay-ENAM-primary';
+  
+  // All available endpoints
+  // @ts-ignore
+  const allEndpoints = USE_EXTENDED_ENDPOINTS ? EXTENDED_ENDPOINTS : REGIONAL_ENDPOINTS;
+  
+  // Order endpoints by proximity
   const orderedEndpoints = [
     primaryEndpoint,
-    ...allowedEndpoints.filter(ep => ep !== primaryEndpoint)
+    ...allEndpoints
+    // @ts-ignore
+      .map(ep => ep.name)
+      // @ts-ignore
+      .filter(name => name !== primaryEndpoint)
   ];
   
-  // Try each endpoint in order
-  for (const doName of orderedEndpoints) {
+  // Try each endpoint
+  for (const endpointName of orderedEndpoints) {
+    // @ts-ignore
+    const endpoint = allEndpoints.find(ep => ep.name === endpointName)!;
+    
     try {
-      const id = env.RELAY_WEBSOCKET.idFromName(doName);
-      const stub = env.RELAY_WEBSOCKET.get(id);
+      const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
+      const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
       
-      // Test if DO is responsive with a short timeout
       const testResponse = await Promise.race([
         stub.fetch(new Request('https://internal/health')),
         new Promise<Response>((_, reject) => 
@@ -1427,22 +1474,21 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
       ]);
       
       if (testResponse.ok) {
-        console.log(`Connected to DO: ${doName}`);
+        console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
         // @ts-ignore
-        return { stub, doName };
+        return { stub, doName: endpoint.name };
       }
     } catch (error) {
-      console.log(`Failed to connect to ${doName}, trying next option: ${error}`);
+      console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
   }
   
-  // Fallback to NA endpoint
-  console.log('All DO attempts failed, using primary NA endpoint as fallback');
-  const fallbackName = 'relay-NA-US-primary';
-  const id = env.RELAY_WEBSOCKET.idFromName(fallbackName);
-  const stub = env.RELAY_WEBSOCKET.get(id);
+  // Fallback
+  const fallback = allEndpoints[0];
+  const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
+  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
   // @ts-ignore
-  return { stub, doName: fallbackName };
+  return { stub, doName: fallback.name };
 }
 
 // Export functions for use by Durable Object

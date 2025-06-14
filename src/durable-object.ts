@@ -1,4 +1,4 @@
-import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, BroadcastEventRequest } from './types';
+import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, BroadcastEventRequest, PeerInfo, DOBroadcastRequest } from './types';
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
@@ -11,19 +11,6 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
-interface PeerInfo {
-  region: string;
-  doId: string;
-  lastSeen: number;
-}
-
-interface DOBroadcastRequest {
-  event: NostrEvent;
-  sourceDoId: string;
-  sourcePeers: string[];
-  hopCount?: number;
-}
-
 export class RelayWebSocket implements DurableObject {
   private sessions: Map<string, WebSocketSession>;
   private env: Env;
@@ -35,14 +22,17 @@ export class RelayWebSocket implements DurableObject {
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
   private peerDiscoveryInterval?: number;
 
-  // Define allowed endpoints as a class constant
+  // Define allowed endpoints as a class constant (all 9 location hints)
   private static readonly ALLOWED_ENDPOINTS = [
-    'relay-NA-US-primary',
-    'relay-EU-GB-primary',
-    'relay-AS-JP-primary',
-    'relay-OC-AU-primary',
-    'relay-SA-BR-primary',
-    'relay-AF-ZA-primary'
+    'relay-WNAM-primary',  // Western North America
+    'relay-ENAM-primary',  // Eastern North America
+    'relay-WEUR-primary',  // Western Europe
+    'relay-EEUR-primary',  // Eastern Europe
+    'relay-APAC-primary',  // Asia-Pacific
+    'relay-OC-primary',    // Oceania
+    'relay-SAM-primary',   // South America (redirects to enam)
+    'relay-AFR-primary',   // Africa (redirects to nearby)
+    'relay-ME-primary'     // Middle East (redirects to nearby)
   ];
 
   constructor(state: DurableObjectState, env: Env) {

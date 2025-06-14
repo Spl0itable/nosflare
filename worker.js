@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.1",
+  version: "7.1.2",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3760,36 +3760,107 @@ async function handlePaymentNotification(request, env) {
 }
 __name(handlePaymentNotification, "handlePaymentNotification");
 async function getOptimalDO(cf, env, url) {
-  const region = cf?.region || "US";
-  const colo = cf?.colo || "LAX";
   const continent = cf?.continent || "NA";
   const country = cf?.country || "US";
+  const region = cf?.region || "unknown";
+  const colo = cf?.colo || "unknown";
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
-  const allowedEndpoints = [
-    "relay-NA-US-primary",
-    "relay-EU-GB-primary",
-    "relay-AS-JP-primary",
-    "relay-OC-AU-primary",
-    "relay-SA-BR-primary",
-    "relay-AF-ZA-primary"
-  ];
-  const continentMap = {
-    "NA": "relay-NA-US-primary",
-    "EU": "relay-EU-GB-primary",
-    "AS": "relay-AS-JP-primary",
-    "OC": "relay-OC-AU-primary",
-    "SA": "relay-SA-BR-primary",
-    "AF": "relay-AF-ZA-primary"
+  const countryToHint = {
+    // North America
+    "US": "enam",
+    "CA": "enam",
+    "MX": "wnam",
+    // South America (all use 'sam' which redirects to 'enam')
+    "BR": "sam",
+    "AR": "sam",
+    "CL": "sam",
+    "CO": "sam",
+    "PE": "sam",
+    // Western Europe
+    "GB": "weur",
+    "FR": "weur",
+    "DE": "weur",
+    "ES": "weur",
+    "IT": "weur",
+    "NL": "weur",
+    "BE": "weur",
+    "CH": "weur",
+    "AT": "weur",
+    // Eastern Europe
+    "PL": "eeur",
+    "RU": "eeur",
+    "UA": "eeur",
+    "RO": "eeur",
+    "CZ": "eeur",
+    "HU": "eeur",
+    "GR": "eeur",
+    "BG": "eeur",
+    // Asia-Pacific
+    "JP": "apac",
+    "CN": "apac",
+    "KR": "apac",
+    "IN": "apac",
+    "SG": "apac",
+    "TH": "apac",
+    "ID": "apac",
+    "MY": "apac",
+    "VN": "apac",
+    "PH": "apac",
+    // Oceania
+    "AU": "oc",
+    "NZ": "oc",
+    // Middle East (uses 'me' which redirects to nearby)
+    "AE": "me",
+    "SA": "me",
+    "IL": "me",
+    "TR": "me",
+    "EG": "me",
+    // Africa (uses 'afr' which redirects to nearby)
+    "ZA": "afr",
+    "NG": "afr",
+    "KE": "afr",
+    "MA": "afr"
   };
-  const primaryEndpoint = continentMap[continent] || "relay-NA-US-primary";
+  const usStateToHint = {
+    "CA": "wnam",
+    "OR": "wnam",
+    "WA": "wnam",
+    "NV": "wnam",
+    "AZ": "wnam",
+    "NY": "enam",
+    "FL": "enam",
+    "TX": "enam",
+    "IL": "enam",
+    "GA": "enam"
+  };
+  let bestHint;
+  if (country === "US" && region) {
+    bestHint = usStateToHint[region] || "enam";
+  } else {
+    bestHint = countryToHint[country] || continentToHint[continent] || "enam";
+  }
+  const hintToEndpoint = {
+    "wnam": "relay-WNAM-primary",
+    "enam": "relay-ENAM-primary",
+    "sam": "relay-SAM-primary",
+    "weur": "relay-WEUR-primary",
+    "eeur": "relay-EEUR-primary",
+    "apac": "relay-APAC-primary",
+    "oc": "relay-OC-primary",
+    "afr": "relay-AFR-primary",
+    "me": "relay-ME-primary"
+  };
+  const primaryEndpoint = hintToEndpoint[bestHint] || "relay-ENAM-primary";
+  const allEndpoints = USE_EXTENDED_ENDPOINTS ? EXTENDED_ENDPOINTS : REGIONAL_ENDPOINTS;
   const orderedEndpoints = [
     primaryEndpoint,
-    ...allowedEndpoints.filter((ep) => ep !== primaryEndpoint)
+    ...allEndpoints.map((ep) => ep.name).filter((name) => name !== primaryEndpoint)
   ];
-  for (const doName of orderedEndpoints) {
+  for (const endpointName of orderedEndpoints) {
+    const endpoint = allEndpoints.find((ep) => ep.name === endpointName);
     try {
-      const id2 = env.RELAY_WEBSOCKET.idFromName(doName);
-      const stub2 = env.RELAY_WEBSOCKET.get(id2);
+      const id2 = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
+      const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: endpoint.hint });
       const testResponse = await Promise.race([
         stub2.fetch(new Request("https://internal/health")),
         new Promise(
@@ -3797,18 +3868,17 @@ async function getOptimalDO(cf, env, url) {
         )
       ]);
       if (testResponse.ok) {
-        console.log(`Connected to DO: ${doName}`);
-        return { stub: stub2, doName };
+        console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
+        return { stub: stub2, doName: endpoint.name };
       }
     } catch (error) {
-      console.log(`Failed to connect to ${doName}, trying next option: ${error}`);
+      console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
   }
-  console.log("All DO attempts failed, using primary NA endpoint as fallback");
-  const fallbackName = "relay-NA-US-primary";
-  const id = env.RELAY_WEBSOCKET.idFromName(fallbackName);
-  const stub = env.RELAY_WEBSOCKET.get(id);
-  return { stub, doName: fallbackName };
+  const fallback = allEndpoints[0];
+  const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
+  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
+  return { stub, doName: fallback.name };
 }
 __name(getOptimalDO, "getOptimalDO");
 var relay_worker_default = {
@@ -4479,14 +4549,26 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
-// Define allowed endpoints as a class constant
+// Define allowed endpoints as a class constant (all 9 location hints)
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
-  "relay-NA-US-primary",
-  "relay-EU-GB-primary",
-  "relay-AS-JP-primary",
-  "relay-OC-AU-primary",
-  "relay-SA-BR-primary",
-  "relay-AF-ZA-primary"
+  "relay-WNAM-primary",
+  // Western North America
+  "relay-ENAM-primary",
+  // Eastern North America
+  "relay-WEUR-primary",
+  // Western Europe
+  "relay-EEUR-primary",
+  // Eastern Europe
+  "relay-APAC-primary",
+  // Asia-Pacific
+  "relay-OC-primary",
+  // Oceania
+  "relay-SAM-primary",
+  // South America (redirects to enam)
+  "relay-AFR-primary",
+  // Africa (redirects to nearby)
+  "relay-ME-primary"
+  // Middle East (redirects to nearby)
 ];
 var RelayWebSocket = _RelayWebSocket;
 export {

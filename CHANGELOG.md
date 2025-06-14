@@ -1,3 +1,7 @@
+## v7.1.2 - 2025-06-14
+
+- Hotfix: improved multi-regional selection for Durable Objects
+
 ## v7.1.1 - 2025-06-14
 
 - Tweak: multi-regional Durable Object mesh network to increase throughput and load balancing
