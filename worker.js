@@ -3900,36 +3900,12 @@ var relay_worker_default = {
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
           const cf = request.cf;
-          console.log(`Incoming WebSocket connection from: ${JSON.stringify({
-            continent: cf?.continent || "unknown",
-            country: cf?.country || "unknown",
-            region: cf?.region || "unknown",
-            colo: cf?.colo || "unknown",
-            city: cf?.city || "unknown",
-            timezone: cf?.timezone || "unknown",
-            latitude: cf?.latitude || "unknown",
-            longitude: cf?.longitude || "unknown",
-            postalCode: cf?.postalCode || "unknown",
-            metroCode: cf?.metroCode || "unknown",
-            asn: cf?.asn || "unknown",
-            asOrganization: cf?.asOrganization || "unknown",
-            isEUCountry: cf?.isEUCountry || "unknown",
-            clientTcpRtt: cf?.clientTcpRtt || "unknown",
-            httpProtocol: cf?.httpProtocol || "unknown",
-            requestPriority: cf?.requestPriority || "unknown",
-            tlsVersion: cf?.tlsVersion || "unknown",
-            tlsCipher: cf?.tlsCipher || "unknown",
-            tlsClientAuth: cf?.tlsClientAuth || "unknown",
-            clientAcceptEncoding: cf?.clientAcceptEncoding || "unknown"
-          })}`);
           const { stub, doName } = await getOptimalDO(cf, env, url);
-          console.log(`Routing decision: User from ${cf?.city || "unknown"}, ${cf?.country || "unknown"} (${cf?.continent || "unknown"}) routed to DO: ${doName}`);
           const newUrl = new URL(request.url);
           newUrl.searchParams.set("region", cf?.region || "unknown");
           newUrl.searchParams.set("colo", cf?.colo || "unknown");
           newUrl.searchParams.set("continent", cf?.continent || "unknown");
           newUrl.searchParams.set("country", cf?.country || "unknown");
-          newUrl.searchParams.set("city", cf?.city || "unknown");
           newUrl.searchParams.set("doName", doName);
           return stub.fetch(new Request(newUrl, request));
         } else if (request.headers.get("Accept") === "application/nostr+json") {

@@ -1519,35 +1519,8 @@ export default {
           // Get Cloudflare location info
           const cf = (request as any).cf;
 
-          // Debug location routing
-          console.log(`Incoming WebSocket connection from: ${JSON.stringify({
-            continent: cf?.continent || 'unknown',
-            country: cf?.country || 'unknown',
-            region: cf?.region || 'unknown',
-            colo: cf?.colo || 'unknown',
-            city: cf?.city || 'unknown',
-            timezone: cf?.timezone || 'unknown',
-            latitude: cf?.latitude || 'unknown',
-            longitude: cf?.longitude || 'unknown',
-            postalCode: cf?.postalCode || 'unknown',
-            metroCode: cf?.metroCode || 'unknown',
-            asn: cf?.asn || 'unknown',
-            asOrganization: cf?.asOrganization || 'unknown',
-            isEUCountry: cf?.isEUCountry || 'unknown',
-            clientTcpRtt: cf?.clientTcpRtt || 'unknown',
-            httpProtocol: cf?.httpProtocol || 'unknown',
-            requestPriority: cf?.requestPriority || 'unknown',
-            tlsVersion: cf?.tlsVersion || 'unknown',
-            tlsCipher: cf?.tlsCipher || 'unknown',
-            tlsClientAuth: cf?.tlsClientAuth || 'unknown',
-            clientAcceptEncoding: cf?.clientAcceptEncoding || 'unknown'
-          })}`);
-
           // Get optimal DO based on user location
           const { stub, doName } = await getOptimalDO(cf, env, url);
-          
-          // Log the routing decision
-          console.log(`Routing decision: User from ${cf?.city || 'unknown'}, ${cf?.country || 'unknown'} (${cf?.continent || 'unknown'}) routed to DO: ${doName}`);
 
           // Add location info to the request
           const newUrl = new URL(request.url);
@@ -1555,7 +1528,6 @@ export default {
           newUrl.searchParams.set('colo', cf?.colo || 'unknown');
           newUrl.searchParams.set('continent', cf?.continent || 'unknown');
           newUrl.searchParams.set('country', cf?.country || 'unknown');
-          newUrl.searchParams.set('city', cf?.city || 'unknown');
           newUrl.searchParams.set('doName', doName);
 
           return stub.fetch(new Request(newUrl, request));
