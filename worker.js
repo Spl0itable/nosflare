@@ -3765,6 +3765,17 @@ async function getOptimalDO(cf, env, url) {
   const region = cf?.region || "unknown";
   const colo = cf?.colo || "unknown";
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
+  const ALL_ENDPOINTS = [
+    { name: "relay-WNAM-primary", hint: "wnam" },
+    { name: "relay-ENAM-primary", hint: "enam" },
+    { name: "relay-WEUR-primary", hint: "weur" },
+    { name: "relay-EEUR-primary", hint: "eeur" },
+    { name: "relay-APAC-primary", hint: "apac" },
+    { name: "relay-OC-primary", hint: "oc" },
+    { name: "relay-SAM-primary", hint: "sam" },
+    { name: "relay-AFR-primary", hint: "afr" },
+    { name: "relay-ME-primary", hint: "me" }
+  ];
   const countryToHint = {
     // North America
     "US": "enam",
@@ -3833,31 +3844,26 @@ async function getOptimalDO(cf, env, url) {
     "IL": "enam",
     "GA": "enam"
   };
+  const continentToHint = {
+    "NA": "enam",
+    "SA": "sam",
+    "EU": "weur",
+    "AS": "apac",
+    "AF": "afr",
+    "OC": "oc"
+  };
   let bestHint;
   if (country === "US" && region) {
     bestHint = usStateToHint[region] || "enam";
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
-  const hintToEndpoint = {
-    "wnam": "relay-WNAM-primary",
-    "enam": "relay-ENAM-primary",
-    "sam": "relay-SAM-primary",
-    "weur": "relay-WEUR-primary",
-    "eeur": "relay-EEUR-primary",
-    "apac": "relay-APAC-primary",
-    "oc": "relay-OC-primary",
-    "afr": "relay-AFR-primary",
-    "me": "relay-ME-primary"
-  };
-  const primaryEndpoint = hintToEndpoint[bestHint] || "relay-ENAM-primary";
-  const allEndpoints = USE_EXTENDED_ENDPOINTS ? EXTENDED_ENDPOINTS : REGIONAL_ENDPOINTS;
+  const primaryEndpoint = ALL_ENDPOINTS.find((ep) => ep.hint === bestHint) || ALL_ENDPOINTS[1];
   const orderedEndpoints = [
     primaryEndpoint,
-    ...allEndpoints.map((ep) => ep.name).filter((name) => name !== primaryEndpoint)
+    ...ALL_ENDPOINTS.filter((ep) => ep.name !== primaryEndpoint.name)
   ];
-  for (const endpointName of orderedEndpoints) {
-    const endpoint = allEndpoints.find((ep) => ep.name === endpointName);
+  for (const endpoint of orderedEndpoints) {
     try {
       const id2 = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: endpoint.hint });
@@ -3875,7 +3881,7 @@ async function getOptimalDO(cf, env, url) {
       console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
   }
-  const fallback = allEndpoints[0];
+  const fallback = ALL_ENDPOINTS[1];
   const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
   const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
   return { stub, doName: fallback.name };

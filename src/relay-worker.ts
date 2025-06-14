@@ -1382,6 +1382,19 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
   
+  // Define all 9 endpoints with their location hints
+  const ALL_ENDPOINTS = [
+    { name: 'relay-WNAM-primary', hint: 'wnam' },
+    { name: 'relay-ENAM-primary', hint: 'enam' },
+    { name: 'relay-WEUR-primary', hint: 'weur' },
+    { name: 'relay-EEUR-primary', hint: 'eeur' },
+    { name: 'relay-APAC-primary', hint: 'apac' },
+    { name: 'relay-OC-primary', hint: 'oc' },
+    { name: 'relay-SAM-primary', hint: 'sam' },
+    { name: 'relay-AFR-primary', hint: 'afr' },
+    { name: 'relay-ME-primary', hint: 'me' }
+  ];
+  
   // Map user locations to best DO location hint
   const countryToHint: Record<string, string> = {
     // North America
@@ -1419,49 +1432,35 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'NY': 'enam', 'FL': 'enam', 'TX': 'enam', 'IL': 'enam', 'GA': 'enam',
   };
   
+  // Continent to hint fallback
+  const continentToHint: Record<string, string> = {
+    'NA': 'enam',
+    'SA': 'sam',
+    'EU': 'weur',
+    'AS': 'apac',
+    'AF': 'afr',
+    'OC': 'oc'
+  };
+  
   // Determine best hint
   let bestHint: string;
   if (country === 'US' && region) {
     bestHint = usStateToHint[region] || 'enam';
   } else {
-    // @ts-ignore
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
   
-  // Map hint to endpoint name
-  const hintToEndpoint: Record<string, string> = {
-    'wnam': 'relay-WNAM-primary',
-    'enam': 'relay-ENAM-primary',
-    'sam': 'relay-SAM-primary',
-    'weur': 'relay-WEUR-primary',
-    'eeur': 'relay-EEUR-primary',
-    'apac': 'relay-APAC-primary',
-    'oc': 'relay-OC-primary',
-    'afr': 'relay-AFR-primary',
-    'me': 'relay-ME-primary',
-  };
+  // Find the primary endpoint based on hint
+  const primaryEndpoint = ALL_ENDPOINTS.find(ep => ep.hint === bestHint) || ALL_ENDPOINTS[1]; // Default to ENAM
   
-  const primaryEndpoint = hintToEndpoint[bestHint] || 'relay-ENAM-primary';
-  
-  // All available endpoints
-  // @ts-ignore
-  const allEndpoints = USE_EXTENDED_ENDPOINTS ? EXTENDED_ENDPOINTS : REGIONAL_ENDPOINTS;
-  
-  // Order endpoints by proximity
+  // Order endpoints by proximity (primary first, then others)
   const orderedEndpoints = [
     primaryEndpoint,
-    ...allEndpoints
-    // @ts-ignore
-      .map(ep => ep.name)
-      // @ts-ignore
-      .filter(name => name !== primaryEndpoint)
+    ...ALL_ENDPOINTS.filter(ep => ep.name !== primaryEndpoint.name)
   ];
   
   // Try each endpoint
-  for (const endpointName of orderedEndpoints) {
-    // @ts-ignore
-    const endpoint = allEndpoints.find(ep => ep.name === endpointName)!;
-    
+  for (const endpoint of orderedEndpoints) {
     try {
       const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
@@ -1483,8 +1482,8 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     }
   }
   
-  // Fallback
-  const fallback = allEndpoints[0];
+  // Fallback to ENAM
+  const fallback = ALL_ENDPOINTS[1]; // ENAM
   const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
   const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
   // @ts-ignore
