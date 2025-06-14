@@ -10,7 +10,7 @@ This relay implementation is designed to be easy to deploy, scalable, and cost-e
 
 Nosflare uses the [Session API](https://developers.cloudflare.com/d1/worker-api/d1-database/#withsession), which enables Cloudflare's global read replication. This can lower latency for read queries and scale read throughput by adding read-only database copies, called read replicas, across regions globally closer to clients.
 
-This relay implementation also uses [Durable Objects](https://developers.cloudflare.com/durable-objects/), which is used for the long-lived websocket connection and broadcasting new events to all clients. This allows for real-time delivery of new events.
+This relay implementation also uses a multi-regional [Durable Objects](https://developers.cloudflare.com/durable-objects/) mesh network, which is used for long-lived websocket connections and broadcasting new events to all clients. This allows for real-time delivery of new events to all connected clients without the bottleneck of a single Durable Object location.
 
 ## One-click Deploy
 

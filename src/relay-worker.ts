@@ -435,7 +435,7 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
     // Process tags in chunks if there are many
     const TAG_CHUNK_SIZE = 50;
     const tagInserts = [];
-    
+
     for (const tag of event.tags) {
       if (tag[0] && tag[1]) {
         tagInserts.push({ tag_name: tag[0], tag_value: tag[1] });
@@ -445,13 +445,13 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
     // Insert tags in chunks
     for (let i = 0; i < tagInserts.length; i += TAG_CHUNK_SIZE) {
       const chunk = tagInserts.slice(i, i + TAG_CHUNK_SIZE);
-      const batch = chunk.map(t => 
+      const batch = chunk.map(t =>
         session.prepare(`
           INSERT INTO tags (event_id, tag_name, tag_value)
           VALUES (?, ?, ?)
         `).bind(event.id, t.tag_name, t.tag_value)
       );
-      
+
       if (batch.length > 0) {
         await session.batch(batch);
       }
@@ -565,7 +565,7 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
   const session = env.relayDb.withSession(bookmark);
   const allEvents = new Map<string, NostrEvent>();
-  
+
   // Use smaller chunk size for D1's limits
   const CHUNK_SIZE = 50;
 
@@ -583,12 +583,12 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
     needsChunking.ids = true;
     delete baseFilter.ids;
   }
-  
+
   if (filters.authors && filters.authors.length > CHUNK_SIZE) {
     needsChunking.authors = true;
     delete baseFilter.authors;
   }
-  
+
   if (filters.kinds && filters.kinds.length > CHUNK_SIZE) {
     needsChunking.kinds = true;
     delete baseFilter.kinds;
@@ -605,10 +605,10 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   // Helper function to process string array chunks
   const processStringChunks = async (filterType: 'ids' | 'authors' | string, values: string[]) => {
     const chunks = chunkArray(values, CHUNK_SIZE);
-    
+
     for (const chunk of chunks) {
       const chunkFilter = { ...baseFilter };
-      
+
       if (filterType === 'ids') {
         chunkFilter.ids = chunk;
       } else if (filterType === 'authors') {
@@ -618,7 +618,7 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
       }
 
       const query = buildQuery(chunkFilter);
-      
+
       try {
         console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql)
@@ -646,13 +646,13 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   // Helper function to process number array chunks
   const processNumberChunks = async (filterType: 'kinds', values: number[]) => {
     const chunks = chunkArray(values, CHUNK_SIZE);
-    
+
     for (const chunk of chunks) {
       const chunkFilter = { ...baseFilter };
       chunkFilter.kinds = chunk;
 
       const query = buildQuery(chunkFilter);
-      
+
       try {
         console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql)
@@ -681,11 +681,11 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   if (needsChunking.ids && filters.ids) {
     await processStringChunks('ids', filters.ids);
   }
-  
+
   if (needsChunking.authors && filters.authors) {
     await processStringChunks('authors', filters.authors);
   }
-  
+
   if (needsChunking.kinds && filters.kinds) {
     await processNumberChunks('kinds', filters.kinds);
   }
@@ -701,7 +701,7 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   // If nothing needed chunking, just run the query as-is
   if (!needsChunking.ids && !needsChunking.authors && !needsChunking.kinds && Object.keys(needsChunking.tags).length === 0) {
     const query = buildQuery(filters);
-    
+
     try {
       const result = await session.prepare(query.sql)
         .bind(...query.params)
@@ -775,7 +775,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
       const query = buildQuery(safeFilter);
       console.log(`Executing query: ${query.sql}`);
       console.log(`Query parameters count: ${query.params.length}`);
-      
+
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
 
@@ -1373,6 +1373,78 @@ async function handlePaymentNotification(request: Request, env: Env): Promise<Re
   }
 }
 
+// Multi-region DO selection logic
+async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: DurableObjectStub; doName: string }> {
+  // Extract location info from Cloudflare request
+  const region = cf?.region || 'US';
+  const colo = cf?.colo || 'LAX';
+  const continent = cf?.continent || 'NA';
+  const country = cf?.country || 'US';
+  
+  console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
+  
+  // Define the allowed DO endpoints (one per continent)
+  const allowedEndpoints = [
+    'relay-NA-US-primary',
+    'relay-EU-GB-primary',
+    'relay-AS-JP-primary',
+    'relay-OC-AU-primary',
+    'relay-SA-BR-primary',
+    'relay-AF-ZA-primary'
+  ];
+  
+  // Map continents to their endpoints
+  const continentMap: Record<string, string> = {
+    'NA': 'relay-NA-US-primary',
+    'EU': 'relay-EU-GB-primary',
+    'AS': 'relay-AS-JP-primary',
+    'OC': 'relay-OC-AU-primary',
+    'SA': 'relay-SA-BR-primary',
+    'AF': 'relay-AF-ZA-primary'
+  };
+  
+  // Get the primary endpoint for user's continent
+  const primaryEndpoint = continentMap[continent] || 'relay-NA-US-primary';
+  
+  // Create ordered list: primary endpoint first, then others
+  const orderedEndpoints = [
+    primaryEndpoint,
+    ...allowedEndpoints.filter(ep => ep !== primaryEndpoint)
+  ];
+  
+  // Try each endpoint in order
+  for (const doName of orderedEndpoints) {
+    try {
+      const id = env.RELAY_WEBSOCKET.idFromName(doName);
+      const stub = env.RELAY_WEBSOCKET.get(id);
+      
+      // Test if DO is responsive with a short timeout
+      const testResponse = await Promise.race([
+        stub.fetch(new Request('https://internal/health')),
+        new Promise<Response>((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 1000)
+        )
+      ]);
+      
+      if (testResponse.ok) {
+        console.log(`Connected to DO: ${doName}`);
+        // @ts-ignore
+        return { stub, doName };
+      }
+    } catch (error) {
+      console.log(`Failed to connect to ${doName}, trying next option: ${error}`);
+    }
+  }
+  
+  // Fallback to NA endpoint
+  console.log('All DO attempts failed, using primary NA endpoint as fallback');
+  const fallbackName = 'relay-NA-US-primary';
+  const id = env.RELAY_WEBSOCKET.idFromName(fallbackName);
+  const stub = env.RELAY_WEBSOCKET.get(id);
+  // @ts-ignore
+  return { stub, doName: fallbackName };
+}
+
 // Export functions for use by Durable Object
 export {
   verifyEventSignature,
@@ -1399,10 +1471,21 @@ export default {
       // Main endpoints
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          // Use Durable Object for WebSocket connections
-          const id = env.RELAY_WEBSOCKET.idFromName(url.hostname);
-          const stub = env.RELAY_WEBSOCKET.get(id);
-          return stub.fetch(request);
+          // Get Cloudflare location info
+          const cf = (request as any).cf;
+
+          // Get optimal DO based on user location
+          const { stub, doName } = await getOptimalDO(cf, env, url);
+
+          // Add location info to the request
+          const newUrl = new URL(request.url);
+          newUrl.searchParams.set('region', cf?.region || 'unknown');
+          newUrl.searchParams.set('colo', cf?.colo || 'unknown');
+          newUrl.searchParams.set('continent', cf?.continent || 'unknown');
+          newUrl.searchParams.set('country', cf?.country || 'unknown');
+          newUrl.searchParams.set('doName', doName); // Add DO name
+
+          return stub.fetch(new Request(newUrl, request));
         } else if (request.headers.get("Accept") === "application/nostr+json") {
           return handleRelayInfoRequest(request);
         } else {

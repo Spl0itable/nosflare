@@ -1,3 +1,7 @@
+## v7.1.1 - 2025-06-14
+
+- Tweak: multi-regional Durable Object mesh network to increase throughput and load balancing
+
 ## v7.0.1 - 2025-06-11
 
 - Hotfix: improved large query chunking

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.0.1",
+  version: "7.1.1",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -424,6 +424,9 @@ function randomBytes(bytesLength = 32) {
   if (crypto2 && typeof crypto2.getRandomValues === "function") {
     return crypto2.getRandomValues(new Uint8Array(bytesLength));
   }
+  if (crypto2 && typeof crypto2.randomBytes === "function") {
+    return crypto2.randomBytes(bytesLength);
+  }
   throw new Error("crypto.getRandomValues must be defined");
 }
 __name(randomBytes, "randomBytes");
@@ -685,9 +688,78 @@ __name(_SHA256, "SHA256");
 var SHA256 = _SHA256;
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
+// ../../../node_modules/@noble/hashes/esm/hmac.js
+var _HMAC = class _HMAC extends Hash {
+  constructor(hash2, _key) {
+    super();
+    this.finished = false;
+    this.destroyed = false;
+    hash(hash2);
+    const key = toBytes(_key);
+    this.iHash = hash2.create();
+    if (typeof this.iHash.update !== "function")
+      throw new Error("Expected instance of class which extends utils.Hash");
+    this.blockLen = this.iHash.blockLen;
+    this.outputLen = this.iHash.outputLen;
+    const blockLen = this.blockLen;
+    const pad = new Uint8Array(blockLen);
+    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54;
+    this.iHash.update(pad);
+    this.oHash = hash2.create();
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54 ^ 92;
+    this.oHash.update(pad);
+    pad.fill(0);
+  }
+  update(buf) {
+    exists(this);
+    this.iHash.update(buf);
+    return this;
+  }
+  digestInto(out) {
+    exists(this);
+    bytes(out, this.outputLen);
+    this.finished = true;
+    this.iHash.digestInto(out);
+    this.oHash.update(out);
+    this.oHash.digestInto(out);
+    this.destroy();
+  }
+  digest() {
+    const out = new Uint8Array(this.oHash.outputLen);
+    this.digestInto(out);
+    return out;
+  }
+  _cloneInto(to) {
+    to || (to = Object.create(Object.getPrototypeOf(this), {}));
+    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+    to = to;
+    to.finished = finished;
+    to.destroyed = destroyed;
+    to.blockLen = blockLen;
+    to.outputLen = outputLen;
+    to.oHash = oHash._cloneInto(to.oHash);
+    to.iHash = iHash._cloneInto(to.iHash);
+    return to;
+  }
+  destroy() {
+    this.destroyed = true;
+    this.oHash.destroy();
+    this.iHash.destroy();
+  }
+};
+__name(_HMAC, "HMAC");
+var HMAC = _HMAC;
+var hmac = /* @__PURE__ */ __name((hash2, key, message) => new HMAC(hash2, key).update(message).digest(), "hmac");
+hmac.create = (hash2, key) => new HMAC(hash2, key);
+
 // ../../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
+  aInRange: () => aInRange,
+  abool: () => abool,
   abytes: () => abytes,
   bitGet: () => bitGet,
   bitLen: () => bitLen,
@@ -702,7 +774,10 @@ __export(utils_exports, {
   equalBytes: () => equalBytes,
   hexToBytes: () => hexToBytes,
   hexToNumber: () => hexToNumber,
+  inRange: () => inRange,
   isBytes: () => isBytes2,
+  memoized: () => memoized,
+  notImplemented: () => notImplemented,
   numberToBytesBE: () => numberToBytesBE,
   numberToBytesLE: () => numberToBytesLE,
   numberToHexUnpadded: () => numberToHexUnpadded,
@@ -710,9 +785,9 @@ __export(utils_exports, {
   utf8ToBytes: () => utf8ToBytes2,
   validateObject: () => validateObject
 });
-var _0n = BigInt(0);
-var _1n = BigInt(1);
-var _2n = BigInt(2);
+var _0n = /* @__PURE__ */ BigInt(0);
+var _1n = /* @__PURE__ */ BigInt(1);
+var _2n = /* @__PURE__ */ BigInt(2);
 function isBytes2(a) {
   return a instanceof Uint8Array || a != null && typeof a === "object" && a.constructor.name === "Uint8Array";
 }
@@ -722,6 +797,11 @@ function abytes(item) {
     throw new Error("Uint8Array expected");
 }
 __name(abytes, "abytes");
+function abool(title, value) {
+  if (typeof value !== "boolean")
+    throw new Error(`${title} must be valid boolean, got "${value}".`);
+}
+__name(abool, "abool");
 var hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 function bytesToHex(bytes2) {
   abytes(bytes2);
@@ -732,8 +812,8 @@ function bytesToHex(bytes2) {
   return hex;
 }
 __name(bytesToHex, "bytesToHex");
-function numberToHexUnpadded(num) {
-  const hex = num.toString(16);
+function numberToHexUnpadded(num2) {
+  const hex = num2.toString(16);
   return hex.length & 1 ? `0${hex}` : hex;
 }
 __name(numberToHexUnpadded, "numberToHexUnpadded");
@@ -845,6 +925,16 @@ function utf8ToBytes2(str) {
   return new Uint8Array(new TextEncoder().encode(str));
 }
 __name(utf8ToBytes2, "utf8ToBytes");
+var isPosBig = /* @__PURE__ */ __name((n) => typeof n === "bigint" && _0n <= n, "isPosBig");
+function inRange(n, min, max) {
+  return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
+}
+__name(inRange, "inRange");
+function aInRange(title, n, min, max) {
+  if (!inRange(n, min, max))
+    throw new Error(`expected valid ${title}: ${min} <= n < ${max}, got ${typeof n} ${n}`);
+}
+__name(aInRange, "aInRange");
 function bitLen(n) {
   let len;
   for (len = 0; n > _0n; n >>= _1n, len += 1)
@@ -942,6 +1032,21 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 __name(validateObject, "validateObject");
+var notImplemented = /* @__PURE__ */ __name(() => {
+  throw new Error("not implemented");
+}, "notImplemented");
+function memoized(fn) {
+  const map = /* @__PURE__ */ new WeakMap();
+  return (arg, ...args) => {
+    const val = map.get(arg);
+    if (val !== void 0)
+      return val;
+    const computed = fn(arg, ...args);
+    map.set(arg, computed);
+    return computed;
+  };
+}
+__name(memoized, "memoized");
 
 // ../../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
@@ -958,7 +1063,7 @@ function mod(a, b) {
   return result >= _0n2 ? result : b + result;
 }
 __name(mod, "mod");
-function pow(num, power, modulo) {
+function pow(num2, power, modulo) {
   if (modulo <= _0n2 || power < _0n2)
     throw new Error("Expected power/modulo > 0");
   if (modulo === _1n2)
@@ -966,8 +1071,8 @@ function pow(num, power, modulo) {
   let res = _1n2;
   while (power > _0n2) {
     if (power & _1n2)
-      res = res * num % modulo;
-    num = num * num % modulo;
+      res = res * num2 % modulo;
+    num2 = num2 * num2 % modulo;
     power >>= _1n2;
   }
   return res;
@@ -1035,9 +1140,9 @@ function tonelliShanks(P) {
           break;
         t2 = Fp2.sqr(t2);
       }
-      const ge2 = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
-      g = Fp2.sqr(ge2);
-      x = Fp2.mul(x, ge2);
+      const ge = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
+      g = Fp2.sqr(ge);
+      x = Fp2.mul(x, ge);
       b = Fp2.mul(b, g);
       r = m;
     }
@@ -1106,15 +1211,15 @@ function validateField(field) {
   return validateObject(field, opts);
 }
 __name(validateField, "validateField");
-function FpPow(f, num, power) {
+function FpPow(f, num2, power) {
   if (power < _0n2)
     throw new Error("Expected power > 0");
   if (power === _0n2)
     return f.ONE;
   if (power === _1n2)
-    return num;
+    return num2;
   let p = f.ONE;
-  let d = num;
+  let d = num2;
   while (power > _0n2) {
     if (power & _1n2)
       p = f.mul(p, d);
@@ -1126,18 +1231,18 @@ function FpPow(f, num, power) {
 __name(FpPow, "FpPow");
 function FpInvertBatch(f, nums) {
   const tmp = new Array(nums.length);
-  const lastMultiplied = nums.reduce((acc, num, i) => {
-    if (f.is0(num))
+  const lastMultiplied = nums.reduce((acc, num2, i) => {
+    if (f.is0(num2))
       return acc;
     tmp[i] = acc;
-    return f.mul(acc, num);
+    return f.mul(acc, num2);
   }, f.ONE);
   const inverted = f.inv(lastMultiplied);
-  nums.reduceRight((acc, num, i) => {
-    if (f.is0(num))
+  nums.reduceRight((acc, num2, i) => {
+    if (f.is0(num2))
       return acc;
     tmp[i] = f.mul(acc, tmp[i]);
-    return f.mul(acc, num);
+    return f.mul(acc, num2);
   }, inverted);
   return tmp;
 }
@@ -1162,34 +1267,34 @@ function Field(ORDER, bitLen2, isLE2 = false, redef = {}) {
     MASK: bitMask(BITS),
     ZERO: _0n2,
     ONE: _1n2,
-    create: /* @__PURE__ */ __name((num) => mod(num, ORDER), "create"),
-    isValid: /* @__PURE__ */ __name((num) => {
-      if (typeof num !== "bigint")
-        throw new Error(`Invalid field element: expected bigint, got ${typeof num}`);
-      return _0n2 <= num && num < ORDER;
+    create: /* @__PURE__ */ __name((num2) => mod(num2, ORDER), "create"),
+    isValid: /* @__PURE__ */ __name((num2) => {
+      if (typeof num2 !== "bigint")
+        throw new Error(`Invalid field element: expected bigint, got ${typeof num2}`);
+      return _0n2 <= num2 && num2 < ORDER;
     }, "isValid"),
-    is0: /* @__PURE__ */ __name((num) => num === _0n2, "is0"),
-    isOdd: /* @__PURE__ */ __name((num) => (num & _1n2) === _1n2, "isOdd"),
-    neg: /* @__PURE__ */ __name((num) => mod(-num, ORDER), "neg"),
+    is0: /* @__PURE__ */ __name((num2) => num2 === _0n2, "is0"),
+    isOdd: /* @__PURE__ */ __name((num2) => (num2 & _1n2) === _1n2, "isOdd"),
+    neg: /* @__PURE__ */ __name((num2) => mod(-num2, ORDER), "neg"),
     eql: /* @__PURE__ */ __name((lhs, rhs) => lhs === rhs, "eql"),
-    sqr: /* @__PURE__ */ __name((num) => mod(num * num, ORDER), "sqr"),
+    sqr: /* @__PURE__ */ __name((num2) => mod(num2 * num2, ORDER), "sqr"),
     add: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs + rhs, ORDER), "add"),
     sub: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs - rhs, ORDER), "sub"),
     mul: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs * rhs, ORDER), "mul"),
-    pow: /* @__PURE__ */ __name((num, power) => FpPow(f, num, power), "pow"),
+    pow: /* @__PURE__ */ __name((num2, power) => FpPow(f, num2, power), "pow"),
     div: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs * invert(rhs, ORDER), ORDER), "div"),
     // Same as above, but doesn't normalize
-    sqrN: /* @__PURE__ */ __name((num) => num * num, "sqrN"),
+    sqrN: /* @__PURE__ */ __name((num2) => num2 * num2, "sqrN"),
     addN: /* @__PURE__ */ __name((lhs, rhs) => lhs + rhs, "addN"),
     subN: /* @__PURE__ */ __name((lhs, rhs) => lhs - rhs, "subN"),
     mulN: /* @__PURE__ */ __name((lhs, rhs) => lhs * rhs, "mulN"),
-    inv: /* @__PURE__ */ __name((num) => invert(num, ORDER), "inv"),
+    inv: /* @__PURE__ */ __name((num2) => invert(num2, ORDER), "inv"),
     sqrt: redef.sqrt || ((n) => sqrtP(f, n)),
     invertBatch: /* @__PURE__ */ __name((lst) => FpInvertBatch(f, lst), "invertBatch"),
     // TODO: do we really need constant cmov?
     // We don't have const-time bigints anyway, so probably will be not very useful
     cmov: /* @__PURE__ */ __name((a, b, c) => c ? b : a, "cmov"),
-    toBytes: /* @__PURE__ */ __name((num) => isLE2 ? numberToBytesLE(num, BYTES) : numberToBytesBE(num, BYTES), "toBytes"),
+    toBytes: /* @__PURE__ */ __name((num2) => isLE2 ? numberToBytesLE(num2, BYTES) : numberToBytesBE(num2, BYTES), "toBytes"),
     fromBytes: /* @__PURE__ */ __name((bytes2) => {
       if (bytes2.length !== BYTES)
         throw new Error(`Fp.fromBytes: expected ${BYTES}, got ${bytes2.length}`);
@@ -1217,8 +1322,8 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   const minLen = getMinHashLength(fieldOrder);
   if (len < 16 || len < minLen || len > 1024)
     throw new Error(`expected ${minLen}-1024 bytes of input, got ${len}`);
-  const num = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
-  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
+  const num2 = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
+  const reduced = mod(num2, fieldOrder - _1n2) + _1n2;
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 __name(mapHashToField, "mapHashToField");
@@ -1226,12 +1331,19 @@ __name(mapHashToField, "mapHashToField");
 // ../../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
+var pointPrecomputes = /* @__PURE__ */ new WeakMap();
+var pointWindowSizes = /* @__PURE__ */ new WeakMap();
 function wNAF(c, bits) {
   const constTimeNegate = /* @__PURE__ */ __name((condition, item) => {
     const neg = item.negate();
     return condition ? neg : item;
   }, "constTimeNegate");
+  const validateW = /* @__PURE__ */ __name((W) => {
+    if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
+      throw new Error(`Wrong window size=${W}, should be [1..${bits}]`);
+  }, "validateW");
   const opts = /* @__PURE__ */ __name((W) => {
+    validateW(W);
     const windows = Math.ceil(bits / W) + 1;
     const windowSize = 2 ** (W - 1);
     return { windows, windowSize };
@@ -1310,20 +1422,64 @@ function wNAF(c, bits) {
       }
       return { p, f };
     },
-    wNAFCached(P, precomputesMap, n, transform) {
-      const W = P._WINDOW_SIZE || 1;
-      let comp = precomputesMap.get(P);
+    wNAFCached(P, n, transform) {
+      const W = pointWindowSizes.get(P) || 1;
+      let comp = pointPrecomputes.get(P);
       if (!comp) {
         comp = this.precomputeWindow(P, W);
-        if (W !== 1) {
-          precomputesMap.set(P, transform(comp));
-        }
+        if (W !== 1)
+          pointPrecomputes.set(P, transform(comp));
       }
       return this.wNAF(W, comp, n);
+    },
+    // We calculate precomputes for elliptic curve point multiplication
+    // using windowed method. This specifies window size and
+    // stores precomputed values. Usually only base point would be precomputed.
+    setWindowSize(P, W) {
+      validateW(W);
+      pointWindowSizes.set(P, W);
+      pointPrecomputes.delete(P);
     }
   };
 }
 __name(wNAF, "wNAF");
+function pippenger(c, field, points, scalars) {
+  if (!Array.isArray(points) || !Array.isArray(scalars) || scalars.length !== points.length)
+    throw new Error("arrays of points and scalars must have equal length");
+  scalars.forEach((s, i) => {
+    if (!field.isValid(s))
+      throw new Error(`wrong scalar at index ${i}`);
+  });
+  points.forEach((p, i) => {
+    if (!(p instanceof c))
+      throw new Error(`wrong point at index ${i}`);
+  });
+  const wbits = bitLen(BigInt(points.length));
+  const windowSize = wbits > 12 ? wbits - 3 : wbits > 4 ? wbits - 2 : wbits ? 2 : 1;
+  const MASK = (1 << windowSize) - 1;
+  const buckets = new Array(MASK + 1).fill(c.ZERO);
+  const lastBits = Math.floor((field.BITS - 1) / windowSize) * windowSize;
+  let sum = c.ZERO;
+  for (let i = lastBits; i >= 0; i -= windowSize) {
+    buckets.fill(c.ZERO);
+    for (let j = 0; j < scalars.length; j++) {
+      const scalar = scalars[j];
+      const wbits2 = Number(scalar >> BigInt(i) & BigInt(MASK));
+      buckets[wbits2] = buckets[wbits2].add(points[j]);
+    }
+    let resI = c.ZERO;
+    for (let j = buckets.length - 1, sumI = c.ZERO; j > 0; j--) {
+      sumI = sumI.add(buckets[j]);
+      resI = resI.add(sumI);
+    }
+    sum = sum.add(resI);
+    if (i !== 0)
+      for (let j = 0; j < windowSize; j++)
+        sum = sum.double();
+  }
+  return sum;
+}
+__name(pippenger, "pippenger");
 function validateBasic(curve) {
   validateField(curve.Fp);
   validateObject(curve, {
@@ -1344,6 +1500,13 @@ function validateBasic(curve) {
 __name(validateBasic, "validateBasic");
 
 // ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
+function validateSigVerOpts(opts) {
+  if (opts.lowS !== void 0)
+    abool("lowS", opts.lowS);
+  if (opts.prehash !== void 0)
+    abool("prehash", opts.prehash);
+}
+__name(validateSigVerOpts, "validateSigVerOpts");
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1379,48 +1542,99 @@ var DER = {
       super(m);
     }
   }, __name(_a, "DERErr"), _a),
-  _parseInt(data) {
-    const { Err: E } = DER;
-    if (data.length < 2 || data[0] !== 2)
-      throw new E("Invalid signature integer tag");
-    const len = data[1];
-    const res = data.subarray(2, len + 2);
-    if (!len || res.length !== len)
-      throw new E("Invalid signature integer: wrong length");
-    if (res[0] & 128)
-      throw new E("Invalid signature integer: negative");
-    if (res[0] === 0 && !(res[1] & 128))
-      throw new E("Invalid signature integer: unnecessary leading zero");
-    return { d: b2n(res), l: data.subarray(len + 2) };
+  // Basic building block is TLV (Tag-Length-Value)
+  _tlv: {
+    encode: /* @__PURE__ */ __name((tag, data) => {
+      const { Err: E } = DER;
+      if (tag < 0 || tag > 256)
+        throw new E("tlv.encode: wrong tag");
+      if (data.length & 1)
+        throw new E("tlv.encode: unpadded data");
+      const dataLen = data.length / 2;
+      const len = numberToHexUnpadded(dataLen);
+      if (len.length / 2 & 128)
+        throw new E("tlv.encode: long form length too big");
+      const lenLen = dataLen > 127 ? numberToHexUnpadded(len.length / 2 | 128) : "";
+      return `${numberToHexUnpadded(tag)}${lenLen}${len}${data}`;
+    }, "encode"),
+    // v - value, l - left bytes (unparsed)
+    decode(tag, data) {
+      const { Err: E } = DER;
+      let pos = 0;
+      if (tag < 0 || tag > 256)
+        throw new E("tlv.encode: wrong tag");
+      if (data.length < 2 || data[pos++] !== tag)
+        throw new E("tlv.decode: wrong tlv");
+      const first = data[pos++];
+      const isLong = !!(first & 128);
+      let length = 0;
+      if (!isLong)
+        length = first;
+      else {
+        const lenLen = first & 127;
+        if (!lenLen)
+          throw new E("tlv.decode(long): indefinite length not supported");
+        if (lenLen > 4)
+          throw new E("tlv.decode(long): byte length is too big");
+        const lengthBytes = data.subarray(pos, pos + lenLen);
+        if (lengthBytes.length !== lenLen)
+          throw new E("tlv.decode: length bytes not complete");
+        if (lengthBytes[0] === 0)
+          throw new E("tlv.decode(long): zero leftmost byte");
+        for (const b of lengthBytes)
+          length = length << 8 | b;
+        pos += lenLen;
+        if (length < 128)
+          throw new E("tlv.decode(long): not minimal encoding");
+      }
+      const v = data.subarray(pos, pos + length);
+      if (v.length !== length)
+        throw new E("tlv.decode: wrong value length");
+      return { v, l: data.subarray(pos + length) };
+    }
+  },
+  // https://crypto.stackexchange.com/a/57734 Leftmost bit of first byte is 'negative' flag,
+  // since we always use positive integers here. It must always be empty:
+  // - add zero byte if exists
+  // - if next byte doesn't have a flag, leading zero is not allowed (minimal encoding)
+  _int: {
+    encode(num2) {
+      const { Err: E } = DER;
+      if (num2 < _0n4)
+        throw new E("integer: negative integers are not allowed");
+      let hex = numberToHexUnpadded(num2);
+      if (Number.parseInt(hex[0], 16) & 8)
+        hex = "00" + hex;
+      if (hex.length & 1)
+        throw new E("unexpected assertion");
+      return hex;
+    },
+    decode(data) {
+      const { Err: E } = DER;
+      if (data[0] & 128)
+        throw new E("Invalid signature integer: negative");
+      if (data[0] === 0 && !(data[1] & 128))
+        throw new E("Invalid signature integer: unnecessary leading zero");
+      return b2n(data);
+    }
   },
   toSig(hex) {
-    const { Err: E } = DER;
+    const { Err: E, _int: int, _tlv: tlv } = DER;
     const data = typeof hex === "string" ? h2b(hex) : hex;
     abytes(data);
-    let l = data.length;
-    if (l < 2 || data[0] != 48)
-      throw new E("Invalid signature tag");
-    if (data[1] !== l - 2)
-      throw new E("Invalid signature: incorrect length");
-    const { d: r, l: sBytes } = DER._parseInt(data.subarray(2));
-    const { d: s, l: rBytesLeft } = DER._parseInt(sBytes);
-    if (rBytesLeft.length)
+    const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
+    if (seqLeftBytes.length)
       throw new E("Invalid signature: left bytes after parsing");
-    return { r, s };
+    const { v: rBytes, l: rLeftBytes } = tlv.decode(2, seqBytes);
+    const { v: sBytes, l: sLeftBytes } = tlv.decode(2, rLeftBytes);
+    if (sLeftBytes.length)
+      throw new E("Invalid signature: left bytes after parsing");
+    return { r: int.decode(rBytes), s: int.decode(sBytes) };
   },
   hexFromSig(sig) {
-    const slice = /* @__PURE__ */ __name((s2) => Number.parseInt(s2[0], 16) & 8 ? "00" + s2 : s2, "slice");
-    const h = /* @__PURE__ */ __name((num) => {
-      const hex = num.toString(16);
-      return hex.length & 1 ? `0${hex}` : hex;
-    }, "h");
-    const s = slice(h(sig.s));
-    const r = slice(h(sig.r));
-    const shl = s.length / 2;
-    const rhl = r.length / 2;
-    const sl = h(shl);
-    const rl = h(rhl);
-    return `30${h(rhl + shl + 4)}02${rl}${r}02${sl}${s}`;
+    const { _tlv: tlv, _int: int } = DER;
+    const seq = `${tlv.encode(2, int.encode(sig.r))}${tlv.encode(2, int.encode(sig.s))}`;
+    return tlv.encode(48, seq);
   }
 };
 var _0n4 = BigInt(0);
@@ -1431,6 +1645,7 @@ var _4n2 = BigInt(4);
 function weierstrassPoints(opts) {
   const CURVE = validatePointOpts(opts);
   const { Fp: Fp2 } = CURVE;
+  const Fn = Field(CURVE.n, CURVE.nBitLength);
   const toBytes2 = CURVE.toBytes || ((_c, point, _isCompressed) => {
     const a = point.toAffine();
     return concatBytes2(Uint8Array.from([4]), Fp2.toBytes(a.x), Fp2.toBytes(a.y));
@@ -1450,17 +1665,12 @@ function weierstrassPoints(opts) {
   __name(weierstrassEquation, "weierstrassEquation");
   if (!Fp2.eql(Fp2.sqr(CURVE.Gy), weierstrassEquation(CURVE.Gx)))
     throw new Error("bad generator point: equation left != right");
-  function isWithinCurveOrder(num) {
-    return typeof num === "bigint" && _0n4 < num && num < CURVE.n;
+  function isWithinCurveOrder(num2) {
+    return inRange(num2, _1n4, CURVE.n);
   }
   __name(isWithinCurveOrder, "isWithinCurveOrder");
-  function assertGE(num) {
-    if (!isWithinCurveOrder(num))
-      throw new Error("Expected valid bigint: 0 < bigint < curve.n");
-  }
-  __name(assertGE, "assertGE");
   function normPrivateKeyToScalar(key) {
-    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n } = CURVE;
+    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n: N } = CURVE;
     if (lengths && typeof key !== "bigint") {
       if (isBytes2(key))
         key = bytesToHex(key);
@@ -1468,24 +1678,56 @@ function weierstrassPoints(opts) {
         throw new Error("Invalid key");
       key = key.padStart(nByteLength * 2, "0");
     }
-    let num;
+    let num2;
     try {
-      num = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
+      num2 = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
     } catch (error) {
       throw new Error(`private key must be ${nByteLength} bytes, hex or bigint, not ${typeof key}`);
     }
     if (wrapPrivateKey)
-      num = mod(num, n);
-    assertGE(num);
-    return num;
+      num2 = mod(num2, N);
+    aInRange("private key", num2, _1n4, N);
+    return num2;
   }
   __name(normPrivateKeyToScalar, "normPrivateKeyToScalar");
-  const pointPrecomputes = /* @__PURE__ */ new Map();
   function assertPrjPoint(other) {
     if (!(other instanceof Point2))
       throw new Error("ProjectivePoint expected");
   }
   __name(assertPrjPoint, "assertPrjPoint");
+  const toAffineMemo = memoized((p, iz) => {
+    const { px: x, py: y, pz: z } = p;
+    if (Fp2.eql(z, Fp2.ONE))
+      return { x, y };
+    const is0 = p.is0();
+    if (iz == null)
+      iz = is0 ? Fp2.ONE : Fp2.inv(z);
+    const ax = Fp2.mul(x, iz);
+    const ay = Fp2.mul(y, iz);
+    const zz = Fp2.mul(z, iz);
+    if (is0)
+      return { x: Fp2.ZERO, y: Fp2.ZERO };
+    if (!Fp2.eql(zz, Fp2.ONE))
+      throw new Error("invZ was invalid");
+    return { x: ax, y: ay };
+  });
+  const assertValidMemo = memoized((p) => {
+    if (p.is0()) {
+      if (CURVE.allowInfinityPoint && !Fp2.is0(p.py))
+        return;
+      throw new Error("bad point: ZERO");
+    }
+    const { x, y } = p.toAffine();
+    if (!Fp2.isValid(x) || !Fp2.isValid(y))
+      throw new Error("bad point: x or y not FE");
+    const left = Fp2.sqr(y);
+    const right = weierstrassEquation(x);
+    if (!Fp2.eql(left, right))
+      throw new Error("bad point: equation left != right");
+    if (!p.isTorsionFree())
+      throw new Error("bad point: not in prime-order subgroup");
+    return true;
+  });
   const _Point = class _Point {
     constructor(px, py, pz) {
       this.px = px;
@@ -1497,6 +1739,7 @@ function weierstrassPoints(opts) {
         throw new Error("y required");
       if (pz == null || !Fp2.isValid(pz))
         throw new Error("z required");
+      Object.freeze(this);
     }
     // Does not validate if the point is on-curve.
     // Use fromHex instead, or call assertValidity() later.
@@ -1540,27 +1783,17 @@ function weierstrassPoints(opts) {
     static fromPrivateKey(privateKey) {
       return _Point.BASE.multiply(normPrivateKeyToScalar(privateKey));
     }
+    // Multiscalar Multiplication
+    static msm(points, scalars) {
+      return pippenger(_Point, Fn, points, scalars);
+    }
     // "Private method", don't use it directly
     _setWindowSize(windowSize) {
-      this._WINDOW_SIZE = windowSize;
-      pointPrecomputes.delete(this);
+      wnaf.setWindowSize(this, windowSize);
     }
     // A point on curve is valid if it conforms to equation.
     assertValidity() {
-      if (this.is0()) {
-        if (CURVE.allowInfinityPoint && !Fp2.is0(this.py))
-          return;
-        throw new Error("bad point: ZERO");
-      }
-      const { x, y } = this.toAffine();
-      if (!Fp2.isValid(x) || !Fp2.isValid(y))
-        throw new Error("bad point: x or y not FE");
-      const left = Fp2.sqr(y);
-      const right = weierstrassEquation(x);
-      if (!Fp2.eql(left, right))
-        throw new Error("bad point: equation left != right");
-      if (!this.isTorsionFree())
-        throw new Error("bad point: not in prime-order subgroup");
+      assertValidMemo(this);
     }
     hasEvenY() {
       const { y } = this.toAffine();
@@ -1687,27 +1920,24 @@ function weierstrassPoints(opts) {
       return this.equals(_Point.ZERO);
     }
     wNAF(n) {
-      return wnaf.wNAFCached(this, pointPrecomputes, n, (comp) => {
-        const toInv = Fp2.invertBatch(comp.map((p) => p.pz));
-        return comp.map((p, i) => p.toAffine(toInv[i])).map(_Point.fromAffine);
-      });
+      return wnaf.wNAFCached(this, n, _Point.normalizeZ);
     }
     /**
      * Non-constant-time multiplication. Uses double-and-add algorithm.
      * It's faster, but should only be used when you don't care about
      * an exposed private key e.g. sig verification, which works over *public* keys.
      */
-    multiplyUnsafe(n) {
+    multiplyUnsafe(sc) {
+      aInRange("scalar", sc, _0n4, CURVE.n);
       const I = _Point.ZERO;
-      if (n === _0n4)
+      if (sc === _0n4)
         return I;
-      assertGE(n);
-      if (n === _1n4)
+      if (sc === _1n4)
         return this;
       const { endo } = CURVE;
       if (!endo)
-        return wnaf.unsafeLadder(this, n);
-      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
+        return wnaf.unsafeLadder(this, sc);
+      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(sc);
       let k1p = I;
       let k2p = I;
       let d = this;
@@ -1737,12 +1967,11 @@ function weierstrassPoints(opts) {
      * @returns New point
      */
     multiply(scalar) {
-      assertGE(scalar);
-      let n = scalar;
+      const { endo, n: N } = CURVE;
+      aInRange("scalar", scalar, _1n4, N);
       let point, fake;
-      const { endo } = CURVE;
       if (endo) {
-        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
+        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(scalar);
         let { p: k1p, f: f1p } = this.wNAF(k1);
         let { p: k2p, f: f2p } = this.wNAF(k2);
         k1p = wnaf.constTimeNegate(k1neg, k1p);
@@ -1751,7 +1980,7 @@ function weierstrassPoints(opts) {
         point = k1p.add(k2p);
         fake = f1p.add(f2p);
       } else {
-        const { p, f } = this.wNAF(n);
+        const { p, f } = this.wNAF(scalar);
         point = p;
         fake = f;
       }
@@ -1773,18 +2002,7 @@ function weierstrassPoints(opts) {
     // Can accept precomputed Z^-1 - for example, from invertBatch.
     // (x, y, z) ∋ (x=x/z, y=y/z)
     toAffine(iz) {
-      const { px: x, py: y, pz: z } = this;
-      const is0 = this.is0();
-      if (iz == null)
-        iz = is0 ? Fp2.ONE : Fp2.inv(z);
-      const ax = Fp2.mul(x, iz);
-      const ay = Fp2.mul(y, iz);
-      const zz = Fp2.mul(z, iz);
-      if (is0)
-        return { x: Fp2.ZERO, y: Fp2.ZERO };
-      if (!Fp2.eql(zz, Fp2.ONE))
-        throw new Error("invZ was invalid");
-      return { x: ax, y: ay };
+      return toAffineMemo(this, iz);
     }
     isTorsionFree() {
       const { h: cofactor, isTorsionFree } = CURVE;
@@ -1803,10 +2021,12 @@ function weierstrassPoints(opts) {
       return this.multiplyUnsafe(CURVE.h);
     }
     toRawBytes(isCompressed = true) {
+      abool("isCompressed", isCompressed);
       this.assertValidity();
       return toBytes2(_Point, this, isCompressed);
     }
     toHex(isCompressed = true) {
+      abool("isCompressed", isCompressed);
       return bytesToHex(this.toRawBytes(isCompressed));
     }
   };
@@ -1844,10 +2064,6 @@ function weierstrass(curveDef) {
   const { Fp: Fp2, n: CURVE_ORDER } = CURVE;
   const compressedLen = Fp2.BYTES + 1;
   const uncompressedLen = 2 * Fp2.BYTES + 1;
-  function isValidFieldElement(num) {
-    return _0n4 < num && num < Fp2.ORDER;
-  }
-  __name(isValidFieldElement, "isValidFieldElement");
   function modN2(a) {
     return mod(a, CURVE_ORDER);
   }
@@ -1862,6 +2078,7 @@ function weierstrass(curveDef) {
       const a = point.toAffine();
       const x = Fp2.toBytes(a.x);
       const cat = concatBytes2;
+      abool("isCompressed", isCompressed);
       if (isCompressed) {
         return cat(Uint8Array.from([point.hasEvenY() ? 2 : 3]), x);
       } else {
@@ -1874,7 +2091,7 @@ function weierstrass(curveDef) {
       const tail = bytes2.subarray(1);
       if (len === compressedLen && (head === 2 || head === 3)) {
         const x = bytesToNumberBE(tail);
-        if (!isValidFieldElement(x))
+        if (!inRange(x, _1n4, Fp2.ORDER))
           throw new Error("Point is not on curve");
         const y2 = weierstrassEquation(x);
         let y;
@@ -1898,7 +2115,7 @@ function weierstrass(curveDef) {
       }
     }
   });
-  const numToNByteStr = /* @__PURE__ */ __name((num) => bytesToHex(numberToBytesBE(num, CURVE.nByteLength)), "numToNByteStr");
+  const numToNByteStr = /* @__PURE__ */ __name((num2) => bytesToHex(numberToBytesBE(num2, CURVE.nByteLength)), "numToNByteStr");
   function isBiggerThanHalfOrder(number2) {
     const HALF = CURVE_ORDER >> _1n4;
     return number2 > HALF;
@@ -1929,10 +2146,8 @@ function weierstrass(curveDef) {
       return new _Signature(r, s);
     }
     assertValidity() {
-      if (!isWithinCurveOrder(this.r))
-        throw new Error("r must be 0 < r < CURVE.n");
-      if (!isWithinCurveOrder(this.s))
-        throw new Error("s must be 0 < s < CURVE.n");
+      aInRange("r", this.r, _1n4, CURVE_ORDER);
+      aInRange("s", this.s, _1n4, CURVE_ORDER);
     }
     addRecoveryBit(recovery) {
       return new _Signature(this.r, this.s, recovery);
@@ -2039,20 +2254,17 @@ function weierstrass(curveDef) {
   }
   __name(getSharedSecret, "getSharedSecret");
   const bits2int = CURVE.bits2int || function(bytes2) {
-    const num = bytesToNumberBE(bytes2);
+    const num2 = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
-    return delta > 0 ? num >> BigInt(delta) : num;
+    return delta > 0 ? num2 >> BigInt(delta) : num2;
   };
   const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
-  function int2octets(num) {
-    if (typeof num !== "bigint")
-      throw new Error("bigint expected");
-    if (!(_0n4 <= num && num < ORDER_MASK))
-      throw new Error(`bigint expected < 2^${CURVE.nBitLength}`);
-    return numberToBytesBE(num, CURVE.nByteLength);
+  function int2octets(num2) {
+    aInRange(`num < 2^${CURVE.nBitLength}`, num2, _0n4, ORDER_MASK);
+    return numberToBytesBE(num2, CURVE.nByteLength);
   }
   __name(int2octets, "int2octets");
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
@@ -2063,6 +2275,7 @@ function weierstrass(curveDef) {
     if (lowS == null)
       lowS = true;
     msgHash = ensureBytes("msgHash", msgHash);
+    validateSigVerOpts(opts);
     if (prehash)
       msgHash = ensureBytes("prehashed msgHash", hash2(msgHash));
     const h1int = bits2int_modN(msgHash);
@@ -2114,6 +2327,7 @@ function weierstrass(curveDef) {
     publicKey = ensureBytes("publicKey", publicKey);
     if ("strict" in opts)
       throw new Error("options.strict was renamed to lowS");
+    validateSigVerOpts(opts);
     const { lowS, prehash } = opts;
     let _sig = void 0;
     let P;
@@ -2166,73 +2380,6 @@ function weierstrass(curveDef) {
   };
 }
 __name(weierstrass, "weierstrass");
-
-// ../../../node_modules/@noble/hashes/esm/hmac.js
-var _HMAC = class _HMAC extends Hash {
-  constructor(hash2, _key) {
-    super();
-    this.finished = false;
-    this.destroyed = false;
-    hash(hash2);
-    const key = toBytes(_key);
-    this.iHash = hash2.create();
-    if (typeof this.iHash.update !== "function")
-      throw new Error("Expected instance of class which extends utils.Hash");
-    this.blockLen = this.iHash.blockLen;
-    this.outputLen = this.iHash.outputLen;
-    const blockLen = this.blockLen;
-    const pad = new Uint8Array(blockLen);
-    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54;
-    this.iHash.update(pad);
-    this.oHash = hash2.create();
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54 ^ 92;
-    this.oHash.update(pad);
-    pad.fill(0);
-  }
-  update(buf) {
-    exists(this);
-    this.iHash.update(buf);
-    return this;
-  }
-  digestInto(out) {
-    exists(this);
-    bytes(out, this.outputLen);
-    this.finished = true;
-    this.iHash.digestInto(out);
-    this.oHash.update(out);
-    this.oHash.digestInto(out);
-    this.destroy();
-  }
-  digest() {
-    const out = new Uint8Array(this.oHash.outputLen);
-    this.digestInto(out);
-    return out;
-  }
-  _cloneInto(to) {
-    to || (to = Object.create(Object.getPrototypeOf(this), {}));
-    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
-    to = to;
-    to.finished = finished;
-    to.destroyed = destroyed;
-    to.blockLen = blockLen;
-    to.outputLen = outputLen;
-    to.oHash = oHash._cloneInto(to.oHash);
-    to.iHash = iHash._cloneInto(to.iHash);
-    return to;
-  }
-  destroy() {
-    this.destroyed = true;
-    this.oHash.destroy();
-    this.iHash.destroy();
-  }
-};
-__name(_HMAC, "HMAC");
-var HMAC = _HMAC;
-var hmac = /* @__PURE__ */ __name((hash2, key, message) => new HMAC(hash2, key).update(message).digest(), "hmac");
-hmac.create = (hash2, key) => new HMAC(hash2, key);
 
 // ../../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
@@ -2328,8 +2475,6 @@ var secp256k1 = createCurve({
   }
 }, sha256);
 var _0n5 = BigInt(0);
-var fe = /* @__PURE__ */ __name((x) => typeof x === "bigint" && _0n5 < x && x < secp256k1P, "fe");
-var ge = /* @__PURE__ */ __name((x) => typeof x === "bigint" && _0n5 < x && x < secp256k1N, "ge");
 var TAGGED_HASH_PREFIXES = {};
 function taggedHash(tag, ...messages) {
   let tagP = TAGGED_HASH_PREFIXES[tag];
@@ -2355,8 +2500,7 @@ function schnorrGetExtPubKey(priv) {
 }
 __name(schnorrGetExtPubKey, "schnorrGetExtPubKey");
 function lift_x(x) {
-  if (!fe(x))
-    throw new Error("bad x: need 0 < x < p");
+  aInRange("x", x, _1n5, secp256k1P);
   const xx = modP(x * x);
   const c = modP(xx * x + BigInt(7));
   let y = sqrtMod(c);
@@ -2367,8 +2511,9 @@ function lift_x(x) {
   return p;
 }
 __name(lift_x, "lift_x");
+var num = bytesToNumberBE;
 function challenge(...args) {
-  return modN(bytesToNumberBE(taggedHash("BIP0340/challenge", ...args)));
+  return modN(num(taggedHash("BIP0340/challenge", ...args)));
 }
 __name(challenge, "challenge");
 function schnorrGetPublicKey(privateKey) {
@@ -2379,9 +2524,9 @@ function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
   const m = ensureBytes("message", message);
   const { bytes: px, scalar: d } = schnorrGetExtPubKey(privateKey);
   const a = ensureBytes("auxRand", auxRand, 32);
-  const t = numTo32b(d ^ bytesToNumberBE(taggedHash("BIP0340/aux", a)));
+  const t = numTo32b(d ^ num(taggedHash("BIP0340/aux", a)));
   const rand = taggedHash("BIP0340/nonce", t, px, m);
-  const k_ = modN(bytesToNumberBE(rand));
+  const k_ = modN(num(rand));
   if (k_ === _0n5)
     throw new Error("sign failed: k is zero");
   const { bytes: rx, scalar: k } = schnorrGetExtPubKey(k_);
@@ -2399,12 +2544,12 @@ function schnorrVerify(signature, message, publicKey) {
   const m = ensureBytes("message", message);
   const pub = ensureBytes("publicKey", publicKey, 32);
   try {
-    const P = lift_x(bytesToNumberBE(pub));
-    const r = bytesToNumberBE(sig.subarray(0, 32));
-    if (!fe(r))
+    const P = lift_x(num(pub));
+    const r = num(sig.subarray(0, 32));
+    if (!inRange(r, _1n5, secp256k1P))
       return false;
-    const s = bytesToNumberBE(sig.subarray(32, 64));
-    if (!ge(s))
+    const s = num(sig.subarray(32, 64));
+    if (!inRange(s, _1n5, secp256k1N))
       return false;
     const e = challenge(numTo32b(r), pointToBytes(P), m);
     const R = GmulAdd(P, s, modN(-e));
@@ -3614,6 +3759,58 @@ async function handlePaymentNotification(request, env) {
   }
 }
 __name(handlePaymentNotification, "handlePaymentNotification");
+async function getOptimalDO(cf, env, url) {
+  const region = cf?.region || "US";
+  const colo = cf?.colo || "LAX";
+  const continent = cf?.continent || "NA";
+  const country = cf?.country || "US";
+  console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
+  const allowedEndpoints = [
+    "relay-NA-US-primary",
+    "relay-EU-GB-primary",
+    "relay-AS-JP-primary",
+    "relay-OC-AU-primary",
+    "relay-SA-BR-primary",
+    "relay-AF-ZA-primary"
+  ];
+  const continentMap = {
+    "NA": "relay-NA-US-primary",
+    "EU": "relay-EU-GB-primary",
+    "AS": "relay-AS-JP-primary",
+    "OC": "relay-OC-AU-primary",
+    "SA": "relay-SA-BR-primary",
+    "AF": "relay-AF-ZA-primary"
+  };
+  const primaryEndpoint = continentMap[continent] || "relay-NA-US-primary";
+  const orderedEndpoints = [
+    primaryEndpoint,
+    ...allowedEndpoints.filter((ep) => ep !== primaryEndpoint)
+  ];
+  for (const doName of orderedEndpoints) {
+    try {
+      const id2 = env.RELAY_WEBSOCKET.idFromName(doName);
+      const stub2 = env.RELAY_WEBSOCKET.get(id2);
+      const testResponse = await Promise.race([
+        stub2.fetch(new Request("https://internal/health")),
+        new Promise(
+          (_, reject) => setTimeout(() => reject(new Error("Timeout")), 1e3)
+        )
+      ]);
+      if (testResponse.ok) {
+        console.log(`Connected to DO: ${doName}`);
+        return { stub: stub2, doName };
+      }
+    } catch (error) {
+      console.log(`Failed to connect to ${doName}, trying next option: ${error}`);
+    }
+  }
+  console.log("All DO attempts failed, using primary NA endpoint as fallback");
+  const fallbackName = "relay-NA-US-primary";
+  const id = env.RELAY_WEBSOCKET.idFromName(fallbackName);
+  const stub = env.RELAY_WEBSOCKET.get(id);
+  return { stub, doName: fallbackName };
+}
+__name(getOptimalDO, "getOptimalDO");
 var relay_worker_default = {
   async fetch(request, env, ctx) {
     try {
@@ -3626,9 +3823,15 @@ var relay_worker_default = {
       }
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          const id = env.RELAY_WEBSOCKET.idFromName(url.hostname);
-          const stub = env.RELAY_WEBSOCKET.get(id);
-          return stub.fetch(request);
+          const cf = request.cf;
+          const { stub, doName } = await getOptimalDO(cf, env, url);
+          const newUrl = new URL(request.url);
+          newUrl.searchParams.set("region", cf?.region || "unknown");
+          newUrl.searchParams.set("colo", cf?.colo || "unknown");
+          newUrl.searchParams.set("continent", cf?.continent || "unknown");
+          newUrl.searchParams.set("country", cf?.country || "unknown");
+          newUrl.searchParams.set("doName", doName);
+          return stub.fetch(new Request(newUrl, request));
         } else if (request.headers.get("Accept") === "application/nostr+json") {
           return handleRelayInfoRequest(request);
         } else {
@@ -3654,12 +3857,73 @@ var relay_worker_default = {
 // src/durable-object.ts
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
+    this.knownPeers = /* @__PURE__ */ new Map();
+    this.processedEvents = /* @__PURE__ */ new Map();
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
+    this.doId = crypto.randomUUID();
+    this.region = "unknown";
+    this.doName = "unknown";
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get(["knownPeers", "region", "doId", "doName"]);
+      if (stored.knownPeers) {
+        this.knownPeers = new Map(stored.knownPeers);
+      }
+      if (stored.region) {
+        this.region = stored.region;
+      }
+      if (stored.doId) {
+        this.doId = stored.doId;
+      }
+      if (stored.doName) {
+        this.doName = stored.doName;
+      }
+    });
+    this.state.storage.setAlarm(Date.now() + 36e5);
+  }
+  async alarm() {
+    const fiveMinutesAgo = Date.now() - 3e5;
+    for (const [eventId, timestamp] of this.processedEvents) {
+      if (timestamp < fiveMinutesAgo) {
+        this.processedEvents.delete(eventId);
+      }
+    }
+    const tenMinutesAgo = Date.now() - 6e5;
+    for (const [peerId, peerInfo] of this.knownPeers) {
+      if (peerInfo.lastSeen < tenMinutesAgo) {
+        this.knownPeers.delete(peerId);
+      }
+    }
+    await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
+    this.state.storage.setAlarm(Date.now() + 36e5);
   }
   async fetch(request) {
     const url = new URL(request.url);
+    const urlDoName = url.searchParams.get("doName");
+    if (urlDoName && urlDoName !== "unknown" && _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      this.doName = urlDoName;
+      await this.state.storage.put("doName", this.doName);
+    }
+    if (url.pathname === "/health") {
+      return new Response(JSON.stringify({
+        status: "ok",
+        doName: this.doName,
+        sessions: this.sessions.size,
+        peers: this.knownPeers.size
+      }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.pathname === "/do-broadcast") {
+      return await this.handleDOBroadcast(request);
+    }
+    if (url.pathname === "/discover-peers") {
+      return await this.handlePeerDiscovery(request);
+    }
+    if (url.pathname === "/exchange-peers") {
+      return await this.handlePeerExchange(request);
+    }
     if (url.pathname === "/broadcast-event" && request.method === "POST") {
       const data = await request.json();
       const { event } = data;
@@ -3672,13 +3936,151 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
+    this.region = url.searchParams.get("region") || this.region || "unknown";
+    const colo = url.searchParams.get("colo") || "default";
+    await this.state.storage.put({
+      region: this.region,
+      doId: this.doId,
+      doName: this.doName
+    });
+    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     await this.handleSession(server, request);
+    if (this.sessions.size === 1 && !this.peerDiscoveryInterval) {
+      await this.startPeerDiscovery();
+    }
     return new Response(null, {
       status: 101,
       webSocket: client
     });
+  }
+  async handleDOBroadcast(request) {
+    try {
+      const data = await request.json();
+      const { event, sourceDoId, sourcePeers, hopCount = 0 } = data;
+      if (hopCount > 3) {
+        return new Response(JSON.stringify({ success: true, dropped: true }));
+      }
+      if (this.processedEvents.has(event.id)) {
+        return new Response(JSON.stringify({ success: true, duplicate: true }));
+      }
+      this.processedEvents.set(event.id, Date.now());
+      for (const peer of sourcePeers) {
+        const [region, doId] = peer.split(":");
+        if (doId && doId !== this.doId) {
+          this.knownPeers.set(peer, {
+            region,
+            doId,
+            lastSeen: Date.now()
+          });
+        }
+      }
+      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
+      await this.broadcastToLocalSessions(event);
+      await this.gossipToOtherDOs(event, sourceDoId, hopCount + 1);
+      return new Response(JSON.stringify({ success: true }));
+    } catch (error) {
+      console.error("Error handling DO broadcast:", error);
+      return new Response(JSON.stringify({ success: false, error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  async handlePeerDiscovery(request) {
+    const { doId, region } = await request.json();
+    const peerId = `${region}:${doId}`;
+    this.knownPeers.set(peerId, {
+      region,
+      doId,
+      lastSeen: Date.now()
+    });
+    console.log(`DO ${this.doName} discovered peer: ${peerId}`);
+    await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
+    return new Response(JSON.stringify({
+      success: true,
+      peers: Array.from(this.knownPeers.keys()).filter((p) => p !== peerId)
+    }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  async handlePeerExchange(request) {
+    const { myPeers, myId } = await request.json();
+    if (myId) {
+      const [region, doId] = myId.split(":");
+      this.knownPeers.set(myId, {
+        region,
+        doId,
+        lastSeen: Date.now()
+      });
+    }
+    for (const peer of myPeers) {
+      const [region, doId] = peer.split(":");
+      if (doId && doId !== this.doId && !this.knownPeers.has(peer)) {
+        this.knownPeers.set(peer, {
+          region,
+          doId,
+          lastSeen: Date.now() - 6e4
+          // Mark as slightly old
+        });
+      }
+    }
+    console.log(`DO ${this.doName} exchanged peers, now has ${this.knownPeers.size} peers`);
+    return new Response(JSON.stringify({
+      success: true,
+      peers: Array.from(this.knownPeers.keys()).slice(0, 50)
+      // Limit response size
+    }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  async startPeerDiscovery() {
+    console.log(`DO ${this.doName} starting peer discovery`);
+    await this.discoverPeers();
+    this.peerDiscoveryInterval = setInterval(() => {
+      this.discoverPeers().catch(console.error);
+    }, 3e5);
+  }
+  async discoverPeers() {
+    const discoveryEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
+    const discoveryPromises = discoveryEndpoints.filter((endpoint) => endpoint !== this.doName).map(async (endpoint) => {
+      try {
+        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
+        const stub = this.env.RELAY_WEBSOCKET.get(id);
+        const url = new URL("https://internal/exchange-peers");
+        url.searchParams.set("doName", endpoint);
+        const response = await Promise.race([
+          stub.fetch(new Request(url.toString(), {
+            method: "POST",
+            body: JSON.stringify({
+              myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
+              myId: `${this.region}:${this.doId}`
+            })
+          })),
+          new Promise(
+            (_, reject) => setTimeout(() => reject(new Error("Timeout")), 2e3)
+          )
+        ]);
+        if (response.ok) {
+          const { peers } = await response.json();
+          for (const peer of peers || []) {
+            const [region, doId] = peer.split(":");
+            if (doId && doId !== this.doId) {
+              this.knownPeers.set(peer, {
+                region,
+                doId,
+                lastSeen: Date.now()
+              });
+            }
+          }
+        }
+      } catch (error) {
+      }
+    });
+    await Promise.allSettled(discoveryPromises);
+    console.log(`DO ${this.doName} discovered ${this.knownPeers.size} total peers`);
+    await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
   }
   async handleSession(webSocket, request) {
     webSocket.accept();
@@ -3694,7 +4096,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       host: request.headers.get("host") || url.host
     };
     this.sessions.set(sessionId, session);
-    console.log(`New WebSocket session: ${sessionId}`);
+    console.log(`New WebSocket session: ${sessionId} on DO ${this.doName} (Total: ${this.sessions.size})`);
     webSocket.addEventListener("message", async (event) => {
       try {
         let message;
@@ -3718,11 +4120,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     });
     webSocket.addEventListener("close", () => {
-      console.log(`WebSocket session closed: ${sessionId}`);
+      console.log(`WebSocket session closed: ${sessionId} on DO ${this.doName}`);
       this.handleClose(sessionId);
     });
     webSocket.addEventListener("error", (error) => {
-      console.error(`WebSocket error for session ${sessionId}:`, error);
+      console.error(`WebSocket error for session ${sessionId} on DO ${this.doName}:`, error);
       this.handleClose(sessionId);
     });
   }
@@ -3809,6 +4211,8 @@ var _RelayWebSocket = class _RelayWebSocket {
       const result = await processEvent(event, session.id, this.env);
       if (result.success) {
         this.sendOK(session.webSocket, event.id, true, result.message);
+        this.processedEvents.set(event.id, Date.now());
+        console.log(`DO ${this.doName} broadcasting event ${event.id}`);
         await this.broadcastEvent(event);
       } else {
         this.sendOK(session.webSocket, event.id, false, result.message);
@@ -3875,7 +4279,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     session.subscriptions.set(subscriptionId, filters);
-    console.log(`New subscription ${subscriptionId} for session ${session.id}`);
+    console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
     try {
       const result = await queryEvents(filters, session.bookmark, this.env);
       if (result.bookmark) {
@@ -3897,13 +4301,17 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
-      console.log(`Closed subscription ${subscriptionId} for session ${session.id}`);
+      console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, "Subscription closed");
     } else {
       this.sendClosed(session.webSocket, subscriptionId, "Subscription not found");
     }
   }
   async broadcastEvent(event) {
+    await this.broadcastToLocalSessions(event);
+    await this.broadcastToOtherDOs(event);
+  }
+  async broadcastToLocalSessions(event) {
     let broadcastCount = 0;
     for (const [sessionId, session] of this.sessions) {
       for (const [subscriptionId, filters] of session.subscriptions) {
@@ -3918,8 +4326,61 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     if (broadcastCount > 0) {
-      console.log(`Event ${event.id} broadcast to ${broadcastCount} subscriptions`);
+      console.log(`Event ${event.id} broadcast to ${broadcastCount} local subscriptions on DO ${this.doName}`);
     }
+  }
+  async broadcastToOtherDOs(event) {
+    const broadcasts = [];
+    const processedPeers = /* @__PURE__ */ new Set();
+    for (const endpoint of _RelayWebSocket.ALLOWED_ENDPOINTS) {
+      if (endpoint === this.doName) continue;
+      processedPeers.add(endpoint);
+      broadcasts.push(this.sendToSpecificDO(endpoint, endpoint, event, 0));
+    }
+    const results = await Promise.allSettled(
+      broadcasts.map((p) => Promise.race([
+        p,
+        new Promise(
+          (_, reject) => setTimeout(() => reject(new Error("Broadcast timeout")), 3e3)
+        )
+      ]))
+    );
+    const successful = results.filter((r) => r.status === "fulfilled").length;
+    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
+  }
+  async sendToSpecificDO(region, doName, event, hopCount) {
+    try {
+      const actualDoName = _RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName) ? doName : `relay-${region.split("-")[0]}-${region.split("-")[1]}-primary`;
+      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
+        throw new Error(`Invalid DO name: ${actualDoName}`);
+      }
+      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
+      const stub = this.env.RELAY_WEBSOCKET.get(id);
+      const url = new URL("https://internal/do-broadcast");
+      url.searchParams.set("doName", actualDoName);
+      return await stub.fetch(new Request(url.toString(), {
+        method: "POST",
+        body: JSON.stringify({
+          event,
+          sourceDoId: this.doId,
+          sourcePeers: Array.from(this.knownPeers.keys()).slice(0, 20),
+          // Limit peer list size
+          hopCount
+        })
+      }));
+    } catch (error) {
+      console.error(`Failed to broadcast to ${doName}:`, error);
+      throw error;
+    }
+  }
+  async gossipToOtherDOs(event, sourceDoId, hopCount) {
+    if (hopCount >= 3) return;
+    const eligibleEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS.filter((endpoint) => endpoint !== this.doName).sort(() => Math.random() - 0.5).slice(0, 3);
+    const gossipPromises = eligibleEndpoints.map(
+      (endpoint) => this.sendToSpecificDO(endpoint, endpoint, event, hopCount).catch(() => {
+      })
+    );
+    await Promise.allSettled(gossipPromises);
   }
   matchesFilters(event, filters) {
     return filters.some((filter) => this.matchesFilter(event, filter));
@@ -3955,9 +4416,14 @@ var _RelayWebSocket = class _RelayWebSocket {
   handleClose(sessionId) {
     const session = this.sessions.get(sessionId);
     if (session) {
-      console.log(`Cleaning up session ${sessionId} with ${session.subscriptions.size} subscriptions`);
+      console.log(`Cleaning up session ${sessionId} with ${session.subscriptions.size} subscriptions on DO ${this.doName}`);
     }
     this.sessions.delete(sessionId);
+    if (this.sessions.size === 0 && this.peerDiscoveryInterval) {
+      clearInterval(this.peerDiscoveryInterval);
+      this.peerDiscoveryInterval = void 0;
+      console.log(`Stopped peer discovery on DO ${this.doName} (no active sessions)`);
+    }
   }
   sendOK(ws, eventId, status, message) {
     try {
@@ -4007,11 +4473,21 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     return {
       sessions: this.sessions.size,
-      subscriptions: totalSubscriptions
+      subscriptions: totalSubscriptions,
+      peers: this.knownPeers.size
     };
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
+// Define allowed endpoints as a class constant
+_RelayWebSocket.ALLOWED_ENDPOINTS = [
+  "relay-NA-US-primary",
+  "relay-EU-GB-primary",
+  "relay-AS-JP-primary",
+  "relay-OC-AU-primary",
+  "relay-SA-BR-primary",
+  "relay-AF-ZA-primary"
+];
 var RelayWebSocket = _RelayWebSocket;
 export {
   RelayWebSocket,
@@ -4023,10 +4499,20 @@ export {
   (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 
 @noble/curves/esm/abstract/utils.js:
+  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+
 @noble/curves/esm/abstract/modular.js:
+  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+
 @noble/curves/esm/abstract/curve.js:
+  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+
 @noble/curves/esm/abstract/weierstrass.js:
+  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+
 @noble/curves/esm/_shortw_utils.js:
+  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
+
 @noble/curves/esm/secp256k1.js:
   (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */

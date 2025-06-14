@@ -117,7 +117,8 @@ export type NostrMessage =
   | ["OK", string, boolean, string]
   | ["NOTICE", string]
   | ["REQ", string, ...NostrFilter[]]
-  | ["CLOSE", string];
+  | ["CLOSE", string]
+  | ["CLOSED", string, string];
 
 // WebSocket event types for Cloudflare Workers
 export interface WebSocketEventMap {
@@ -132,6 +133,70 @@ export interface BroadcastEventRequest {
   event: NostrEvent;
 }
 
+// DO-to-DO communication types
+export interface PeerInfo {
+  region: string;
+  doId: string;
+  lastSeen: number;
+}
+
+export interface DOBroadcastRequest {
+  event: NostrEvent;
+  sourceDoId: string;
+  sourcePeers: string[];
+  hopCount?: number;
+}
+
+export interface PeerDiscoveryRequest {
+  doId: string;
+  region: string;
+}
+
+export interface PeerExchangeRequest {
+  myPeers: string[];
+  myId: string;
+}
+
+export interface HealthCheckResponse {
+  status: string;
+  sessions: number;
+  peers: number;
+}
+
+// Durable Object interface
 export interface DurableObject {
   fetch(request: Request): Promise<Response>;
+}
+
+// Durable Object stub with location hint support
+export interface DurableObjectStub {
+  fetch(request: Request): Promise<Response>;
+}
+
+// Extended Durable Object namespace with location hints
+export interface DurableObjectNamespace {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId, options?: { locationHint?: string }): DurableObjectStub;
+}
+
+export interface DurableObjectId {
+  toString(): string;
+  equals(other: DurableObjectId): boolean;
+}
+
+export interface DurableObjectState {
+  storage: DurableObjectStorage;
+  blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+export interface DurableObjectStorage {
+  get<T = any>(key: string): Promise<T | undefined>;
+  get<T = any>(keys: string[]): Promise<Map<string, T>>;
+  put<T = any>(key: string, value: T): Promise<void>;
+  put(entries: Record<string, any>): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  delete(keys: string[]): Promise<number>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+  getAlarm(): Promise<number | null>;
+  deleteAlarm(): Promise<void>;
 }

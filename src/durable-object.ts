@@ -11,21 +11,140 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
+interface PeerInfo {
+  region: string;
+  doId: string;
+  lastSeen: number;
+}
+
+interface DOBroadcastRequest {
+  event: NostrEvent;
+  sourceDoId: string;
+  sourcePeers: string[];
+  hopCount?: number;
+}
+
 export class RelayWebSocket implements DurableObject {
   private sessions: Map<string, WebSocketSession>;
   private env: Env;
   private state: DurableObjectState;
+  private region: string;
+  private doId: string;
+  private doName: string;
+  private knownPeers: Map<string, PeerInfo> = new Map();
+  private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
+  private peerDiscoveryInterval?: number;
+
+  // Define allowed endpoints as a class constant
+  private static readonly ALLOWED_ENDPOINTS = [
+    'relay-NA-US-primary',
+    'relay-EU-GB-primary',
+    'relay-AS-JP-primary',
+    'relay-OC-AU-primary',
+    'relay-SA-BR-primary',
+    'relay-AF-ZA-primary'
+  ];
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.sessions = new Map();
     this.env = env;
+    this.doId = crypto.randomUUID();
+    this.region = 'unknown';
+    this.doName = 'unknown'; // Initialize with 'unknown' instead of undefined
+
+    // Restore state including DO name
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get(['knownPeers', 'region', 'doId', 'doName']);
+      // @ts-ignore
+      if (stored.knownPeers) {
+        // @ts-ignore
+        this.knownPeers = new Map(stored.knownPeers as any);
+      }
+      // @ts-ignore
+      if (stored.region) {
+        // @ts-ignore
+        this.region = stored.region as string;
+      }
+      // @ts-ignore
+      if (stored.doId) {
+        // @ts-ignore
+        this.doId = stored.doId as string;
+      }
+      // @ts-ignore
+      if (stored.doName) {
+        // @ts-ignore
+        this.doName = stored.doName as string;
+      }
+    });
+
+    // Clean up old processed events every hour
+    this.state.storage.setAlarm(Date.now() + 3600000);
+  }
+
+  async alarm() {
+    // Clean up events older than 5 minutes
+    const fiveMinutesAgo = Date.now() - 300000;
+    for (const [eventId, timestamp] of this.processedEvents) {
+      if (timestamp < fiveMinutesAgo) {
+        this.processedEvents.delete(eventId);
+      }
+    }
+
+    // Clean up stale peers (not seen in 10 minutes)
+    const tenMinutesAgo = Date.now() - 600000;
+    for (const [peerId, peerInfo] of this.knownPeers) {
+      if (peerInfo.lastSeen < tenMinutesAgo) {
+        this.knownPeers.delete(peerId);
+      }
+    }
+
+    // Save updated peer list
+    await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
+
+    // Reset alarm
+    this.state.storage.setAlarm(Date.now() + 3600000);
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // Handle internal RPC calls from the worker
+    // Extract and set DO name from URL if provided
+    const urlDoName = url.searchParams.get('doName');
+    if (urlDoName && urlDoName !== 'unknown' && RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      this.doName = urlDoName;
+      // Persist it
+      await this.state.storage.put('doName', this.doName);
+    }
+
+    // Health check endpoint
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({
+        status: 'ok',
+        doName: this.doName,
+        sessions: this.sessions.size,
+        peers: this.knownPeers.size
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // DO-to-DO broadcast endpoint
+    if (url.pathname === '/do-broadcast') {
+      return await this.handleDOBroadcast(request);
+    }
+
+    // Peer discovery endpoint
+    if (url.pathname === '/discover-peers') {
+      return await this.handlePeerDiscovery(request);
+    }
+
+    // Peer exchange endpoint
+    if (url.pathname === '/exchange-peers') {
+      return await this.handlePeerExchange(request);
+    }
+
+    // Handle internal RPC calls from the worker (legacy support)
     if (url.pathname === '/broadcast-event' && request.method === 'POST') {
       const data = await request.json() as BroadcastEventRequest;
       const { event } = data;
@@ -41,15 +160,209 @@ export class RelayWebSocket implements DurableObject {
       return new Response('Expected Upgrade: websocket', { status: 426 });
     }
 
+    // Extract region info and DO name
+    this.region = url.searchParams.get('region') || this.region || 'unknown';
+    const colo = url.searchParams.get('colo') || 'default';
+
+    // Store our identity
+    await this.state.storage.put({
+      region: this.region,
+      doId: this.doId,
+      doName: this.doName
+    });
+
+    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
+
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
 
     await this.handleSession(server, request);
 
+    // Start peer discovery when first client connects
+    if (this.sessions.size === 1 && !this.peerDiscoveryInterval) {
+      await this.startPeerDiscovery();
+    }
+
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
+  }
+
+  private async handleDOBroadcast(request: Request): Promise<Response> {
+    try {
+      const data: DOBroadcastRequest = await request.json();
+      const { event, sourceDoId, sourcePeers, hopCount = 0 } = data;
+
+      // Prevent infinite loops
+      if (hopCount > 3) {
+        return new Response(JSON.stringify({ success: true, dropped: true }));
+      }
+
+      // Prevent duplicate processing
+      if (this.processedEvents.has(event.id)) {
+        return new Response(JSON.stringify({ success: true, duplicate: true }));
+      }
+
+      this.processedEvents.set(event.id, Date.now());
+
+      // Update known peers from the source
+      for (const peer of sourcePeers) {
+        const [region, doId] = peer.split(':');
+        if (doId && doId !== this.doId) {
+          this.knownPeers.set(peer, {
+            region,
+            doId,
+            lastSeen: Date.now()
+          });
+        }
+      }
+
+      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
+
+      // Broadcast to local sessions
+      await this.broadcastToLocalSessions(event);
+
+      // Gossip to other DOs with incremented hop count
+      await this.gossipToOtherDOs(event, sourceDoId, hopCount + 1);
+
+      return new Response(JSON.stringify({ success: true }));
+    } catch (error) {
+      console.error('Error handling DO broadcast:', error);
+      // @ts-ignore
+      return new Response(JSON.stringify({ success: false, error: error.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  private async handlePeerDiscovery(request: Request): Promise<Response> {
+    // @ts-ignore
+    const { doId, region } = await request.json();
+    const peerId = `${region}:${doId}`;
+
+    this.knownPeers.set(peerId, {
+      region,
+      doId,
+      lastSeen: Date.now()
+    });
+
+    console.log(`DO ${this.doName} discovered peer: ${peerId}`);
+
+    // Save peer list
+    await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
+
+    return new Response(JSON.stringify({
+      success: true,
+      peers: Array.from(this.knownPeers.keys()).filter(p => p !== peerId)
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  private async handlePeerExchange(request: Request): Promise<Response> {
+    // @ts-ignore
+    const { myPeers, myId } = await request.json();
+
+    // Add the requesting peer
+    if (myId) {
+      const [region, doId] = myId.split(':');
+      this.knownPeers.set(myId, {
+        region,
+        doId,
+        lastSeen: Date.now()
+      });
+    }
+
+    // Add their known peers
+    for (const peer of myPeers) {
+      const [region, doId] = peer.split(':');
+      if (doId && doId !== this.doId && !this.knownPeers.has(peer)) {
+        this.knownPeers.set(peer, {
+          region,
+          doId,
+          lastSeen: Date.now() - 60000 // Mark as slightly old
+        });
+      }
+    }
+
+    console.log(`DO ${this.doName} exchanged peers, now has ${this.knownPeers.size} peers`);
+
+    // Return our peers
+    return new Response(JSON.stringify({
+      success: true,
+      peers: Array.from(this.knownPeers.keys()).slice(0, 50) // Limit response size
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  private async startPeerDiscovery(): Promise<void> {
+    console.log(`DO ${this.doName} starting peer discovery`);
+
+    // Initial discovery
+    await this.discoverPeers();
+
+    // Periodic discovery every 5 minutes
+    this.peerDiscoveryInterval = setInterval(() => {
+      this.discoverPeers().catch(console.error);
+    }, 300000);
+  }
+
+  private async discoverPeers(): Promise<void> {
+    // Use the predefined allowed endpoints
+    const discoveryEndpoints = RelayWebSocket.ALLOWED_ENDPOINTS;
+
+    const discoveryPromises = discoveryEndpoints
+      .filter(endpoint => endpoint !== this.doName)
+      .map(async (endpoint) => {
+        try {
+          const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
+          const stub = this.env.RELAY_WEBSOCKET.get(id);
+
+          // Include the target DO name in the URL
+          const url = new URL('https://internal/exchange-peers');
+          url.searchParams.set('doName', endpoint);
+
+          const response = await Promise.race([
+            stub.fetch(new Request(url.toString(), {
+              method: 'POST',
+              body: JSON.stringify({
+                myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
+                myId: `${this.region}:${this.doId}`
+              })
+            })),
+            new Promise<Response>((_, reject) =>
+              setTimeout(() => reject(new Error('Timeout')), 2000)
+            )
+          ]);
+
+          if (response.ok) {
+            // @ts-ignore
+            const { peers } = await response.json();
+            for (const peer of peers || []) {
+              const [region, doId] = peer.split(':');
+              if (doId && doId !== this.doId) {
+                this.knownPeers.set(peer, {
+                  region,
+                  doId,
+                  lastSeen: Date.now()
+                });
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore discovery failures
+        }
+      });
+
+    await Promise.allSettled(discoveryPromises);
+
+    console.log(`DO ${this.doName} discovered ${this.knownPeers.size} total peers`);
+
+    // Save updated peer list
+    await this.state.storage.put('knownPeers', Array.from(this.knownPeers.entries()));
   }
 
   private async handleSession(webSocket: WebSocket, request: Request): Promise<void> {
@@ -68,7 +381,7 @@ export class RelayWebSocket implements DurableObject {
     };
 
     this.sessions.set(sessionId, session);
-    console.log(`New WebSocket session: ${sessionId}`);
+    console.log(`New WebSocket session: ${sessionId} on DO ${this.doName} (Total: ${this.sessions.size})`);
 
     webSocket.addEventListener('message', async (event) => {
       try {
@@ -96,12 +409,12 @@ export class RelayWebSocket implements DurableObject {
     });
 
     webSocket.addEventListener('close', () => {
-      console.log(`WebSocket session closed: ${sessionId}`);
+      console.log(`WebSocket session closed: ${sessionId} on DO ${this.doName}`);
       this.handleClose(sessionId);
     });
 
     webSocket.addEventListener('error', (error) => {
-      console.error(`WebSocket error for session ${sessionId}:`, error);
+      console.error(`WebSocket error for session ${sessionId} on DO ${this.doName}:`, error);
       this.handleClose(sessionId);
     });
   }
@@ -216,7 +529,11 @@ export class RelayWebSocket implements DurableObject {
         // Send OK to the sender
         this.sendOK(session.webSocket, event.id, true, result.message);
 
-        // Broadcast to all matching subscriptions
+        // Mark as processed
+        this.processedEvents.set(event.id, Date.now());
+
+        // Broadcast to all (local + remote)
+        console.log(`DO ${this.doName} broadcasting event ${event.id}`);
         await this.broadcastEvent(event);
       } else {
         this.sendOK(session.webSocket, event.id, false, result.message);
@@ -305,7 +622,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Store subscription
     session.subscriptions.set(subscriptionId, filters);
-    console.log(`New subscription ${subscriptionId} for session ${session.id}`);
+    console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
       // Query events from database
@@ -338,7 +655,7 @@ export class RelayWebSocket implements DurableObject {
 
     const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
-      console.log(`Closed subscription ${subscriptionId} for session ${session.id}`);
+      console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, 'Subscription closed');
     } else {
       this.sendClosed(session.webSocket, subscriptionId, 'Subscription not found');
@@ -346,6 +663,14 @@ export class RelayWebSocket implements DurableObject {
   }
 
   private async broadcastEvent(event: NostrEvent): Promise<void> {
+    // Broadcast to local sessions
+    await this.broadcastToLocalSessions(event);
+
+    // Broadcast to other DOs
+    await this.broadcastToOtherDOs(event);
+  }
+
+  private async broadcastToLocalSessions(event: NostrEvent): Promise<void> {
     let broadcastCount = 0;
 
     for (const [sessionId, session] of this.sessions) {
@@ -362,8 +687,86 @@ export class RelayWebSocket implements DurableObject {
     }
 
     if (broadcastCount > 0) {
-      console.log(`Event ${event.id} broadcast to ${broadcastCount} subscriptions`);
+      console.log(`Event ${event.id} broadcast to ${broadcastCount} local subscriptions on DO ${this.doName}`);
     }
+  }
+
+  private async broadcastToOtherDOs(event: NostrEvent): Promise<void> {
+    const broadcasts: Promise<Response>[] = [];
+    const processedPeers = new Set<string>();
+
+    // Broadcast to all allowed endpoints except ourselves
+    for (const endpoint of RelayWebSocket.ALLOWED_ENDPOINTS) {
+      if (endpoint === this.doName) continue;
+
+      processedPeers.add(endpoint);
+      broadcasts.push(this.sendToSpecificDO(endpoint, endpoint, event, 0));
+    }
+
+    // Execute broadcasts in parallel with timeout
+    const results = await Promise.allSettled(
+      broadcasts.map(p => Promise.race([
+        p,
+        new Promise<Response>((_, reject) =>
+          setTimeout(() => reject(new Error('Broadcast timeout')), 3000)
+        )
+      ]))
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
+  }
+
+  private async sendToSpecificDO(region: string, doName: string, event: NostrEvent, hopCount: number): Promise<Response> {
+    try {
+      // Ensure we're only using allowed endpoints
+      const actualDoName = RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)
+        ? doName
+        : `relay-${region.split('-')[0]}-${region.split('-')[1]}-primary`;
+
+      // Double-check it's in our allowed list
+      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
+        throw new Error(`Invalid DO name: ${actualDoName}`);
+      }
+
+      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
+      const stub = this.env.RELAY_WEBSOCKET.get(id);
+
+      // Include the target DO name in the URL
+      const url = new URL('https://internal/do-broadcast');
+      url.searchParams.set('doName', actualDoName);
+
+      return await stub.fetch(new Request(url.toString(), {
+        method: 'POST',
+        body: JSON.stringify({
+          event,
+          sourceDoId: this.doId,
+          sourcePeers: Array.from(this.knownPeers.keys()).slice(0, 20), // Limit peer list size
+          hopCount
+        } as DOBroadcastRequest)
+      }));
+    } catch (error) {
+      console.error(`Failed to broadcast to ${doName}:`, error);
+      throw error;
+    }
+  }
+
+  private async gossipToOtherDOs(event: NostrEvent, sourceDoId: string, hopCount: number): Promise<void> {
+    // Only gossip if hop count is low
+    if (hopCount >= 3) return;
+
+    // Select a subset of allowed endpoints for gossip (excluding ourselves and source)
+    const eligibleEndpoints = RelayWebSocket.ALLOWED_ENDPOINTS
+      .filter(endpoint => endpoint !== this.doName)
+      .sort(() => Math.random() - 0.5) // Randomize order
+      .slice(0, 3); // Gossip to max 3 peers
+
+    const gossipPromises = eligibleEndpoints.map(endpoint =>
+      this.sendToSpecificDO(endpoint, endpoint, event, hopCount)
+        .catch(() => {/* Ignore gossip failures */ })
+    );
+
+    await Promise.allSettled(gossipPromises);
   }
 
   private matchesFilters(event: NostrEvent, filters: NostrFilter[]): boolean {
@@ -416,9 +819,16 @@ export class RelayWebSocket implements DurableObject {
   private handleClose(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      console.log(`Cleaning up session ${sessionId} with ${session.subscriptions.size} subscriptions`);
+      console.log(`Cleaning up session ${sessionId} with ${session.subscriptions.size} subscriptions on DO ${this.doName}`);
     }
     this.sessions.delete(sessionId);
+
+    // Stop peer discovery if no more sessions
+    if (this.sessions.size === 0 && this.peerDiscoveryInterval) {
+      clearInterval(this.peerDiscoveryInterval);
+      this.peerDiscoveryInterval = undefined;
+      console.log(`Stopped peer discovery on DO ${this.doName} (no active sessions)`);
+    }
   }
 
   private sendOK(ws: WebSocket, eventId: string, status: boolean, message: string): void {
@@ -467,14 +877,15 @@ export class RelayWebSocket implements DurableObject {
   }
 
   // Public methods for monitoring
-  async getStats(): Promise<{ sessions: number; subscriptions: number }> {
+  async getStats(): Promise<{ sessions: number; subscriptions: number; peers: number }> {
     let totalSubscriptions = 0;
     for (const session of this.sessions.values()) {
       totalSubscriptions += session.subscriptions.size;
     }
     return {
       sessions: this.sessions.size,
-      subscriptions: totalSubscriptions
+      subscriptions: totalSubscriptions,
+      peers: this.knownPeers.size
     };
   }
 }
