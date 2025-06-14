@@ -4096,7 +4096,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
       await this.broadcastToLocalSessions(event);
-      await this.gossipToOtherDOs(event, sourceDoId, hopCount + 1);
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error("Error handling DO broadcast:", error);
@@ -4517,15 +4516,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.error(`Failed to broadcast to ${doName}:`, error);
       throw error;
     }
-  }
-  async gossipToOtherDOs(event, sourceDoId, hopCount) {
-    if (hopCount >= 3) return;
-    const eligibleEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS.filter((endpoint) => endpoint !== this.doName).sort(() => Math.random() - 0.5).slice(0, 3);
-    const gossipPromises = eligibleEndpoints.map(
-      (endpoint) => this.sendToSpecificDO(endpoint, endpoint, event, hopCount).catch(() => {
-      })
-    );
-    await Promise.allSettled(gossipPromises);
   }
   matchesFilters(event, filters) {
     return filters.some((filter) => this.matchesFilter(event, filter));

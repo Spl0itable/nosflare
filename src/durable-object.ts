@@ -213,9 +213,6 @@ export class RelayWebSocket implements DurableObject {
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
 
-      // Gossip to other DOs with incremented hop count
-      await this.gossipToOtherDOs(event, sourceDoId, hopCount + 1);
-
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error('Error handling DO broadcast:', error);
@@ -780,24 +777,6 @@ export class RelayWebSocket implements DurableObject {
       console.error(`Failed to broadcast to ${doName}:`, error);
       throw error;
     }
-  }
-
-  private async gossipToOtherDOs(event: NostrEvent, sourceDoId: string, hopCount: number): Promise<void> {
-    // Only gossip if hop count is low
-    if (hopCount >= 3) return;
-
-    // Select a subset of allowed endpoints for gossip (excluding ourselves and source)
-    const eligibleEndpoints = RelayWebSocket.ALLOWED_ENDPOINTS
-      .filter(endpoint => endpoint !== this.doName)
-      .sort(() => Math.random() - 0.5) // Randomize order
-      .slice(0, 3); // Gossip to max 3 peers
-
-    const gossipPromises = eligibleEndpoints.map(endpoint =>
-      this.sendToSpecificDO(endpoint, endpoint, event, hopCount)
-        .catch(() => {/* Ignore gossip failures */ })
-    );
-
-    await Promise.allSettled(gossipPromises);
   }
 
   private matchesFilters(event: NostrEvent, filters: NostrFilter[]): boolean {
