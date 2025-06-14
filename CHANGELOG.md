@@ -1,3 +1,7 @@
+## v7.1.3 - 2025-06-14
+
+- Hotfix: set peer caching
+
 ## v7.1.2 - 2025-06-14
 
 - Hotfix: improved multi-regional selection for Durable Objects
