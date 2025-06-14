@@ -1426,10 +1426,22 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'ZA': 'afr', 'NG': 'afr', 'KE': 'afr', 'MA': 'afr',
   };
   
-  // US state-level routing
+  // US state-level routing - Use FULL STATE NAMES not codes!
   const usStateToHint: Record<string, string> = {
-    'CA': 'wnam', 'OR': 'wnam', 'WA': 'wnam', 'NV': 'wnam', 'AZ': 'wnam',
-    'NY': 'enam', 'FL': 'enam', 'TX': 'enam', 'IL': 'enam', 'GA': 'enam',
+    // Western states -> WNAM
+    'California': 'wnam', 'Oregon': 'wnam', 'Washington': 'wnam', 'Nevada': 'wnam', 'Arizona': 'wnam',
+    'Utah': 'wnam', 'Idaho': 'wnam', 'Montana': 'wnam', 'Wyoming': 'wnam', 'Colorado': 'wnam',
+    'New Mexico': 'wnam', 'Alaska': 'wnam', 'Hawaii': 'wnam',
+    
+    // Eastern states -> ENAM
+    'New York': 'enam', 'Florida': 'enam', 'Texas': 'enam', 'Illinois': 'enam', 'Georgia': 'enam',
+    'Pennsylvania': 'enam', 'Ohio': 'enam', 'Michigan': 'enam', 'North Carolina': 'enam', 'Virginia': 'enam',
+    'Massachusetts': 'enam', 'New Jersey': 'enam', 'Maryland': 'enam', 'Connecticut': 'enam', 'Maine': 'enam',
+    'New Hampshire': 'enam', 'Vermont': 'enam', 'Rhode Island': 'enam', 'South Carolina': 'enam', 'Tennessee': 'enam',
+    'Alabama': 'enam', 'Mississippi': 'enam', 'Louisiana': 'enam', 'Arkansas': 'enam', 'Missouri': 'enam',
+    'Iowa': 'enam', 'Minnesota': 'enam', 'Wisconsin': 'enam', 'Indiana': 'enam', 'Kentucky': 'enam',
+    'West Virginia': 'enam', 'Delaware': 'enam', 'Oklahoma': 'enam', 'Kansas': 'enam', 'Nebraska': 'enam',
+    'South Dakota': 'enam', 'North Dakota': 'enam'
   };
   
   // Continent to hint fallback
@@ -1444,8 +1456,9 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   
   // Determine best hint
   let bestHint: string;
-  if (country === 'US' && region) {
+  if (country === 'US' && region && region !== 'unknown') {
     bestHint = usStateToHint[region] || 'enam';
+    console.log(`US state routing: ${region} -> ${bestHint}`);
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
