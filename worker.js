@@ -4192,7 +4192,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
     }
     await this.state.storage.setAlarm(Date.now() + 3e5);
-    console.log(`Peer discovery complete. Known peers: ${this.knownPeers.size}/8`);
   }
   async handleSession(webSocket, request) {
     webSocket.accept();

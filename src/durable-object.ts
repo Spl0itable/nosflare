@@ -354,9 +354,6 @@ export class RelayWebSocket implements DurableObject {
 
     // Always update alarm for next check
     await this.state.storage.setAlarm(Date.now() + 300000); // 5 minutes
-
-    // Log current peer status (optional - remove if too verbose)
-    console.log(`Peer discovery complete. Known peers: ${this.knownPeers.size}/8`);
   }
 
   private async handleSession(webSocket: WebSocket, request: Request): Promise<void> {
