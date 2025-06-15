@@ -26,9 +26,8 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
-  private hasDiscoveredPeers: boolean = false;
 
-  // Define allowed endpoints as a class constant
+  // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
     'relay-WNAM-primary',  // Western North America
     'relay-ENAM-primary',  // Eastern North America
@@ -64,40 +63,6 @@ export class RelayWebSocket implements DurableObject {
     this.processedEvents = new Map();
   }
 
-  private async initializePeerDiscovery(): Promise<void> {
-    // Only run once
-    if (this.hasDiscoveredPeers) return;
-    this.hasDiscoveredPeers = true;
-
-    console.log(`DO ${this.doName} starting one-time peer discovery...`);
-
-    // Discover all peers by pinging each endpoint
-    const discoveryPromises = RelayWebSocket.ALLOWED_ENDPOINTS.map(async (endpoint) => {
-      if (endpoint === this.doName) return; // Skip self
-
-      try {
-        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
-        const locationHint = RelayWebSocket.ENDPOINT_HINTS[endpoint] || 'auto';
-        const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
-
-        // Ping the health endpoint to ensure DO is created
-        const url = new URL('https://internal/health');
-        url.searchParams.set('doName', endpoint);
-        
-        const response = await stub.fetch(new Request(url.toString()));
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`DO ${this.doName} discovered peer ${endpoint} (hint: ${locationHint}): ${JSON.stringify(data)}`);
-        }
-      } catch (error) {
-        console.error(`DO ${this.doName} failed to discover ${endpoint}:`, error);
-      }
-    });
-
-    await Promise.allSettled(discoveryPromises);
-    console.log(`DO ${this.doName} completed peer discovery. All ${RelayWebSocket.ALLOWED_ENDPOINTS.length} endpoints initialized.`);
-  }
-
   // Storage helper methods for subscriptions
   private async saveSubscriptions(sessionId: string, subscriptions: Map<string, NostrFilter[]>): Promise<void> {
     const key = `subs:${sessionId}`;
@@ -122,40 +87,12 @@ export class RelayWebSocket implements DurableObject {
     // Extract and set DO name from URL if provided
     const urlDoName = url.searchParams.get('doName');
     if (urlDoName && urlDoName !== 'unknown' && RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
-      const nameChanged = this.doName !== urlDoName;
       this.doName = urlDoName;
-      
-      // Run discovery only if we just learned our name for the first time
-      if (nameChanged && !this.hasDiscoveredPeers) {
-        await this.initializePeerDiscovery();
-      }
-    }
-
-    // Health check endpoint
-    if (url.pathname === '/health') {
-      return new Response(JSON.stringify({
-        status: 'ok',
-        doName: this.doName,
-        sessions: this.sessions.size,
-        activeWebSockets: this.state.getWebSockets().length
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
     }
 
     // DO-to-DO broadcast endpoint
     if (url.pathname === '/do-broadcast') {
       return await this.handleDOBroadcast(request);
-    }
-
-    // Handle internal RPC calls from the worker (legacy support)
-    if (url.pathname === '/broadcast-event' && request.method === 'POST') {
-      const data = await request.json() as BroadcastEventRequest;
-      const { event } = data;
-      await this.broadcastEvent(event);
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
     }
 
     // Handle WebSocket upgrade
@@ -210,7 +147,7 @@ export class RelayWebSocket implements DurableObject {
     if (!session) {
       // Load subscriptions from storage
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
-      
+
       // Recreate session from attachment
       session = {
         id: attachment.sessionId,
@@ -237,7 +174,7 @@ export class RelayWebSocket implements DurableObject {
 
       await this.handleMessage(session, parsedMessage);
 
-      // Update attachment with latest session state (no subscriptions!)
+      // Update attachment with latest session state
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
@@ -260,7 +197,7 @@ export class RelayWebSocket implements DurableObject {
     if (attachment) {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
       this.sessions.delete(attachment.sessionId);
-      
+
       // Clean up stored subscriptions
       await this.deleteSubscriptions(attachment.sessionId);
     }
@@ -520,10 +457,10 @@ export class RelayWebSocket implements DurableObject {
 
     // Store subscription
     session.subscriptions.set(subscriptionId, filters);
-    
+
     // Save to storage
     await this.saveSubscriptions(session.id, session.subscriptions);
-    
+
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
@@ -559,7 +496,7 @@ export class RelayWebSocket implements DurableObject {
     if (deleted) {
       // Save updated subscriptions to storage
       await this.saveSubscriptions(session.id, session.subscriptions);
-      
+
       console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, 'Subscription closed');
     } else {
@@ -590,7 +527,7 @@ export class RelayWebSocket implements DurableObject {
       if (!session) {
         // Load subscriptions from storage
         const subscriptions = await this.loadSubscriptions(attachment.sessionId);
-        
+
         // Recreate minimal session for broadcast
         session = {
           id: attachment.sessionId,

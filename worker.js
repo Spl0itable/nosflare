@@ -3976,8 +3976,6 @@ var relay_worker_default = {
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
     this.processedEvents = /* @__PURE__ */ new Map();
-    // eventId -> timestamp
-    this.hasDiscoveredPeers = false;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -3985,30 +3983,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
-  }
-  async initializePeerDiscovery() {
-    if (this.hasDiscoveredPeers) return;
-    this.hasDiscoveredPeers = true;
-    console.log(`DO ${this.doName} starting one-time peer discovery...`);
-    const discoveryPromises = _RelayWebSocket.ALLOWED_ENDPOINTS.map(async (endpoint) => {
-      if (endpoint === this.doName) return;
-      try {
-        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
-        const locationHint = _RelayWebSocket.ENDPOINT_HINTS[endpoint] || "auto";
-        const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
-        const url = new URL("https://internal/health");
-        url.searchParams.set("doName", endpoint);
-        const response = await stub.fetch(new Request(url.toString()));
-        if (response.ok) {
-          const data = await response.json();
-          console.log(`DO ${this.doName} discovered peer ${endpoint} (hint: ${locationHint}): ${JSON.stringify(data)}`);
-        }
-      } catch (error) {
-        console.error(`DO ${this.doName} failed to discover ${endpoint}:`, error);
-      }
-    });
-    await Promise.allSettled(discoveryPromises);
-    console.log(`DO ${this.doName} completed peer discovery. All ${_RelayWebSocket.ALLOWED_ENDPOINTS.length} endpoints initialized.`);
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4029,32 +4003,10 @@ var _RelayWebSocket = class _RelayWebSocket {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
     if (urlDoName && urlDoName !== "unknown" && _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
-      const nameChanged = this.doName !== urlDoName;
       this.doName = urlDoName;
-      if (nameChanged && !this.hasDiscoveredPeers) {
-        await this.initializePeerDiscovery();
-      }
-    }
-    if (url.pathname === "/health") {
-      return new Response(JSON.stringify({
-        status: "ok",
-        doName: this.doName,
-        sessions: this.sessions.size,
-        activeWebSockets: this.state.getWebSockets().length
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
     }
     if (url.pathname === "/do-broadcast") {
       return await this.handleDOBroadcast(request);
-    }
-    if (url.pathname === "/broadcast-event" && request.method === "POST") {
-      const data = await request.json();
-      const { event } = data;
-      await this.broadcastEvent(event);
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { "Content-Type": "application/json" }
-      });
     }
     const upgradeHeader = request.headers.get("Upgrade");
     if (!upgradeHeader || upgradeHeader !== "websocket") {
@@ -4506,7 +4458,8 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
-// Define allowed endpoints as a class constant
+// eventId -> timestamp
+// Define allowed endpoints
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-WNAM-primary",
   // Western North America
