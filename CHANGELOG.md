@@ -1,3 +1,8 @@
+## v7.1.4 - 2025-06-15
+
+- Hotfix: support for Websocket Hibernation API
+- Hotfix: removed peer discovery interval
+
 ## v7.1.3 - 2025-06-14
 
 - Hotfix: set peer caching

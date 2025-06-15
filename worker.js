@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.3",
+  version: "7.1.4",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3975,72 +3975,63 @@ var relay_worker_default = {
 // src/durable-object.ts
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
-    this.knownPeers = /* @__PURE__ */ new Map();
     this.processedEvents = /* @__PURE__ */ new Map();
+    // eventId -> timestamp
+    this.hasDiscoveredPeers = false;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
     this.doId = crypto.randomUUID();
     this.region = "unknown";
     this.doName = "unknown";
-    this.state.blockConcurrencyWhile(async () => {
-      const stored = await this.state.storage.get(["knownPeers", "region", "doId", "doName"]);
-      if (stored.knownPeers) {
-        this.knownPeers = new Map(stored.knownPeers);
-      }
-      if (stored.region) {
-        this.region = stored.region;
-      }
-      if (stored.doId) {
-        this.doId = stored.doId;
-      }
-      if (stored.doName) {
-        this.doName = stored.doName;
+    this.processedEvents = /* @__PURE__ */ new Map();
+    this.initializePeerDiscovery();
+  }
+  async initializePeerDiscovery() {
+    if (this.hasDiscoveredPeers) return;
+    this.hasDiscoveredPeers = true;
+    console.log(`DO ${this.doName} starting one-time peer discovery...`);
+    const discoveryPromises = _RelayWebSocket.ALLOWED_ENDPOINTS.map(async (endpoint) => {
+      if (endpoint === this.doName) return;
+      try {
+        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
+        const locationHint = _RelayWebSocket.ENDPOINT_HINTS[endpoint] || "auto";
+        const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
+        const url = new URL("https://internal/health");
+        url.searchParams.set("doName", endpoint);
+        const response = await stub.fetch(new Request(url.toString()));
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`DO ${this.doName} discovered peer ${endpoint} (hint: ${locationHint}): ${JSON.stringify(data)}`);
+        }
+      } catch (error) {
+        console.error(`DO ${this.doName} failed to discover ${endpoint}:`, error);
       }
     });
-    this.state.storage.setAlarm(Date.now() + 36e5);
-  }
-  async alarm() {
-    const fiveMinutesAgo = Date.now() - 3e5;
-    for (const [eventId, timestamp] of this.processedEvents) {
-      if (timestamp < fiveMinutesAgo) {
-        this.processedEvents.delete(eventId);
-      }
-    }
-    const tenMinutesAgo = Date.now() - 6e5;
-    for (const [peerId, peerInfo] of this.knownPeers) {
-      if (peerInfo.lastSeen < tenMinutesAgo) {
-        this.knownPeers.delete(peerId);
-      }
-    }
-    await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
-    this.state.storage.setAlarm(Date.now() + 36e5);
+    await Promise.allSettled(discoveryPromises);
+    console.log(`DO ${this.doName} completed peer discovery. All ${_RelayWebSocket.ALLOWED_ENDPOINTS.length} endpoints initialized.`);
   }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
     if (urlDoName && urlDoName !== "unknown" && _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
       this.doName = urlDoName;
-      await this.state.storage.put("doName", this.doName);
+      if (!this.hasDiscoveredPeers) {
+        await this.initializePeerDiscovery();
+      }
     }
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         status: "ok",
         doName: this.doName,
         sessions: this.sessions.size,
-        peers: this.knownPeers.size
+        activeWebSockets: this.state.getWebSockets().length
       }), {
         headers: { "Content-Type": "application/json" }
       });
     }
     if (url.pathname === "/do-broadcast") {
       return await this.handleDOBroadcast(request);
-    }
-    if (url.pathname === "/discover-peers") {
-      return await this.handlePeerDiscovery(request);
-    }
-    if (url.pathname === "/exchange-peers") {
-      return await this.handlePeerExchange(request);
     }
     if (url.pathname === "/broadcast-event" && request.method === "POST") {
       const data = await request.json();
@@ -4056,27 +4047,90 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     this.region = url.searchParams.get("region") || this.region || "unknown";
     const colo = url.searchParams.get("colo") || "default";
-    await this.state.storage.put({
-      region: this.region,
-      doId: this.doId,
-      doName: this.doName
-    });
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
-    await this.handleSession(server, request);
-    if (this.sessions.size === 1 && !this.peerDiscoveryInterval) {
-      await this.startPeerDiscovery();
-    }
+    const sessionId = crypto.randomUUID();
+    const host = request.headers.get("host") || url.host;
+    const attachment = {
+      sessionId,
+      subscriptions: [],
+      bookmark: "first-unconstrained",
+      host
+    };
+    server.serializeAttachment(attachment);
+    this.state.acceptWebSocket(server);
+    console.log(`New WebSocket session: ${sessionId} on DO ${this.doName}`);
     return new Response(null, {
       status: 101,
       webSocket: client
     });
   }
+  // WebSocket Hibernation API handler methods
+  async webSocketMessage(ws, message) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment) {
+      console.error("No session attachment found");
+      ws.close(1011, "Session not found");
+      return;
+    }
+    let session = this.sessions.get(attachment.sessionId);
+    if (!session) {
+      session = {
+        id: attachment.sessionId,
+        webSocket: ws,
+        subscriptions: new Map(attachment.subscriptions),
+        pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+        reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+        bookmark: attachment.bookmark,
+        host: attachment.host
+      };
+      this.sessions.set(attachment.sessionId, session);
+    }
+    try {
+      let parsedMessage;
+      if (typeof message === "string") {
+        parsedMessage = JSON.parse(message);
+      } else {
+        const decoder = new TextDecoder();
+        const text = decoder.decode(message);
+        parsedMessage = JSON.parse(text);
+      }
+      await this.handleMessage(session, parsedMessage);
+      const updatedAttachment = {
+        sessionId: session.id,
+        subscriptions: Array.from(session.subscriptions.entries()),
+        bookmark: session.bookmark,
+        host: session.host
+      };
+      ws.serializeAttachment(updatedAttachment);
+    } catch (error) {
+      console.error("Error handling message:", error);
+      if (error instanceof SyntaxError) {
+        this.sendError(ws, "Invalid JSON format");
+      } else {
+        this.sendError(ws, "Failed to process message");
+      }
+    }
+  }
+  async webSocketClose(ws, code, reason, wasClean) {
+    const attachment = ws.deserializeAttachment();
+    if (attachment) {
+      console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
+      this.sessions.delete(attachment.sessionId);
+    }
+  }
+  async webSocketError(ws, error) {
+    const attachment = ws.deserializeAttachment();
+    if (attachment) {
+      console.error(`WebSocket error for session ${attachment.sessionId}:`, error);
+      this.sessions.delete(attachment.sessionId);
+    }
+  }
   async handleDOBroadcast(request) {
     try {
       const data = await request.json();
-      const { event, sourceDoId, sourcePeers, hopCount = 0 } = data;
+      const { event, sourceDoId, hopCount = 0 } = data;
       if (hopCount > 3) {
         return new Response(JSON.stringify({ success: true, dropped: true }));
       }
@@ -4084,18 +4138,16 @@ var _RelayWebSocket = class _RelayWebSocket {
         return new Response(JSON.stringify({ success: true, duplicate: true }));
       }
       this.processedEvents.set(event.id, Date.now());
-      for (const peer of sourcePeers) {
-        const [region, doId] = peer.split(":");
-        if (doId && doId !== this.doId) {
-          this.knownPeers.set(peer, {
-            region,
-            doId,
-            lastSeen: Date.now()
-          });
-        }
-      }
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
       await this.broadcastToLocalSessions(event);
+      const fiveMinutesAgo = Date.now() - 3e5;
+      let cleaned = 0;
+      for (const [eventId, timestamp] of this.processedEvents) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedEvents.delete(eventId);
+          cleaned++;
+        }
+      }
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error("Error handling DO broadcast:", error);
@@ -4104,173 +4156,6 @@ var _RelayWebSocket = class _RelayWebSocket {
         headers: { "Content-Type": "application/json" }
       });
     }
-  }
-  async handlePeerDiscovery(request) {
-    const { doId, region } = await request.json();
-    const peerId = `${region}:${doId}`;
-    this.knownPeers.set(peerId, {
-      region,
-      doId,
-      lastSeen: Date.now()
-    });
-    console.log(`DO ${this.doName} discovered peer: ${peerId}`);
-    await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
-    return new Response(JSON.stringify({
-      success: true,
-      peers: Array.from(this.knownPeers.keys()).filter((p) => p !== peerId)
-    }), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  async handlePeerExchange(request) {
-    const { myPeers, myId } = await request.json();
-    if (myId) {
-      const [region, doId] = myId.split(":");
-      this.knownPeers.set(myId, {
-        region,
-        doId,
-        lastSeen: Date.now()
-      });
-    }
-    for (const peer of myPeers) {
-      const [region, doId] = peer.split(":");
-      if (doId && doId !== this.doId && !this.knownPeers.has(peer)) {
-        this.knownPeers.set(peer, {
-          region,
-          doId,
-          lastSeen: Date.now() - 6e4
-          // Mark as slightly old
-        });
-      }
-    }
-    console.log(`DO ${this.doName} exchanged peers, now has ${this.knownPeers.size} peers`);
-    return new Response(JSON.stringify({
-      success: true,
-      peers: Array.from(this.knownPeers.keys()).slice(0, 50)
-      // Limit response size
-    }), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  async startPeerDiscovery() {
-    console.log(`DO ${this.doName} starting peer discovery`);
-    await this.discoverPeers();
-    this.peerDiscoveryInterval = setInterval(() => {
-      this.discoverPeers().catch(console.error);
-    }, 3e5);
-  }
-  async discoverPeers() {
-    const previousPeers = new Map(this.knownPeers);
-    const discoveryEndpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
-    const discoveryPromises = discoveryEndpoints.filter((endpoint) => endpoint !== this.doName).map(async (endpoint) => {
-      try {
-        const id = this.env.RELAY_WEBSOCKET.idFromName(endpoint);
-        const stub = this.env.RELAY_WEBSOCKET.get(id);
-        const url = new URL("https://internal/exchange-peers");
-        url.searchParams.set("doName", endpoint);
-        const response = await Promise.race([
-          stub.fetch(new Request(url.toString(), {
-            method: "POST",
-            body: JSON.stringify({
-              myPeers: Array.from(this.knownPeers.keys()).slice(0, 20),
-              myId: `${this.region}:${this.doId}`
-            })
-          })),
-          new Promise(
-            (_, reject) => setTimeout(() => reject(new Error("Timeout")), 2e3)
-          )
-        ]);
-        if (response.ok) {
-          const { peers } = await response.json();
-          for (const peer of peers || []) {
-            const [region, doId] = peer.split(":");
-            if (doId && doId !== this.doId) {
-              this.knownPeers.set(peer, {
-                region,
-                doId,
-                lastSeen: Date.now()
-              });
-            }
-          }
-        }
-      } catch (error) {
-      }
-    });
-    await Promise.allSettled(discoveryPromises);
-    const staleThreshold = Date.now() - 9e5;
-    const stalePeers = [];
-    for (const [peerId, peerInfo] of this.knownPeers) {
-      if (peerInfo.lastSeen < staleThreshold) {
-        stalePeers.push(peerId);
-        this.knownPeers.delete(peerId);
-      }
-    }
-    if (stalePeers.length > 0) {
-      console.log(`Removed ${stalePeers.length} stale peers: ${stalePeers.join(", ")}`);
-    }
-    let peersChanged = false;
-    if (previousPeers.size !== this.knownPeers.size) {
-      peersChanged = true;
-    } else {
-      for (const [peerId, peerInfo] of this.knownPeers) {
-        const previousPeer = previousPeers.get(peerId);
-        if (!previousPeer || previousPeer.region !== peerInfo.region || previousPeer.doId !== peerInfo.doId) {
-          peersChanged = true;
-          break;
-        }
-      }
-    }
-    if (peersChanged) {
-      console.log(`DO ${this.doName} peers changed from ${previousPeers.size} to ${this.knownPeers.size}, updating storage`);
-      await this.state.storage.put("knownPeers", Array.from(this.knownPeers.entries()));
-    }
-    await this.state.storage.setAlarm(Date.now() + 3e5);
-  }
-  async handleSession(webSocket, request) {
-    webSocket.accept();
-    const sessionId = crypto.randomUUID();
-    const url = new URL(request.url);
-    const session = {
-      id: sessionId,
-      webSocket,
-      subscriptions: /* @__PURE__ */ new Map(),
-      pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
-      reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-      bookmark: "first-unconstrained",
-      host: request.headers.get("host") || url.host
-    };
-    this.sessions.set(sessionId, session);
-    console.log(`New WebSocket session: ${sessionId} on DO ${this.doName} (Total: ${this.sessions.size})`);
-    webSocket.addEventListener("message", async (event) => {
-      try {
-        let message;
-        if (typeof event.data === "string") {
-          message = JSON.parse(event.data);
-        } else if (event.data instanceof ArrayBuffer) {
-          const decoder = new TextDecoder();
-          const text = decoder.decode(event.data);
-          message = JSON.parse(text);
-        } else {
-          throw new Error("Unsupported message format");
-        }
-        await this.handleMessage(session, message);
-      } catch (error) {
-        console.error("Error handling message:", error);
-        if (error instanceof SyntaxError) {
-          this.sendError(webSocket, "Invalid JSON format");
-        } else {
-          this.sendError(webSocket, "Failed to process message");
-        }
-      }
-    });
-    webSocket.addEventListener("close", () => {
-      console.log(`WebSocket session closed: ${sessionId} on DO ${this.doName}`);
-      this.handleClose(sessionId);
-    });
-    webSocket.addEventListener("error", (error) => {
-      console.error(`WebSocket error for session ${sessionId} on DO ${this.doName}:`, error);
-      this.handleClose(sessionId);
-    });
   }
   async handleMessage(session, message) {
     if (!Array.isArray(message)) {
@@ -4457,14 +4342,30 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastToLocalSessions(event) {
     let broadcastCount = 0;
-    for (const [sessionId, session] of this.sessions) {
+    const activeWebSockets = this.state.getWebSockets();
+    for (const ws of activeWebSockets) {
+      const attachment = ws.deserializeAttachment();
+      if (!attachment) continue;
+      let session = this.sessions.get(attachment.sessionId);
+      if (!session) {
+        session = {
+          id: attachment.sessionId,
+          webSocket: ws,
+          subscriptions: new Map(attachment.subscriptions),
+          pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+          reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+          bookmark: attachment.bookmark,
+          host: attachment.host
+        };
+        this.sessions.set(attachment.sessionId, session);
+      }
       for (const [subscriptionId, filters] of session.subscriptions) {
         if (this.matchesFilters(event, filters)) {
           try {
-            this.sendEvent(session.webSocket, subscriptionId, event);
+            this.sendEvent(ws, subscriptionId, event);
             broadcastCount++;
           } catch (error) {
-            console.error(`Error broadcasting to session ${sessionId}, subscription ${subscriptionId}:`, error);
+            console.error(`Error broadcasting to subscription ${subscriptionId}:`, error);
           }
         }
       }
@@ -4475,10 +4376,8 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastToOtherDOs(event) {
     const broadcasts = [];
-    const processedPeers = /* @__PURE__ */ new Set();
     for (const endpoint of _RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
-      processedPeers.add(endpoint);
       broadcasts.push(this.sendToSpecificDO(endpoint, endpoint, event, 0));
     }
     const results = await Promise.allSettled(
@@ -4499,7 +4398,8 @@ var _RelayWebSocket = class _RelayWebSocket {
         throw new Error(`Invalid DO name: ${actualDoName}`);
       }
       const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
-      const stub = this.env.RELAY_WEBSOCKET.get(id);
+      const locationHint = _RelayWebSocket.ENDPOINT_HINTS[actualDoName] || "auto";
+      const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
       const url = new URL("https://internal/do-broadcast");
       url.searchParams.set("doName", actualDoName);
       return await stub.fetch(new Request(url.toString(), {
@@ -4507,8 +4407,6 @@ var _RelayWebSocket = class _RelayWebSocket {
         body: JSON.stringify({
           event,
           sourceDoId: this.doId,
-          sourcePeers: Array.from(this.knownPeers.keys()).slice(0, 20),
-          // Limit peer list size
           hopCount
         })
       }));
@@ -4547,18 +4445,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     return true;
-  }
-  handleClose(sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (session) {
-      console.log(`Cleaning up session ${sessionId} with ${session.subscriptions.size} subscriptions on DO ${this.doName}`);
-    }
-    this.sessions.delete(sessionId);
-    if (this.sessions.size === 0 && this.peerDiscoveryInterval) {
-      clearInterval(this.peerDiscoveryInterval);
-      this.peerDiscoveryInterval = void 0;
-      console.log(`Stopped peer discovery on DO ${this.doName} (no active sessions)`);
-    }
   }
   sendOK(ws, eventId, status, message) {
     try {
@@ -4600,18 +4486,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.error("Error sending EVENT:", error);
     }
   }
-  // Public methods for monitoring
-  async getStats() {
-    let totalSubscriptions = 0;
-    for (const session of this.sessions.values()) {
-      totalSubscriptions += session.subscriptions.size;
-    }
-    return {
-      sessions: this.sessions.size,
-      subscriptions: totalSubscriptions,
-      peers: this.knownPeers.size
-    };
-  }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
 // Define allowed endpoints as a class constant (all 9 location hints)
@@ -4635,6 +4509,21 @@ _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-ME-primary"
   // Middle East (redirects to nearby)
 ];
+// Map endpoints to their proper location hints
+_RelayWebSocket.ENDPOINT_HINTS = {
+  "relay-WNAM-primary": "wnam",
+  "relay-ENAM-primary": "enam",
+  "relay-WEUR-primary": "weur",
+  "relay-EEUR-primary": "eeur",
+  "relay-APAC-primary": "apac",
+  "relay-OC-primary": "oc",
+  "relay-SAM-primary": "enam",
+  // SAM redirects to ENAM
+  "relay-AFR-primary": "weur",
+  // AFR redirects to WEUR
+  "relay-ME-primary": "eeur"
+  // ME redirects to EEUR
+};
 var RelayWebSocket = _RelayWebSocket;
 export {
   RelayWebSocket,

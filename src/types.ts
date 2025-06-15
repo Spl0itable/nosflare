@@ -70,7 +70,7 @@ export interface WebSocketSession {
   pubkeyRateLimiter: RateLimiter;
   reqRateLimiter: RateLimiter;
   bookmark: string;
-  host?: string;
+  host: string;
 }
 
 export class RateLimiter {
@@ -133,39 +133,28 @@ export interface BroadcastEventRequest {
   event: NostrEvent;
 }
 
-// DO-to-DO communication types
-export interface PeerInfo {
-  region: string;
-  doId: string;
-  lastSeen: number;
-}
-
+// Simplified DO-to-DO broadcast request
 export interface DOBroadcastRequest {
   event: NostrEvent;
   sourceDoId: string;
-  sourcePeers: string[];
   hopCount?: number;
 }
 
-export interface PeerDiscoveryRequest {
-  doId: string;
-  region: string;
-}
-
-export interface PeerExchangeRequest {
-  myPeers: string[];
-  myId: string;
-}
-
+// Health check response
 export interface HealthCheckResponse {
   status: string;
+  doName: string;
   sessions: number;
-  peers: number;
+  activeWebSockets: number;
 }
 
-// Durable Object interface
+// Durable Object interface with hibernation support
 export interface DurableObject {
   fetch(request: Request): Promise<Response>;
+  // WebSocket hibernation handlers (optional)
+  webSocketMessage?(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void>;
+  webSocketClose?(ws: WebSocket, code: number, reason: string, wasClean: boolean): void | Promise<void>;
+  webSocketError?(ws: WebSocket, error: any): void | Promise<void>;
 }
 
 // Durable Object stub with location hint support
@@ -184,9 +173,13 @@ export interface DurableObjectId {
   equals(other: DurableObjectId): boolean;
 }
 
+// Extended DurableObjectState with hibernation support
 export interface DurableObjectState {
   storage: DurableObjectStorage;
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+  // WebSocket hibernation methods
+  acceptWebSocket(ws: WebSocket): void;
+  getWebSockets(): WebSocket[];
 }
 
 export interface DurableObjectStorage {
@@ -199,4 +192,12 @@ export interface DurableObjectStorage {
   setAlarm(scheduledTime: number | Date): Promise<void>;
   getAlarm(): Promise<number | null>;
   deleteAlarm(): Promise<void>;
+}
+
+// Extended WebSocket interface with hibernation attachment methods
+declare global {
+  interface WebSocket {
+    serializeAttachment(value: any): void;
+    deserializeAttachment(): any;
+  }
 }
