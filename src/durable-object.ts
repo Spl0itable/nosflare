@@ -11,12 +11,12 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
-// Session attachment data structure
+// Session attachment data structure - kept small!
 interface SessionAttachment {
   sessionId: string;
-  subscriptions: [string, NostrFilter[]][];
   bookmark: string;
   host: string;
+  // subscriptions removed to stay under 2KB limit
 }
 
 export class RelayWebSocket implements DurableObject {
@@ -102,6 +102,24 @@ export class RelayWebSocket implements DurableObject {
     console.log(`DO ${this.doName} completed peer discovery. All ${RelayWebSocket.ALLOWED_ENDPOINTS.length} endpoints initialized.`);
   }
 
+  // Storage helper methods for subscriptions
+  private async saveSubscriptions(sessionId: string, subscriptions: Map<string, NostrFilter[]>): Promise<void> {
+    const key = `subs:${sessionId}`;
+    const data = Array.from(subscriptions.entries());
+    await this.state.storage.put(key, data);
+  }
+
+  private async loadSubscriptions(sessionId: string): Promise<Map<string, NostrFilter[]>> {
+    const key = `subs:${sessionId}`;
+    const data = await this.state.storage.get<[string, NostrFilter[]][]>(key);
+    return new Map(data || []);
+  }
+
+  private async deleteSubscriptions(sessionId: string): Promise<void> {
+    const key = `subs:${sessionId}`;
+    await this.state.storage.delete(key);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -165,7 +183,6 @@ export class RelayWebSocket implements DurableObject {
     // Serialize and attach minimal session data to the WebSocket
     const attachment: SessionAttachment = {
       sessionId,
-      subscriptions: [],
       bookmark: 'first-unconstrained',
       host
     };
@@ -194,11 +211,14 @@ export class RelayWebSocket implements DurableObject {
     // Get or recreate session
     let session = this.sessions.get(attachment.sessionId);
     if (!session) {
+      // Load subscriptions from storage
+      const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+      
       // Recreate session from attachment
       session = {
         id: attachment.sessionId,
         webSocket: ws,
-        subscriptions: new Map(attachment.subscriptions),
+        subscriptions,
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
@@ -220,10 +240,9 @@ export class RelayWebSocket implements DurableObject {
 
       await this.handleMessage(session, parsedMessage);
 
-      // Update attachment with latest session state
+      // Update attachment with latest session state (no subscriptions!)
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
-        subscriptions: Array.from(session.subscriptions.entries()),
         bookmark: session.bookmark,
         host: session.host
       };
@@ -244,6 +263,9 @@ export class RelayWebSocket implements DurableObject {
     if (attachment) {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
       this.sessions.delete(attachment.sessionId);
+      
+      // Clean up stored subscriptions
+      await this.deleteSubscriptions(attachment.sessionId);
     }
   }
 
@@ -315,7 +337,7 @@ export class RelayWebSocket implements DurableObject {
           await this.handleReq(session, message);
           break;
         case 'CLOSE':
-          this.handleCloseSubscription(session, args[0]);
+          await this.handleCloseSubscription(session, args[0]);
           break;
         default:
           this.sendError(session.webSocket, `Unknown message type: ${type}`);
@@ -501,6 +523,10 @@ export class RelayWebSocket implements DurableObject {
 
     // Store subscription
     session.subscriptions.set(subscriptionId, filters);
+    
+    // Save to storage
+    await this.saveSubscriptions(session.id, session.subscriptions);
+    
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
@@ -526,7 +552,7 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  private handleCloseSubscription(session: WebSocketSession, subscriptionId: string): void {
+  private async handleCloseSubscription(session: WebSocketSession, subscriptionId: string): Promise<void> {
     if (!subscriptionId) {
       this.sendError(session.webSocket, 'Invalid subscription ID for CLOSE');
       return;
@@ -534,6 +560,9 @@ export class RelayWebSocket implements DurableObject {
 
     const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
+      // Save updated subscriptions to storage
+      await this.saveSubscriptions(session.id, session.subscriptions);
+      
       console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, 'Subscription closed');
     } else {
@@ -562,11 +591,14 @@ export class RelayWebSocket implements DurableObject {
       // Get or recreate session
       let session = this.sessions.get(attachment.sessionId);
       if (!session) {
+        // Load subscriptions from storage
+        const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+        
         // Recreate minimal session for broadcast
         session = {
           id: attachment.sessionId,
           webSocket: ws,
-          subscriptions: new Map(attachment.subscriptions),
+          subscriptions,
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,

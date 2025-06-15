@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.4",
+  version: "7.1.5",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4011,6 +4011,21 @@ var _RelayWebSocket = class _RelayWebSocket {
     await Promise.allSettled(discoveryPromises);
     console.log(`DO ${this.doName} completed peer discovery. All ${_RelayWebSocket.ALLOWED_ENDPOINTS.length} endpoints initialized.`);
   }
+  // Storage helper methods for subscriptions
+  async saveSubscriptions(sessionId, subscriptions) {
+    const key = `subs:${sessionId}`;
+    const data = Array.from(subscriptions.entries());
+    await this.state.storage.put(key, data);
+  }
+  async loadSubscriptions(sessionId) {
+    const key = `subs:${sessionId}`;
+    const data = await this.state.storage.get(key);
+    return new Map(data || []);
+  }
+  async deleteSubscriptions(sessionId) {
+    const key = `subs:${sessionId}`;
+    await this.state.storage.delete(key);
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
@@ -4054,7 +4069,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     const host = request.headers.get("host") || url.host;
     const attachment = {
       sessionId,
-      subscriptions: [],
       bookmark: "first-unconstrained",
       host
     };
@@ -4076,10 +4090,11 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     let session = this.sessions.get(attachment.sessionId);
     if (!session) {
+      const subscriptions = await this.loadSubscriptions(attachment.sessionId);
       session = {
         id: attachment.sessionId,
         webSocket: ws,
-        subscriptions: new Map(attachment.subscriptions),
+        subscriptions,
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
@@ -4099,7 +4114,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       await this.handleMessage(session, parsedMessage);
       const updatedAttachment = {
         sessionId: session.id,
-        subscriptions: Array.from(session.subscriptions.entries()),
         bookmark: session.bookmark,
         host: session.host
       };
@@ -4118,6 +4132,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (attachment) {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
       this.sessions.delete(attachment.sessionId);
+      await this.deleteSubscriptions(attachment.sessionId);
     }
   }
   async webSocketError(ws, error) {
@@ -4172,7 +4187,7 @@ var _RelayWebSocket = class _RelayWebSocket {
           await this.handleReq(session, message);
           break;
         case "CLOSE":
-          this.handleCloseSubscription(session, args[0]);
+          await this.handleCloseSubscription(session, args[0]);
           break;
         default:
           this.sendError(session.webSocket, `Unknown message type: ${type}`);
@@ -4308,6 +4323,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     session.subscriptions.set(subscriptionId, filters);
+    await this.saveSubscriptions(session.id, session.subscriptions);
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
     try {
       const result = await queryEvents(filters, session.bookmark, this.env);
@@ -4323,13 +4339,14 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.sendClosed(session.webSocket, subscriptionId, "error: could not connect to the database");
     }
   }
-  handleCloseSubscription(session, subscriptionId) {
+  async handleCloseSubscription(session, subscriptionId) {
     if (!subscriptionId) {
       this.sendError(session.webSocket, "Invalid subscription ID for CLOSE");
       return;
     }
     const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
+      await this.saveSubscriptions(session.id, session.subscriptions);
       console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, "Subscription closed");
     } else {
@@ -4348,10 +4365,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       if (!attachment) continue;
       let session = this.sessions.get(attachment.sessionId);
       if (!session) {
+        const subscriptions = await this.loadSubscriptions(attachment.sessionId);
         session = {
           id: attachment.sessionId,
           webSocket: ws,
-          subscriptions: new Map(attachment.subscriptions),
+          subscriptions,
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,

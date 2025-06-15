@@ -1,3 +1,7 @@
+## v7.1.5 - 2025-06-15
+
+- Hotfix: changed Durable Objects to be zero-latency SQLite-backed
+
 ## v7.1.4 - 2025-06-15
 
 - Hotfix: support for Websocket Hibernation API
