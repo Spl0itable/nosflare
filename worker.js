@@ -3985,7 +3985,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
-    this.initializePeerDiscovery();
   }
   async initializePeerDiscovery() {
     if (this.hasDiscoveredPeers) return;
@@ -4030,8 +4029,9 @@ var _RelayWebSocket = class _RelayWebSocket {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
     if (urlDoName && urlDoName !== "unknown" && _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      const nameChanged = this.doName !== urlDoName;
       this.doName = urlDoName;
-      if (!this.hasDiscoveredPeers) {
+      if (nameChanged && !this.hasDiscoveredPeers) {
         await this.initializePeerDiscovery();
       }
     }
@@ -4506,7 +4506,7 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
-// Define allowed endpoints as a class constant (all 9 location hints)
+// Define allowed endpoints as a class constant
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-WNAM-primary",
   // Western North America
@@ -4523,9 +4523,9 @@ _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-SAM-primary",
   // South America (redirects to enam)
   "relay-AFR-primary",
-  // Africa (redirects to nearby)
+  // Africa (redirects to weur)
   "relay-ME-primary"
-  // Middle East (redirects to nearby)
+  // Middle East (redirects to eeur)
 ];
 // Map endpoints to their proper location hints
 _RelayWebSocket.ENDPOINT_HINTS = {

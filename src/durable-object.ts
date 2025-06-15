@@ -11,12 +11,11 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
-// Session attachment data structure - kept small!
+// Session attachment data structure
 interface SessionAttachment {
   sessionId: string;
   bookmark: string;
   host: string;
-  // subscriptions removed to stay under 2KB limit
 }
 
 export class RelayWebSocket implements DurableObject {
@@ -29,7 +28,7 @@ export class RelayWebSocket implements DurableObject {
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
   private hasDiscoveredPeers: boolean = false;
 
-  // Define allowed endpoints as a class constant (all 9 location hints)
+  // Define allowed endpoints as a class constant
   private static readonly ALLOWED_ENDPOINTS = [
     'relay-WNAM-primary',  // Western North America
     'relay-ENAM-primary',  // Eastern North America
@@ -38,8 +37,8 @@ export class RelayWebSocket implements DurableObject {
     'relay-APAC-primary',  // Asia-Pacific
     'relay-OC-primary',    // Oceania
     'relay-SAM-primary',   // South America (redirects to enam)
-    'relay-AFR-primary',   // Africa (redirects to nearby)
-    'relay-ME-primary'     // Middle East (redirects to nearby)
+    'relay-AFR-primary',   // Africa (redirects to weur)
+    'relay-ME-primary'     // Middle East (redirects to eeur)
   ];
 
   // Map endpoints to their proper location hints
@@ -63,9 +62,6 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
-    
-    // Run peer discovery once on construction
-    this.initializePeerDiscovery();
   }
 
   private async initializePeerDiscovery(): Promise<void> {
@@ -126,10 +122,11 @@ export class RelayWebSocket implements DurableObject {
     // Extract and set DO name from URL if provided
     const urlDoName = url.searchParams.get('doName');
     if (urlDoName && urlDoName !== 'unknown' && RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      const nameChanged = this.doName !== urlDoName;
       this.doName = urlDoName;
       
-      // Run discovery again if we just learned our name
-      if (!this.hasDiscoveredPeers) {
+      // Run discovery only if we just learned our name for the first time
+      if (nameChanged && !this.hasDiscoveredPeers) {
         await this.initializePeerDiscovery();
       }
     }
