@@ -738,7 +738,6 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     for (const filter of filters) {
       // Check if we need to use chunked query
       const paramCount = countQueryParameters(filter);
-      console.log(`Filter parameter count: ${paramCount}`);
 
       if (paramCount > 200) { // Lower threshold for D1's limits of 255
         console.log(`Query has ${paramCount} parameters, using chunked query...`);
@@ -772,7 +771,6 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
       // Build and execute the query
       const query = buildQuery(safeFilter);
       console.log(`Executing query: ${query.sql}`);
-      console.log(`Query parameters count: ${query.params.length}`);
 
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();

@@ -16,6 +16,7 @@ interface SessionAttachment {
   sessionId: string;
   bookmark: string;
   host: string;
+  doName: string;
 }
 
 export class RelayWebSocket implements DurableObject {
@@ -118,7 +119,8 @@ export class RelayWebSocket implements DurableObject {
     const attachment: SessionAttachment = {
       sessionId,
       bookmark: 'first-unconstrained',
-      host
+      host,
+      doName: this.doName
     };
     server.serializeAttachment(attachment);
 
@@ -145,6 +147,10 @@ export class RelayWebSocket implements DurableObject {
     // Get or recreate session
     let session = this.sessions.get(attachment.sessionId);
     if (!session) {
+      // Restore DO name from attachment
+      if (attachment.doName && this.doName === 'unknown') {
+        this.doName = attachment.doName;
+      }
       // Load subscriptions from storage
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
@@ -178,7 +184,8 @@ export class RelayWebSocket implements DurableObject {
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
-        host: session.host
+        host: session.host,
+        doName: this.doName
       };
       ws.serializeAttachment(updatedAttachment);
 

@@ -3166,7 +3166,6 @@ async function queryEvents(filters, bookmark, env) {
     const eventSet = /* @__PURE__ */ new Map();
     for (const filter of filters) {
       const paramCount = countQueryParameters(filter);
-      console.log(`Filter parameter count: ${paramCount}`);
       if (paramCount > 200) {
         console.log(`Query has ${paramCount} parameters, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
@@ -3192,7 +3191,6 @@ async function queryEvents(filters, bookmark, env) {
       }
       const query = buildQuery(safeFilter);
       console.log(`Executing query: ${query.sql}`);
-      console.log(`Query parameters count: ${query.params.length}`);
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
         if (result.meta) {
@@ -4175,7 +4173,8 @@ var _RelayWebSocket = class _RelayWebSocket {
     const attachment = {
       sessionId,
       bookmark: "first-unconstrained",
-      host
+      host,
+      doName: this.doName
     };
     server.serializeAttachment(attachment);
     this.state.acceptWebSocket(server);
@@ -4195,6 +4194,9 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     let session = this.sessions.get(attachment.sessionId);
     if (!session) {
+      if (attachment.doName && this.doName === "unknown") {
+        this.doName = attachment.doName;
+      }
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
       session = {
         id: attachment.sessionId,
@@ -4220,7 +4222,8 @@ var _RelayWebSocket = class _RelayWebSocket {
       const updatedAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
-        host: session.host
+        host: session.host,
+        doName: this.doName
       };
       ws.serializeAttachment(updatedAttachment);
     } catch (error) {
