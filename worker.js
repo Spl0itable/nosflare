@@ -3076,7 +3076,6 @@ async function queryDatabaseChunked(filters, bookmark, env) {
       }
       const query = buildQuery(chunkFilter);
       try {
-        console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql).bind(...query.params).all();
         for (const row of result.results) {
           const event = {
@@ -3102,7 +3101,6 @@ async function queryDatabaseChunked(filters, bookmark, env) {
       chunkFilter.kinds = chunk;
       const query = buildQuery(chunkFilter);
       try {
-        console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql).bind(...query.params).all();
         for (const row of result.results) {
           const event = {

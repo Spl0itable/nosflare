@@ -620,7 +620,6 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
       const query = buildQuery(chunkFilter);
 
       try {
-        console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql)
           .bind(...query.params)
           .all();
@@ -654,7 +653,6 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
       const query = buildQuery(chunkFilter);
 
       try {
-        console.log(`Executing chunk query with ${query.params.length} parameters`);
         const result = await session.prepare(query.sql)
           .bind(...query.params)
           .all();
