@@ -1395,38 +1395,76 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     { name: 'relay-ME-primary', hint: 'me' }
   ];
   
-  // Map user locations to best DO location hint
+  // Comprehensive country to hint mapping
   const countryToHint: Record<string, string> = {
     // North America
-    'US': 'enam', 'CA': 'enam',
-    'MX': 'wnam',
+    'US': 'enam', 'CA': 'enam', 'MX': 'wnam',
     
-    // South America (all use 'sam' which redirects to 'enam')
+    // Central America & Caribbean (route to WNAM)
+    'GT': 'wnam', 'BZ': 'wnam', 'SV': 'wnam', 'HN': 'wnam', 'NI': 'wnam', 
+    'CR': 'wnam', 'PA': 'wnam', 'CU': 'wnam', 'DO': 'wnam', 'HT': 'wnam',
+    'JM': 'wnam', 'PR': 'wnam', 'TT': 'wnam', 'BB': 'wnam',
+    
+    // South America
     'BR': 'sam', 'AR': 'sam', 'CL': 'sam', 'CO': 'sam', 'PE': 'sam',
+    'VE': 'sam', 'EC': 'sam', 'BO': 'sam', 'PY': 'sam', 'UY': 'sam',
+    'GY': 'sam', 'SR': 'sam', 'GF': 'sam',
     
     // Western Europe
     'GB': 'weur', 'FR': 'weur', 'DE': 'weur', 'ES': 'weur', 'IT': 'weur',
-    'NL': 'weur', 'BE': 'weur', 'CH': 'weur', 'AT': 'weur',
+    'NL': 'weur', 'BE': 'weur', 'CH': 'weur', 'AT': 'weur', 'PT': 'weur',
+    'IE': 'weur', 'LU': 'weur', 'MC': 'weur', 'AD': 'weur', 'SM': 'weur',
+    'VA': 'weur', 'LI': 'weur', 'MT': 'weur',
+    
+    // Nordic countries (route to WEUR)
+    'SE': 'weur', 'NO': 'weur', 'DK': 'weur', 'FI': 'weur', 'IS': 'weur',
     
     // Eastern Europe
     'PL': 'eeur', 'RU': 'eeur', 'UA': 'eeur', 'RO': 'eeur', 'CZ': 'eeur',
-    'HU': 'eeur', 'GR': 'eeur', 'BG': 'eeur',
+    'HU': 'eeur', 'GR': 'eeur', 'BG': 'eeur', 'SK': 'eeur', 'HR': 'eeur',
+    'RS': 'eeur', 'SI': 'eeur', 'BA': 'eeur', 'AL': 'eeur', 'MK': 'eeur',
+    'ME': 'eeur', 'XK': 'eeur', 'BY': 'eeur', 'MD': 'eeur', 'LT': 'eeur',
+    'LV': 'eeur', 'EE': 'eeur', 'CY': 'eeur',
     
     // Asia-Pacific
     'JP': 'apac', 'CN': 'apac', 'KR': 'apac', 'IN': 'apac', 'SG': 'apac',
     'TH': 'apac', 'ID': 'apac', 'MY': 'apac', 'VN': 'apac', 'PH': 'apac',
+    'TW': 'apac', 'HK': 'apac', 'MO': 'apac', 'KH': 'apac', 'LA': 'apac',
+    'MM': 'apac', 'BD': 'apac', 'LK': 'apac', 'NP': 'apac', 'BT': 'apac',
+    'MV': 'apac', 'PK': 'apac', 'AF': 'apac', 'MN': 'apac', 'KP': 'apac',
+    'BN': 'apac', 'TL': 'apac', 'PG': 'apac', 'FJ': 'apac', 'SB': 'apac',
+    'VU': 'apac', 'NC': 'apac', 'PF': 'apac', 'WS': 'apac', 'TO': 'apac',
+    'KI': 'apac', 'PW': 'apac', 'MH': 'apac', 'FM': 'apac', 'NR': 'apac',
+    'TV': 'apac', 'CK': 'apac', 'NU': 'apac', 'TK': 'apac', 'GU': 'apac',
+    'MP': 'apac', 'AS': 'apac',
     
     // Oceania
     'AU': 'oc', 'NZ': 'oc',
     
-    // Middle East (uses 'me' which redirects to nearby)
+    // Middle East
     'AE': 'me', 'SA': 'me', 'IL': 'me', 'TR': 'me', 'EG': 'me',
+    'IQ': 'me', 'IR': 'me', 'SY': 'me', 'JO': 'me', 'LB': 'me',
+    'KW': 'me', 'QA': 'me', 'BH': 'me', 'OM': 'me', 'YE': 'me',
+    'PS': 'me', 'GE': 'me', 'AM': 'me', 'AZ': 'me',
     
-    // Africa (uses 'afr' which redirects to nearby)
-    'ZA': 'afr', 'NG': 'afr', 'KE': 'afr', 'MA': 'afr',
+    // Africa
+    'ZA': 'afr', 'NG': 'afr', 'KE': 'afr', 'MA': 'afr', 'TN': 'afr',
+    'DZ': 'afr', 'LY': 'afr', 'ET': 'afr', 'GH': 'afr', 'TZ': 'afr',
+    'UG': 'afr', 'SD': 'afr', 'AO': 'afr', 'MZ': 'afr', 'MG': 'afr',
+    'CM': 'afr', 'CI': 'afr', 'NE': 'afr', 'BF': 'afr', 'ML': 'afr',
+    'MW': 'afr', 'ZM': 'afr', 'SN': 'afr', 'SO': 'afr', 'TD': 'afr',
+    'ZW': 'afr', 'GN': 'afr', 'RW': 'afr', 'BJ': 'afr', 'BI': 'afr',
+    'TG': 'afr', 'SL': 'afr', 'LR': 'afr', 'MR': 'afr', 'CF': 'afr',
+    'ER': 'afr', 'GM': 'afr', 'BW': 'afr', 'NA': 'afr', 'GA': 'afr',
+    'LS': 'afr', 'GW': 'afr', 'GQ': 'afr', 'MU': 'afr', 'SZ': 'afr',
+    'DJ': 'afr', 'KM': 'afr', 'CV': 'afr', 'SC': 'afr', 'ST': 'afr',
+    'SS': 'afr', 'EH': 'afr', 'CG': 'afr', 'CD': 'afr',
+    
+    // Central Asia (route to APAC)
+    'KZ': 'apac', 'UZ': 'apac', 'TM': 'apac', 'TJ': 'apac', 'KG': 'apac',
   };
   
-  // US state-level routing - Use FULL STATE NAMES not codes!
+  // US state-level routing
   const usStateToHint: Record<string, string> = {
     // Western states -> WNAM
     'California': 'wnam', 'Oregon': 'wnam', 'Washington': 'wnam', 'Nevada': 'wnam', 'Arizona': 'wnam',
@@ -1441,7 +1479,10 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'Alabama': 'enam', 'Mississippi': 'enam', 'Louisiana': 'enam', 'Arkansas': 'enam', 'Missouri': 'enam',
     'Iowa': 'enam', 'Minnesota': 'enam', 'Wisconsin': 'enam', 'Indiana': 'enam', 'Kentucky': 'enam',
     'West Virginia': 'enam', 'Delaware': 'enam', 'Oklahoma': 'enam', 'Kansas': 'enam', 'Nebraska': 'enam',
-    'South Dakota': 'enam', 'North Dakota': 'enam'
+    'South Dakota': 'enam', 'North Dakota': 'enam',
+    
+    // DC
+    'District of Columbia': 'enam',
   };
   
   // Continent to hint fallback
@@ -1456,11 +1497,17 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   
   // Determine best hint
   let bestHint: string;
+  
+  // Only check US states if country is actually US
   if (country === 'US' && region && region !== 'unknown') {
     bestHint = usStateToHint[region] || 'enam';
   } else {
+    // First try country mapping, then continent fallback
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
+  
+  // Debug logging to understand routing decision
+  console.log(`Routing decision: country=${country} -> ${countryToHint[country]}, continent=${continent} -> ${continentToHint[continent]}, bestHint=${bestHint}`);
   
   // Find the primary endpoint based on hint
   const primaryEndpoint = ALL_ENDPOINTS.find(ep => ep.hint === bestHint) || ALL_ENDPOINTS[1]; // Default to ENAM
@@ -1477,18 +1524,10 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
       const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
       
-      const testResponse = await Promise.race([
-        stub.fetch(new Request('https://internal/health')),
-        new Promise<Response>((_, reject) => 
-          setTimeout(() => reject(new Error('Timeout')), 1000)
-        )
-      ]);
-      
-      if (testResponse.ok) {
-        console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
-        // @ts-ignore
-        return { stub, doName: endpoint.name };
-      }
+      // Remove health check - DOs will be created on demand
+      console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
+      // @ts-ignore
+      return { stub, doName: endpoint.name };
     } catch (error) {
       console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
@@ -1498,6 +1537,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   const fallback = ALL_ENDPOINTS[1]; // ENAM
   const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
   const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
+  console.log(`Fallback to DO: ${fallback.name} (hint: ${fallback.hint})`);
   // @ts-ignore
   return { stub, doName: fallback.name };
 }

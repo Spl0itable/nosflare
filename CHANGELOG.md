@@ -1,3 +1,7 @@
+## v7.1.6 - 2025-06-16
+
+- Hotfix: included almost all country ISO codes for better Durable Object mesh network routing
+
 ## v7.1.5 - 2025-06-15
 
 - Hotfix: changed Durable Objects to be zero-latency SQLite-backed

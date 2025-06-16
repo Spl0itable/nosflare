@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.5",
+  version: "7.1.6",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3781,12 +3781,35 @@ async function getOptimalDO(cf, env, url) {
     "US": "enam",
     "CA": "enam",
     "MX": "wnam",
-    // South America (all use 'sam' which redirects to 'enam')
+    // Central America & Caribbean (route to WNAM)
+    "GT": "wnam",
+    "BZ": "wnam",
+    "SV": "wnam",
+    "HN": "wnam",
+    "NI": "wnam",
+    "CR": "wnam",
+    "PA": "wnam",
+    "CU": "wnam",
+    "DO": "wnam",
+    "HT": "wnam",
+    "JM": "wnam",
+    "PR": "wnam",
+    "TT": "wnam",
+    "BB": "wnam",
+    // South America
     "BR": "sam",
     "AR": "sam",
     "CL": "sam",
     "CO": "sam",
     "PE": "sam",
+    "VE": "sam",
+    "EC": "sam",
+    "BO": "sam",
+    "PY": "sam",
+    "UY": "sam",
+    "GY": "sam",
+    "SR": "sam",
+    "GF": "sam",
     // Western Europe
     "GB": "weur",
     "FR": "weur",
@@ -3797,6 +3820,21 @@ async function getOptimalDO(cf, env, url) {
     "BE": "weur",
     "CH": "weur",
     "AT": "weur",
+    "PT": "weur",
+    "IE": "weur",
+    "LU": "weur",
+    "MC": "weur",
+    "AD": "weur",
+    "SM": "weur",
+    "VA": "weur",
+    "LI": "weur",
+    "MT": "weur",
+    // Nordic countries (route to WEUR)
+    "SE": "weur",
+    "NO": "weur",
+    "DK": "weur",
+    "FI": "weur",
+    "IS": "weur",
     // Eastern Europe
     "PL": "eeur",
     "RU": "eeur",
@@ -3806,6 +3844,21 @@ async function getOptimalDO(cf, env, url) {
     "HU": "eeur",
     "GR": "eeur",
     "BG": "eeur",
+    "SK": "eeur",
+    "HR": "eeur",
+    "RS": "eeur",
+    "SI": "eeur",
+    "BA": "eeur",
+    "AL": "eeur",
+    "MK": "eeur",
+    "ME": "eeur",
+    "XK": "eeur",
+    "BY": "eeur",
+    "MD": "eeur",
+    "LT": "eeur",
+    "LV": "eeur",
+    "EE": "eeur",
+    "CY": "eeur",
     // Asia-Pacific
     "JP": "apac",
     "CN": "apac",
@@ -3817,20 +3870,127 @@ async function getOptimalDO(cf, env, url) {
     "MY": "apac",
     "VN": "apac",
     "PH": "apac",
+    "TW": "apac",
+    "HK": "apac",
+    "MO": "apac",
+    "KH": "apac",
+    "LA": "apac",
+    "MM": "apac",
+    "BD": "apac",
+    "LK": "apac",
+    "NP": "apac",
+    "BT": "apac",
+    "MV": "apac",
+    "PK": "apac",
+    "AF": "apac",
+    "MN": "apac",
+    "KP": "apac",
+    "BN": "apac",
+    "TL": "apac",
+    "PG": "apac",
+    "FJ": "apac",
+    "SB": "apac",
+    "VU": "apac",
+    "NC": "apac",
+    "PF": "apac",
+    "WS": "apac",
+    "TO": "apac",
+    "KI": "apac",
+    "PW": "apac",
+    "MH": "apac",
+    "FM": "apac",
+    "NR": "apac",
+    "TV": "apac",
+    "CK": "apac",
+    "NU": "apac",
+    "TK": "apac",
+    "GU": "apac",
+    "MP": "apac",
+    "AS": "apac",
     // Oceania
     "AU": "oc",
     "NZ": "oc",
-    // Middle East (uses 'me' which redirects to nearby)
+    // Middle East
     "AE": "me",
     "SA": "me",
     "IL": "me",
     "TR": "me",
     "EG": "me",
-    // Africa (uses 'afr' which redirects to nearby)
+    "IQ": "me",
+    "IR": "me",
+    "SY": "me",
+    "JO": "me",
+    "LB": "me",
+    "KW": "me",
+    "QA": "me",
+    "BH": "me",
+    "OM": "me",
+    "YE": "me",
+    "PS": "me",
+    "GE": "me",
+    "AM": "me",
+    "AZ": "me",
+    // Africa
     "ZA": "afr",
     "NG": "afr",
     "KE": "afr",
-    "MA": "afr"
+    "MA": "afr",
+    "TN": "afr",
+    "DZ": "afr",
+    "LY": "afr",
+    "ET": "afr",
+    "GH": "afr",
+    "TZ": "afr",
+    "UG": "afr",
+    "SD": "afr",
+    "AO": "afr",
+    "MZ": "afr",
+    "MG": "afr",
+    "CM": "afr",
+    "CI": "afr",
+    "NE": "afr",
+    "BF": "afr",
+    "ML": "afr",
+    "MW": "afr",
+    "ZM": "afr",
+    "SN": "afr",
+    "SO": "afr",
+    "TD": "afr",
+    "ZW": "afr",
+    "GN": "afr",
+    "RW": "afr",
+    "BJ": "afr",
+    "BI": "afr",
+    "TG": "afr",
+    "SL": "afr",
+    "LR": "afr",
+    "MR": "afr",
+    "CF": "afr",
+    "ER": "afr",
+    "GM": "afr",
+    "BW": "afr",
+    "NA": "afr",
+    "GA": "afr",
+    "LS": "afr",
+    "GW": "afr",
+    "GQ": "afr",
+    "MU": "afr",
+    "SZ": "afr",
+    "DJ": "afr",
+    "KM": "afr",
+    "CV": "afr",
+    "SC": "afr",
+    "ST": "afr",
+    "SS": "afr",
+    "EH": "afr",
+    "CG": "afr",
+    "CD": "afr",
+    // Central Asia (route to APAC)
+    "KZ": "apac",
+    "UZ": "apac",
+    "TM": "apac",
+    "TJ": "apac",
+    "KG": "apac"
   };
   const usStateToHint = {
     // Western states -> WNAM
@@ -3884,7 +4044,9 @@ async function getOptimalDO(cf, env, url) {
     "Kansas": "enam",
     "Nebraska": "enam",
     "South Dakota": "enam",
-    "North Dakota": "enam"
+    "North Dakota": "enam",
+    // DC
+    "District of Columbia": "enam"
   };
   const continentToHint = {
     "NA": "enam",
@@ -3900,6 +4062,7 @@ async function getOptimalDO(cf, env, url) {
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
+  console.log(`Routing decision: country=${country} -> ${countryToHint[country]}, continent=${continent} -> ${continentToHint[continent]}, bestHint=${bestHint}`);
   const primaryEndpoint = ALL_ENDPOINTS.find((ep) => ep.hint === bestHint) || ALL_ENDPOINTS[1];
   const orderedEndpoints = [
     primaryEndpoint,
@@ -3909,16 +4072,8 @@ async function getOptimalDO(cf, env, url) {
     try {
       const id2 = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: endpoint.hint });
-      const testResponse = await Promise.race([
-        stub2.fetch(new Request("https://internal/health")),
-        new Promise(
-          (_, reject) => setTimeout(() => reject(new Error("Timeout")), 1e3)
-        )
-      ]);
-      if (testResponse.ok) {
-        console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
-        return { stub: stub2, doName: endpoint.name };
-      }
+      console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
+      return { stub: stub2, doName: endpoint.name };
     } catch (error) {
       console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
@@ -3926,6 +4081,7 @@ async function getOptimalDO(cf, env, url) {
   const fallback = ALL_ENDPOINTS[1];
   const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
   const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
+  console.log(`Fallback to DO: ${fallback.name} (hint: ${fallback.hint})`);
   return { stub, doName: fallback.name };
 }
 __name(getOptimalDO, "getOptimalDO");
