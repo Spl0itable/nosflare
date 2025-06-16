@@ -1521,7 +1521,6 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
       const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
       
-      // Remove health check - DOs will be created on demand
       console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
       // @ts-ignore
       return { stub, doName: endpoint.name };
