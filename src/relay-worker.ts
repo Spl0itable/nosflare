@@ -1495,7 +1495,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'OC': 'oc'
   };
   
-  // Determine best hint
+  // Determine best hint 
   let bestHint: string;
   
   // Only check US states if country is actually US
@@ -1505,9 +1505,6 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     // First try country mapping, then continent fallback
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
-  
-  // Debug logging to understand routing decision
-  console.log(`Routing decision: country=${country} -> ${countryToHint[country]}, continent=${continent} -> ${continentToHint[continent]}, bestHint=${bestHint}`);
   
   // Find the primary endpoint based on hint
   const primaryEndpoint = ALL_ENDPOINTS.find(ep => ep.hint === bestHint) || ALL_ENDPOINTS[1]; // Default to ENAM

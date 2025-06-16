@@ -4062,7 +4062,6 @@ async function getOptimalDO(cf, env, url) {
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
-  console.log(`Routing decision: country=${country} -> ${countryToHint[country]}, continent=${continent} -> ${continentToHint[continent]}, bestHint=${bestHint}`);
   const primaryEndpoint = ALL_ENDPOINTS.find((ep) => ep.hint === bestHint) || ALL_ENDPOINTS[1];
   const orderedEndpoints = [
     primaryEndpoint,
