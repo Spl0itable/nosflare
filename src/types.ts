@@ -137,7 +137,6 @@ export interface BroadcastEventRequest {
 export interface DOBroadcastRequest {
   event: NostrEvent;
   sourceDoId: string;
-  hopCount?: number;
 }
 
 // Health check response

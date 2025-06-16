@@ -4252,15 +4252,12 @@ var _RelayWebSocket = class _RelayWebSocket {
   async handleDOBroadcast(request) {
     try {
       const data = await request.json();
-      const { event, sourceDoId, hopCount = 0 } = data;
-      if (hopCount > 3) {
-        return new Response(JSON.stringify({ success: true, dropped: true }));
-      }
+      const { event, sourceDoId } = data;
       if (this.processedEvents.has(event.id)) {
         return new Response(JSON.stringify({ success: true, duplicate: true }));
       }
       this.processedEvents.set(event.id, Date.now());
-      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
+      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
       await this.broadcastToLocalSessions(event);
       const fiveMinutesAgo = Date.now() - 3e5;
       let cleaned = 0;
@@ -4503,7 +4500,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     const broadcasts = [];
     for (const endpoint of _RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
-      broadcasts.push(this.sendToSpecificDO(endpoint, endpoint, event, 0));
+      broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
     const results = await Promise.allSettled(
       broadcasts.map((p) => Promise.race([
@@ -4516,23 +4513,21 @@ var _RelayWebSocket = class _RelayWebSocket {
     const successful = results.filter((r) => r.status === "fulfilled").length;
     console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
-  async sendToSpecificDO(region, doName, event, hopCount) {
+  async sendToSpecificDO(doName, event) {
     try {
-      const actualDoName = _RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName) ? doName : `relay-${region.split("-")[0]}-${region.split("-")[1]}-primary`;
-      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
-        throw new Error(`Invalid DO name: ${actualDoName}`);
+      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
+        throw new Error(`Invalid DO name: ${doName}`);
       }
-      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
-      const locationHint = _RelayWebSocket.ENDPOINT_HINTS[actualDoName] || "auto";
+      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
+      const locationHint = _RelayWebSocket.ENDPOINT_HINTS[doName] || "auto";
       const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
       const url = new URL("https://internal/do-broadcast");
-      url.searchParams.set("doName", actualDoName);
+      url.searchParams.set("doName", doName);
       return await stub.fetch(new Request(url.toString(), {
         method: "POST",
         body: JSON.stringify({
           event,
-          sourceDoId: this.doId,
-          hopCount
+          sourceDoId: this.doId
         })
       }));
     } catch (error) {

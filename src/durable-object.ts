@@ -1,4 +1,4 @@
-import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, BroadcastEventRequest, DOBroadcastRequest } from './types';
+import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcastRequest } from './types';
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
@@ -214,12 +214,7 @@ export class RelayWebSocket implements DurableObject {
   private async handleDOBroadcast(request: Request): Promise<Response> {
     try {
       const data: DOBroadcastRequest = await request.json();
-      const { event, sourceDoId, hopCount = 0 } = data;
-
-      // Prevent infinite loops
-      if (hopCount > 3) {
-        return new Response(JSON.stringify({ success: true, dropped: true }));
-      }
+      const { event, sourceDoId } = data;
 
       // Prevent duplicate processing
       if (this.processedEvents.has(event.id)) {
@@ -228,7 +223,7 @@ export class RelayWebSocket implements DurableObject {
 
       this.processedEvents.set(event.id, Date.now());
 
-      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId} (hop ${hopCount})`);
+      console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
 
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
@@ -565,7 +560,7 @@ export class RelayWebSocket implements DurableObject {
     for (const endpoint of RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
 
-      broadcasts.push(this.sendToSpecificDO(endpoint, endpoint, event, 0));
+      broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
 
     // Execute broadcasts in parallel with timeout
@@ -582,32 +577,26 @@ export class RelayWebSocket implements DurableObject {
     console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
 
-  private async sendToSpecificDO(region: string, doName: string, event: NostrEvent, hopCount: number): Promise<Response> {
+  private async sendToSpecificDO(doName: string, event: NostrEvent): Promise<Response> {
     try {
       // Ensure we're only using allowed endpoints
-      const actualDoName = RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)
-        ? doName
-        : `relay-${region.split('-')[0]}-${region.split('-')[1]}-primary`;
-
-      // Double-check it's in our allowed list
-      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(actualDoName)) {
-        throw new Error(`Invalid DO name: ${actualDoName}`);
+      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
+        throw new Error(`Invalid DO name: ${doName}`);
       }
 
-      const id = this.env.RELAY_WEBSOCKET.idFromName(actualDoName);
-      const locationHint = RelayWebSocket.ENDPOINT_HINTS[actualDoName] || 'auto';
+      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
+      const locationHint = RelayWebSocket.ENDPOINT_HINTS[doName] || 'auto';
       const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
 
       // Include the target DO name in the URL
       const url = new URL('https://internal/do-broadcast');
-      url.searchParams.set('doName', actualDoName);
+      url.searchParams.set('doName', doName);
 
       return await stub.fetch(new Request(url.toString(), {
         method: 'POST',
         body: JSON.stringify({
           event,
-          sourceDoId: this.doId,
-          hopCount
+          sourceDoId: this.doId
         } as DOBroadcastRequest)
       }));
     } catch (error) {
