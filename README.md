@@ -32,7 +32,7 @@ Or, continue below to manually deploy Nosflare...
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers paid plan to enable D1 database and Durable Objects.
+- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database and Durable Objects.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
 - (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
 
@@ -92,6 +92,60 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 8. Save and deploy the relay worker. Visit the relay URL through HTTP request (from browser) to the landing page. This will trigger the database initialization to build the necessary database tables.
 9. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
 10. (Optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
+
+## Cost Analysis & Pricing
+
+Nosflare is serverless and operates on Cloudflare's usage-based pricing model - **you only pay for what you use**. This makes it extremely cost-effective compared to traditional server-based relays that charge fixed monthly fees regardless of usage.
+
+### Pricing Components
+
+**Base Requirements:**
+- Workers Paid Plan: **$5/month minimum**
+- Includes generous free tiers before any additional charges
+
+**Included Monthly Allowances:**
+- 10 million Worker requests
+- 30 million CPU milliseconds 
+- 1 million Durable Object requests
+- 400,000 GB-seconds of Durable Object duration
+- 25 billion D1 database rows read
+- 50 million D1 database rows written
+- 5 GB D1 storage
+
+### Real-World Cost Examples
+
+| Relay Size | Users | Events/Month | Nosflare Cost | Traditional VPS | **You Save** |
+|------------|-------|--------------|---------------|-----------------|--------------|
+| **Small** | 100 | 1M | **$5/mo** | $20-40/mo | 75-87% |
+| **Medium** | 1,000 | 10M | **$15/mo** | $80-150/mo | 81-90% |
+| **Large** | 10,000 | 100M | **$73/mo** | $300-500/mo | 76-85% |
+| **Enterprise** | 100,000 | 1B | **$650/mo** | $3,000-5,000/mo | 78-87% |
+
+### Cost Advantages vs Traditional Hosting
+
+| Traditional Relay Costs | Nosflare | Savings |
+|------------------------|----------|---------|
+| Server rental: $200/mo | Included | $200 |
+| Bandwidth (1TB): $50/mo | Free | $50 |
+| CDN service: $100/mo | Built-in | $100 |
+| Backup service: $20/mo | Automatic | $20 |
+| DevOps time: $$$$ | Zero maintenance | Priceless |
+| **Total: $370+/mo** | **$5-73/mo** | **90%+** |
+
+### Start Free
+
+Test Nosflare extensively on the **Workers Free plan**:
+- 100,000 requests/day
+- 100,000 Durable Object requests/day
+- 5 million D1 rows read/day
+- 5 GB total storage
+- Perfect for development and testing
+
+---
+
+**Bottom Line**: Nosflare typically costs **90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
+
+View detailed pricing → [Workers]](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
 
 ## Migration
 
