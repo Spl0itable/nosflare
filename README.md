@@ -158,8 +158,6 @@ Test Nosflare extensively on the **Workers Free plan**:
 - 10 GB R2 storage
 - Perfect for development and testing
 
----
-
 Nosflare typically costs **75-90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
 
 View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/), [R2 storage](https://developers.cloudflare.com/r2/pricing/)
