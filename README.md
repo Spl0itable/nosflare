@@ -100,7 +100,7 @@ Nosflare is serverless and operates on Cloudflare's usage-based pricing model - 
 ### Pricing Components
 
 **Base Requirements:**
-- Workers Paid Plan: **$5/month minimum**
+- Workers Paid Plan (recommended): **$5/month minimum**
 - Includes generous free tiers before any additional charges
 
 **Included Monthly Allowances:**
@@ -143,9 +143,9 @@ Test Nosflare extensively on the **Workers Free plan**:
 
 ---
 
-**Bottom Line**: Nosflare typically costs **90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
+Nosflare typically costs **90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
 
-View detailed pricing → [Workers]](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
+View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
 
 ## Migration
 
