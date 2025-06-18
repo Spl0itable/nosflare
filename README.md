@@ -112,7 +112,7 @@ Nosflare is serverless and operates on Cloudflare's usage-based pricing model - 
 
 ### Real-World Cost Examples
 
-| Relay Size | Users | Events/Month | Nosflare Cost | Traditional VPS | **You Save** |
+| Relay Size | Users/Concurrent | Events/Month | Nosflare Cost | Traditional VPS | **You Save** |
 |------------|-------|--------------|---------------|-----------------|--------------|
 | **Small** | 100 | 1M | **$5/mo** | $20-40/mo | 75-87% |
 | **Medium** | 1,000 | 10M | **$15/mo** | $80-150/mo | 81-90% |
