@@ -2728,7 +2728,7 @@ __name(shouldCheckForDuplicates, "shouldCheckForDuplicates");
 async function hasPaidForRelay(pubkey, env) {
   if (!PAY_TO_RELAY_ENABLED2) return true;
   try {
-    const session = env.relayDb.withSession("first-unconstrained");
+    const session = env.RELAY_DATABASE.withSession("first-unconstrained");
     const result = await session.prepare(
       "SELECT pubkey FROM paid_pubkeys WHERE pubkey = ? LIMIT 1"
     ).bind(pubkey).first();
@@ -2741,7 +2741,7 @@ async function hasPaidForRelay(pubkey, env) {
 __name(hasPaidForRelay, "hasPaidForRelay");
 async function savePaidPubkey(pubkey, env) {
   try {
-    const session = env.relayDb.withSession("first-primary");
+    const session = env.RELAY_DATABASE.withSession("first-primary");
     await session.prepare(`
       INSERT INTO paid_pubkeys (pubkey, paid_at, amount_sats)
       VALUES (?, ?, ?)
@@ -2896,7 +2896,7 @@ async function validateNIP05(nip05Address, pubkey) {
 __name(validateNIP05, "validateNIP05");
 async function processEvent(event, sessionId, env) {
   try {
-    const existingEvent = await env.relayDb.withSession("first-unconstrained").prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
+    const existingEvent = await env.RELAY_DATABASE.withSession("first-unconstrained").prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       console.log(`Duplicate event detected: ${event.id}`);
       return { success: false, message: "duplicate: already have this event" };
@@ -2921,7 +2921,7 @@ async function processEvent(event, sessionId, env) {
 __name(processEvent, "processEvent");
 async function saveEventToD1(event, env) {
   try {
-    const session = env.relayDb.withSession("first-primary");
+    const session = env.RELAY_DATABASE.withSession("first-primary");
     if (shouldCheckForDuplicates(event.kind)) {
       const contentHash = await hashContent(event);
       const duplicateCheck = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
@@ -2974,7 +2974,7 @@ async function processDeletionEvent(event, env) {
   if (deletedEventIds.length === 0) {
     return { success: true, message: "No events to delete" };
   }
-  const session = env.relayDb.withSession("first-primary");
+  const session = env.RELAY_DATABASE.withSession("first-primary");
   let deletedCount = 0;
   const errors = [];
   for (const eventId of deletedEventIds) {
@@ -3037,7 +3037,7 @@ function chunkArray(array, chunkSize) {
 }
 __name(chunkArray, "chunkArray");
 async function queryDatabaseChunked(filters, bookmark, env) {
-  const session = env.relayDb.withSession(bookmark);
+  const session = env.RELAY_DATABASE.withSession(bookmark);
   const allEvents = /* @__PURE__ */ new Map();
   const CHUNK_SIZE = 50;
   const baseFilter = { ...filters };
@@ -3164,7 +3164,7 @@ __name(queryDatabaseChunked, "queryDatabaseChunked");
 async function queryEvents(filters, bookmark, env) {
   try {
     console.log(`Processing query with ${filters.length} filters and bookmark: ${bookmark}`);
-    const session = env.relayDb.withSession(bookmark);
+    const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = /* @__PURE__ */ new Map();
     for (const filter of filters) {
       const paramCount = countQueryParameters(filter);
@@ -4672,7 +4672,7 @@ var relay_worker_default = {
           return handleRelayInfoRequest(request);
         } else {
           ctx.waitUntil(
-            initializeDatabase(env.relayDb).catch((e) => console.error("DB init error:", e))
+            initializeDatabase(env.RELAY_DATABASE).catch((e) => console.error("DB init error:", e))
           );
           return serveLandingPage();
         }
@@ -4692,7 +4692,7 @@ var relay_worker_default = {
   async scheduled(event, env, ctx) {
     console.log("Running scheduled archive process...");
     try {
-      await archiveOldEvents(env.relayDb, env.EVENT_ARCHIVE);
+      await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log("Archive process completed successfully");
     } catch (error) {
       console.error("Archive process failed:", error);

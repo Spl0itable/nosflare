@@ -187,7 +187,7 @@ async function hasPaidForRelay(pubkey: string, env: Env): Promise<boolean> {
   if (!PAY_TO_RELAY_ENABLED) return true;
 
   try {
-    const session = env.relayDb.withSession('first-unconstrained');
+    const session = env.RELAY_DATABASE.withSession('first-unconstrained');
     const result = await session.prepare(
       "SELECT pubkey FROM paid_pubkeys WHERE pubkey = ? LIMIT 1"
     ).bind(pubkey).first();
@@ -200,7 +200,7 @@ async function hasPaidForRelay(pubkey: string, env: Env): Promise<boolean> {
 
 async function savePaidPubkey(pubkey: string, env: Env): Promise<boolean> {
   try {
-    const session = env.relayDb.withSession('first-primary');
+    const session = env.RELAY_DATABASE.withSession('first-primary');
     await session.prepare(`
       INSERT INTO paid_pubkeys (pubkey, paid_at, amount_sats)
       VALUES (?, ?, ?)
@@ -394,7 +394,7 @@ async function validateNIP05(nip05Address: string, pubkey: string): Promise<bool
 async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string }> {
   try {
     // Check cache for duplicate event ID
-    const existingEvent = await env.relayDb.withSession('first-unconstrained')
+    const existingEvent = await env.RELAY_DATABASE.withSession('first-unconstrained')
       .prepare("SELECT id FROM events WHERE id = ? LIMIT 1")
       .bind(event.id)
       .first();
@@ -430,7 +430,7 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
 
 async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   try {
-    const session = env.relayDb.withSession('first-primary');
+    const session = env.RELAY_DATABASE.withSession('first-primary');
 
     // Check for duplicate content (only if anti-spam is enabled)
     if (shouldCheckForDuplicates(event.kind)) {
@@ -503,7 +503,7 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
     return { success: true, message: "No events to delete" };
   }
 
-  const session = env.relayDb.withSession('first-primary');
+  const session = env.RELAY_DATABASE.withSession('first-primary');
   let deletedCount = 0;
   const errors: string[] = [];
 
@@ -581,7 +581,7 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 
 // Helper function to handle chunked queries
 async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
-  const session = env.relayDb.withSession(bookmark);
+  const session = env.RELAY_DATABASE.withSession(bookmark);
   const allEvents = new Map<string, NostrEvent>();
 
   // Use smaller chunk size for D1's limits
@@ -750,7 +750,7 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
 async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
   try {
     console.log(`Processing query with ${filters.length} filters and bookmark: ${bookmark}`);
-    const session = env.relayDb.withSession(bookmark);
+    const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = new Map<string, NostrEvent>();
 
     for (const filter of filters) {
@@ -2385,7 +2385,7 @@ export default {
         } else {
           // Initialize database in background
           ctx.waitUntil(
-            initializeDatabase(env.relayDb)
+            initializeDatabase(env.RELAY_DATABASE)
               .catch(e => console.error("DB init error:", e))
           );
           return serveLandingPage();
@@ -2408,7 +2408,7 @@ export default {
     console.log('Running scheduled archive process...');
     
     try {
-      await archiveOldEvents(env.relayDb, env.EVENT_ARCHIVE);
+      await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
     } catch (error) {
       console.error('Archive process failed:', error);

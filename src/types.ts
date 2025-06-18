@@ -53,7 +53,7 @@ export interface QueryResult {
 
 // Worker environment type
 export interface Env {
-  relayDb: D1Database;
+  RELAY_DATABASE: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
   EVENT_ARCHIVE: R2Bucket;
 }

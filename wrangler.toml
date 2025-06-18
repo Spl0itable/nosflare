@@ -11,7 +11,7 @@ class_name = "RelayWebSocket"
 # D1 Database binding
 # Important! Change name and id settings to your own
 [[d1_databases]]
-binding = "relayDb"
+binding = "RELAY_DATABASE"
 database_name = "nostr-relay"
 database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 
