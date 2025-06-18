@@ -97,8 +97,6 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 
 Nosflare is serverless and operates on Cloudflare's usage-based pricing model - **you only pay for what you use**. This makes it extremely cost-effective compared to traditional server-based relays that charge fixed monthly fees regardless of usage.
 
-### Pricing Components
-
 **Base Requirements:**
 - Workers Paid Plan (recommended): **$5/month minimum**
 - Includes generous free tiers before any additional charges
