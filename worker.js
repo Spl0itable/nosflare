@@ -3539,6 +3539,10 @@ __name(archiveOldEvents, "archiveOldEvents");
 async function queryArchive(filter, hotDataCutoff, r2) {
   const results = [];
   const processedEventIds = /* @__PURE__ */ new Set();
+  if (filter.since && filter.since >= hotDataCutoff) {
+    console.log("Archive query skipped - filter.since is newer than archive cutoff");
+    return results;
+  }
   let manifest = null;
   try {
     const manifestObj = await r2.get("manifest.json");
@@ -3564,10 +3568,23 @@ async function queryArchive(filter, hotDataCutoff, r2) {
         const obj = await r2.get(key);
         if (obj) {
           const event = JSON.parse(await obj.text());
-          if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
-          if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+          if (event.created_at >= hotDataCutoff) continue;
           if (filter.since && event.created_at < filter.since) continue;
           if (filter.until && event.created_at > filter.until) continue;
+          if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+          if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+          let matchesTags = true;
+          for (const [key2, values] of Object.entries(filter)) {
+            if (key2.startsWith("#") && Array.isArray(values) && values.length > 0) {
+              const tagName = key2.substring(1);
+              const eventTagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1]);
+              if (!values.some((v) => eventTagValues.includes(v))) {
+                matchesTags = false;
+                break;
+              }
+            }
+          }
+          if (!matchesTags) continue;
           results.push(event);
           processedEventIds.add(event.id);
         }
@@ -3578,11 +3595,14 @@ async function queryArchive(filter, hotDataCutoff, r2) {
       return results;
     }
   }
-  const startDate = filter.since ? new Date(filter.since * 1e3) : /* @__PURE__ */ new Date(0);
+  const startDate = filter.since ? new Date(Math.max(filter.since * 1e3, 0)) : /* @__PURE__ */ new Date(0);
   const endDate = filter.until ? new Date(Math.min(filter.until * 1e3, hotDataCutoff * 1e3)) : new Date(hotDataCutoff * 1e3);
-  if (startDate > endDate) {
+  const cappedEndDate = new Date(Math.min(endDate.getTime(), hotDataCutoff * 1e3));
+  if (startDate >= cappedEndDate) {
+    console.log("Archive query skipped - date range does not overlap with archive");
     return results;
   }
+  console.log(`Archive query range: ${startDate.toISOString()} to ${cappedEndDate.toISOString()}`);
   const useAuthorIndex = filter.authors && filter.authors.length <= 10;
   const useKindIndex = filter.kinds && filter.kinds.length <= 5;
   const useTagIndex = Object.entries(filter).some(
@@ -3591,12 +3611,12 @@ async function queryArchive(filter, hotDataCutoff, r2) {
   const getHourKeys = /* @__PURE__ */ __name(() => {
     const hourKeys = [];
     const currentDate = new Date(startDate);
-    while (currentDate <= endDate) {
+    while (currentDate <= cappedEndDate) {
       for (let hour = 0; hour < 24; hour++) {
         const hourKey = `${currentDate.getUTCFullYear()}-${String(currentDate.getUTCMonth() + 1).padStart(2, "0")}-${String(currentDate.getUTCDate()).padStart(2, "0")}/${String(hour).padStart(2, "0")}`;
         const hourTimestamp = new Date(currentDate);
         hourTimestamp.setUTCHours(hour);
-        if (hourTimestamp >= startDate && hourTimestamp <= endDate) {
+        if (hourTimestamp >= startDate && hourTimestamp <= cappedEndDate) {
           if (!manifest || manifest.hoursWithEvents.includes(hourKey)) {
             hourKeys.push(hourKey);
           }
@@ -3619,6 +3639,7 @@ async function queryArchive(filter, hotDataCutoff, r2) {
               try {
                 const event = JSON.parse(line);
                 if (processedEventIds.has(event.id)) continue;
+                if (event.created_at >= hotDataCutoff) continue;
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
                 if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
                 if (filter.since && event.created_at < filter.since) continue;
@@ -3659,6 +3680,7 @@ async function queryArchive(filter, hotDataCutoff, r2) {
               try {
                 const event = JSON.parse(line);
                 if (processedEventIds.has(event.id)) continue;
+                if (event.created_at >= hotDataCutoff) continue;
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
                 if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
                 if (filter.since && event.created_at < filter.since) continue;
@@ -3686,6 +3708,53 @@ async function queryArchive(filter, hotDataCutoff, r2) {
         }
       }
     }
+  } else if (useTagIndex) {
+    for (const [filterKey, filterValues] of Object.entries(filter)) {
+      if (filterKey.startsWith("#") && Array.isArray(filterValues) && filterValues.length > 0) {
+        const tagName = filterKey.substring(1);
+        for (const tagValue of filterValues) {
+          for (const hourKey of getHourKeys()) {
+            const key = `index/tag/${tagName}/${tagValue}/${hourKey}.jsonl`;
+            try {
+              const obj = await r2.get(key);
+              if (obj) {
+                const content = await obj.text();
+                const lines = content.split("\n").filter((line) => line.trim());
+                for (const line of lines) {
+                  try {
+                    const event = JSON.parse(line);
+                    if (processedEventIds.has(event.id)) continue;
+                    if (event.created_at >= hotDataCutoff) continue;
+                    if (filter.ids && !filter.ids.includes(event.id)) continue;
+                    if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+                    if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+                    if (filter.since && event.created_at < filter.since) continue;
+                    if (filter.until && event.created_at > filter.until) continue;
+                    let matchesOtherTags = true;
+                    for (const [otherKey, otherValues] of Object.entries(filter)) {
+                      if (otherKey.startsWith("#") && otherKey !== filterKey && Array.isArray(otherValues) && otherValues.length > 0) {
+                        const otherTagName = otherKey.substring(1);
+                        const eventOtherTagValues = event.tags.filter((tag) => tag[0] === otherTagName).map((tag) => tag[1]);
+                        if (!otherValues.some((v) => eventOtherTagValues.includes(v))) {
+                          matchesOtherTags = false;
+                          break;
+                        }
+                      }
+                    }
+                    if (!matchesOtherTags) continue;
+                    results.push(event);
+                    processedEventIds.add(event.id);
+                  } catch (e) {
+                    console.error("Failed to parse archive event:", e);
+                  }
+                }
+              }
+            } catch (e) {
+            }
+          }
+        }
+      }
+    }
   } else {
     const filesToQuery = getHourKeys().map((hourKey) => `events/${hourKey}.jsonl`);
     if (filesToQuery.length > 2160) {
@@ -3702,6 +3771,7 @@ async function queryArchive(filter, hotDataCutoff, r2) {
           try {
             const event = JSON.parse(line);
             if (processedEventIds.has(event.id)) continue;
+            if (event.created_at >= hotDataCutoff) continue;
             if (filter.ids && !filter.ids.includes(event.id)) continue;
             if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
             if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
@@ -3737,16 +3807,29 @@ __name(queryArchive, "queryArchive");
 async function queryEventsWithArchive(filters, bookmark, env) {
   const d1Result = await queryEvents(filters, bookmark, env);
   const hotDataCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
-  const needsArchive = filters.some(
-    (filter) => !filter.since || filter.since < hotDataCutoff
-  );
+  const needsArchive = filters.some((filter) => {
+    if (!filter.since && !filter.until) {
+      return false;
+    }
+    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+    const querySpansCutoff = (!filter.since || filter.since < hotDataCutoff) && (!filter.until || filter.until > hotDataCutoff);
+    return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
+  });
   if (!needsArchive || !env.EVENT_ARCHIVE) {
     return d1Result;
   }
+  console.log("Query requires archive access - time range includes data older than 90 days");
   const archiveEvents = [];
   for (const filter of filters) {
-    if (!filter.since || filter.since < hotDataCutoff) {
-      const archived = await queryArchive(filter, hotDataCutoff, env.EVENT_ARCHIVE);
+    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+    if (queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+      const archiveFilter = { ...filter };
+      if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+        archiveFilter.until = hotDataCutoff;
+      }
+      const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
       archiveEvents.push(...archived);
     }
   }
@@ -3765,6 +3848,7 @@ async function queryEventsWithArchive(filters, bookmark, env) {
   });
   const limit = Math.min(...filters.map((f) => f.limit || 1e4));
   const limitedEvents = sortedEvents.slice(0, limit);
+  console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
   return {
     events: limitedEvents,
     bookmark: d1Result.bookmark
