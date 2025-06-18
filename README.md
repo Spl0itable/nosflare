@@ -119,17 +119,6 @@ Nosflare is serverless and operates on Cloudflare's usage-based pricing model - 
 | **Large** | 10,000 | 100M | **$73/mo** | $300-500/mo | 76-85% |
 | **Enterprise** | 100,000 | 1B | **$650/mo** | $3,000-5,000/mo | 78-87% |
 
-### Cost Advantages vs Traditional Hosting
-
-| Traditional Relay Costs | Nosflare | Savings |
-|------------------------|----------|---------|
-| Server rental: $200/mo | Included | $200 |
-| Bandwidth (1TB): $50/mo | Free | $50 |
-| CDN service: $100/mo | Built-in | $100 |
-| Backup service: $20/mo | Automatic | $20 |
-| DevOps time: $$$$ | Zero maintenance | Priceless |
-| **Total: $370+/mo** | **$5-73/mo** | **90%+** |
-
 ### Start Free
 
 Test Nosflare extensively on the **Workers Free plan**:
@@ -141,7 +130,7 @@ Test Nosflare extensively on the **Workers Free plan**:
 
 ---
 
-Nosflare typically costs **90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
+Nosflare typically costs **~90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
 
 View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
 
