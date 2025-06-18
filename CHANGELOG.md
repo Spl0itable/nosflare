@@ -1,3 +1,7 @@
+## v7.2.6 - 2025-06-18
+
+- New: hybrid storage capacity to archive older events than 90 days to R2 bucket
+
 ## v7.1.6 - 2025-06-16
 
 - Hotfix: included almost all country ISO codes for better Durable Object mesh network routing

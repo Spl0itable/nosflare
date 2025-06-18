@@ -55,6 +55,7 @@ export interface QueryResult {
 export interface Env {
   relayDb: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
+  EVENT_ARCHIVE: R2Bucket;
 }
 
 // Durable Object types

@@ -2,7 +2,7 @@
 
 # Nosflare
 
-Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare D1](https://developers.cloudflare.com/d1/) database. You can use a live, paid version of this relay implementation by adding it to your relay list: `wss://relay.nosflare.com`
+Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare D1](https://developers.cloudflare.com/d1/) database and [R2 Object Storage](https://developers.cloudflare.com/r2/) bucket. You can use a live, paid version of this relay implementation by adding it to your relay list: `wss://relay.nosflare.com`
 
 Most applicable NIPs are supported along with support for "pay to relay", allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
 
@@ -83,9 +83,9 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 #### Cloudflare Dashboard
 
 1. Log in to your Cloudflare dashboard.
-2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region
+2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region. Go to R2 Object Storage and click "Create a bucket" and call this whatever you like and select region.
 3. In the newly created D1 database click Settings tab and click "Enable read replication". Ignore the warning, Nosflare has been extensively tested to support read replication. However, fallback support is included in case read replication is disabled.
-4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name.
+4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name. Additionally, in the `bucket_name` add the name of the R2 bucket created.
 5. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
 6. If not using a connected git repo, then on the Bindings tab of the Worker, bind the `relayDb` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section. This binding will occur automatically and can be skipped if pushing from git to the worker.
 7. Depending what you picked in step 4, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
@@ -109,15 +109,44 @@ Nosflare is serverless and operates on Cloudflare's usage-based pricing model - 
 - 25 billion D1 database rows read
 - 50 million D1 database rows written
 - 5 GB D1 storage
+- 10 GB R2 storage (free tier)
+- 1 million R2 Class A operations
+- 10 million R2 Class B operations
 
 ### Real-World Cost Examples
 
-| Relay Size | Users/Concurrent | Events/Month | Nosflare Cost | Traditional VPS | **You Save** |
-|------------|-------|--------------|---------------|-----------------|--------------|
+| Relay Size | Users/Concurrent | Events/Month | Nosflare Cost* | Traditional VPS | **You Save** |
+|------------|-------|--------------|----------------|-----------------|--------------|
 | **Small** | 100 | 1M | **$5/mo** | $20-40/mo | 75-87% |
-| **Medium** | 1,000 | 10M | **$15/mo** | $80-150/mo | 81-90% |
-| **Large** | 10,000 | 100M | **$73/mo** | $300-500/mo | 76-85% |
-| **Enterprise** | 100,000 | 1B | **$650/mo** | $3,000-5,000/mo | 78-87% |
+| **Medium** | 1,000 | 10M | **$16/mo** | $80-150/mo | 80-89% |
+| **Large** | 10,000 | 100M | **$88/mo** | $300-500/mo | 71-82% |
+| **Enterprise** | 100,000 | 1B | **$850/mo** | $3,000-5,000/mo | 72-83% |
+
+*_Costs include R2 storage for archiving. Actual costs may vary based on query patterns and storage retention._
+
+### Storage Cost Breakdown
+
+**D1 Database (Hot Storage - Last 90 days):**
+- First 5 GB included free
+- Additional storage: $0.75/GB per month
+
+**R2 Bucket (Archive Storage - After 90 days):**
+- First 10 GB included free
+- Additional storage: $0.015/GB per month
+- Write operations: $4.50 per million (archive runs every 6 hours)
+- Read operations: $0.36 per million (only for archived event queries)
+- **No egress fees** when accessed through Workers
+
+### Archive Storage Growth Examples
+
+| Relay Size | Monthly Archive Growth | Annual R2 Storage | Annual R2 Cost** |
+|------------|----------------------|-------------------|------------------|
+| **Small** | ~1 GB | 12 GB | $0.36/year |
+| **Medium** | ~10 GB | 120 GB | $16.20/year |
+| **Large** | ~100 GB | 1.2 TB | $194/year |
+| **Enterprise** | ~1 TB | 12 TB | $2,160/year |
+
+**_After first year. First 10GB free. Costs compound as storage accumulates._
 
 ### Start Free
 
@@ -125,18 +154,40 @@ Test Nosflare extensively on the **Workers Free plan**:
 - 100,000 requests/day
 - 100,000 Durable Object requests/day
 - 5 million D1 rows read/day
-- 5 GB total storage
+- 5 GB D1 storage
+- 10 GB R2 storage
 - Perfect for development and testing
 
 ---
 
-Nosflare typically costs **~90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
+Nosflare typically costs **75-90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
 
-View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
+View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/), [R2 storage](https://developers.cloudflare.com/r2/pricing/)
+
+## Hybrid Storage
+
+Nosflare uses an intelligent hybrid storage system that combines D1 database for hot data with R2 bucket for cost-effective archival:
+
+### How It Works
+
+- **Hot Storage (D1)**: Recent 90 days of events for fast queries
+- **Archive Storage (R2)**: Events older than 90 days, still fully queryable
+- **Automatic Migration**: Cron job runs every 6 hours to archive old events
+- **Seamless Queries**: Clients can query both hot and archived data transparently
+- **Unlimited Capacity**: R2 has no storage limits, enabling infinite event retention
+
+### Benefits
+
+- **Cost Efficiency**: R2 storage costs 98% less than D1 ($0.015/GB vs $0.75/GB)
+- **Performance**: Recent events remain in fast D1 storage
+- **Scalability**: No 10GB D1 limit - store years of relay history
+- **Reliability**: Dual storage provides redundancy
+
+The archive system uses smart indexing with hourly partitions and secondary indices by author, kind, and tags for efficient querying of historical data.
 
 ## Migration
 
-If you had previously deployed a Nosflare-powered relay, there is a migration tool that can easily migrate all data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucke with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
+If you had previously deployed a Nosflare-powered relay that was ONLY based on an R2 bucket, there is a migration tool that can easily migrate all event data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucke with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
 
 ![Migrate from R2 bucket to D1 database](images/migration.png)
 

@@ -18,6 +18,24 @@ const {
   allowedNip05Domains,
 } = config;
 
+// Archive configuration constants
+const ARCHIVE_RETENTION_DAYS = 90;
+const ARCHIVE_BATCH_SIZE = 10000;
+
+// Archive index types
+interface ArchiveManifest {
+  lastUpdated: string;
+  hoursWithEvents: string[];  // Format: "YYYY-MM-DD/HH"
+  firstHour: string;
+  lastHour: string;
+  totalEvents: number;
+  indices: {
+    authors: Set<string>;
+    kinds: Set<number>;
+    tags: Record<string, Set<string>>;
+  };
+}
+
 // Database initialization
 async function initializeDatabase(db: D1Database): Promise<void> {
   try {
@@ -887,6 +905,648 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   return { sql, params };
 }
 
+// Archive functions with hourly partitions
+async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
+  const cutoffTime = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
+  
+  console.log(`Archiving events older than ${new Date(cutoffTime * 1000).toISOString()}`);
+
+  // Load existing manifest
+  let manifest: ArchiveManifest;
+  try {
+    const manifestObj = await r2.get('manifest.json');
+    if (manifestObj) {
+      const data = JSON.parse(await manifestObj.text());
+      manifest = {
+        ...data,
+        indices: {
+          authors: new Set(data.indices?.authors || []),
+          kinds: new Set(data.indices?.kinds || []),
+          tags: data.indices?.tags || {}
+        }
+      };
+    } else {
+      manifest = {
+        lastUpdated: new Date().toISOString(),
+        hoursWithEvents: [],
+        firstHour: '',
+        lastHour: '',
+        totalEvents: 0,
+        indices: {
+          authors: new Set(),
+          kinds: new Set(),
+          tags: {}
+        }
+      };
+    }
+  } catch (e) {
+    manifest = {
+      lastUpdated: new Date().toISOString(),
+      hoursWithEvents: [],
+      firstHour: '',
+      lastHour: '',
+      totalEvents: 0,
+      indices: {
+        authors: new Set(),
+        kinds: new Set(),
+        tags: {}
+      }
+    };
+  }
+
+  let offset = 0;
+  let hasMore = true;
+  let totalArchived = 0;
+
+  while (hasMore) {
+    const session = db.withSession('first-unconstrained');
+    
+    // Get batch of old events
+    const oldEvents = await session.prepare(`
+      SELECT * FROM events 
+      WHERE created_at < ? AND deleted = 0
+      ORDER BY created_at
+      LIMIT ?
+      OFFSET ?
+    `).bind(cutoffTime, ARCHIVE_BATCH_SIZE, offset).all();
+
+    if (!oldEvents.results || oldEvents.results.length === 0) {
+      hasMore = false;
+      break;
+    }
+
+    // Process events for archiving
+    const eventsByHour = new Map<string, NostrEvent[]>();
+    const eventsByAuthorHour = new Map<string, NostrEvent[]>();
+    const eventsByKindHour = new Map<string, NostrEvent[]>();
+    const eventsByTagHour = new Map<string, NostrEvent[]>();
+    
+    for (const event of oldEvents.results) {
+      const date = new Date(event.created_at as number * 1000);
+      const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}/${String(date.getUTCHours()).padStart(2, '0')}`;
+      
+      // Get tags for this event
+      const tags = await session.prepare(
+        'SELECT tag_name, tag_value FROM tags WHERE event_id = ?'
+      ).bind(event.id as string).all();
+
+      const formattedTags: string[][] = [];
+      const tagMap: Record<string, string[]> = {};
+      
+      for (const tag of tags.results || []) {
+        if (!tagMap[tag.tag_name as string]) {
+          tagMap[tag.tag_name as string] = [];
+        }
+        tagMap[tag.tag_name as string].push(tag.tag_value as string);
+      }
+      
+      for (const [name, values] of Object.entries(tagMap)) {
+        formattedTags.push([name, ...values]);
+      }
+
+      const nostrEvent: NostrEvent = {
+        id: event.id as string,
+        pubkey: event.pubkey as string,
+        created_at: event.created_at as number,
+        kind: event.kind as number,
+        tags: formattedTags,
+        content: event.content as string,
+        sig: event.sig as string
+      };
+
+      // Primary storage by hour
+      if (!eventsByHour.has(hourKey)) {
+        eventsByHour.set(hourKey, []);
+      }
+      eventsByHour.get(hourKey)!.push(nostrEvent);
+
+      // Secondary index by author
+      const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
+      if (!eventsByAuthorHour.has(authorHourKey)) {
+        eventsByAuthorHour.set(authorHourKey, []);
+      }
+      eventsByAuthorHour.get(authorHourKey)!.push(nostrEvent);
+      manifest.indices.authors.add(nostrEvent.pubkey);
+
+      // Secondary index by kind
+      const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
+      if (!eventsByKindHour.has(kindHourKey)) {
+        eventsByKindHour.set(kindHourKey, []);
+      }
+      eventsByKindHour.get(kindHourKey)!.push(nostrEvent);
+      manifest.indices.kinds.add(nostrEvent.kind);
+
+      // Secondary indices by tags
+      for (const [tagName, ...tagValues] of formattedTags) {
+        for (const tagValue of tagValues) {
+          const tagKey = `${tagName}/${tagValue}/${hourKey}`;
+          if (!eventsByTagHour.has(tagKey)) {
+            eventsByTagHour.set(tagKey, []);
+          }
+          eventsByTagHour.get(tagKey)!.push(nostrEvent);
+
+          // Update manifest
+          if (!manifest.indices.tags[tagName]) {
+            manifest.indices.tags[tagName] = new Set();
+          }
+          manifest.indices.tags[tagName].add(tagValue);
+        }
+      }
+
+      totalArchived++;
+    }
+
+    // Store primary data by hour
+    for (const [hourKey, events] of eventsByHour) {
+      const key = `events/${hourKey}.jsonl`;
+      
+      // Check if file exists
+      let existingData = '';
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + '\n';
+        }
+      } catch (e) {
+        // File doesn't exist
+      }
+
+      // Convert to JSON Lines
+      const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
+      
+      await r2.put(key, existingData + jsonLines, {
+        customMetadata: {
+          eventCount: String(events.length + (existingData ? existingData.split('\n').length - 1 : 0)),
+          minCreatedAt: String(Math.min(...events.map(e => e.created_at))),
+          maxCreatedAt: String(Math.max(...events.map(e => e.created_at)))
+        }
+      });
+
+      if (!manifest.hoursWithEvents.includes(hourKey)) {
+        manifest.hoursWithEvents.push(hourKey);
+      }
+    }
+
+    // Store secondary indices
+    // By author
+    for (const [authorHourKey, events] of eventsByAuthorHour) {
+      const [pubkey, hour] = authorHourKey.split('/');
+      const key = `index/author/${pubkey}/${hour}.jsonl`;
+      
+      let existingData = '';
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + '\n';
+        }
+      } catch (e) {}
+
+      const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
+      await r2.put(key, existingData + jsonLines);
+    }
+
+    // By kind
+    for (const [kindHourKey, events] of eventsByKindHour) {
+      const [kind, hour] = kindHourKey.split('/');
+      const key = `index/kind/${kind}/${hour}.jsonl`;
+      
+      let existingData = '';
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + '\n';
+        }
+      } catch (e) {}
+
+      const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
+      await r2.put(key, existingData + jsonLines);
+    }
+
+    // By tags
+    for (const [tagKey, events] of eventsByTagHour) {
+      const parts = tagKey.split('/');
+      const tagName = parts[0];
+      const tagValue = parts[1];
+      const hour = `${parts[2]}/${parts[3]}`;
+      const key = `index/tag/${tagName}/${tagValue}/${hour}.jsonl`;
+      
+      let existingData = '';
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + '\n';
+        }
+      } catch (e) {}
+
+      const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
+      await r2.put(key, existingData + jsonLines);
+    }
+
+    // Store individual events by ID for direct lookups
+    for (const event of oldEvents.results) {
+      const eventId = event.id as string;
+      const firstTwo = eventId.substring(0, 2);
+      const key = `index/id/${firstTwo}/${eventId}.json`;
+      
+      // Get full event with tags
+      const tags = await session.prepare(
+        'SELECT tag_name, tag_value FROM tags WHERE event_id = ?'
+      ).bind(eventId).all();
+
+      const formattedTags: string[][] = [];
+      const tagMap: Record<string, string[]> = {};
+      
+      for (const tag of tags.results || []) {
+        if (!tagMap[tag.tag_name as string]) {
+          tagMap[tag.tag_name as string] = [];
+        }
+        tagMap[tag.tag_name as string].push(tag.tag_value as string);
+      }
+      
+      for (const [name, values] of Object.entries(tagMap)) {
+        formattedTags.push([name, ...values]);
+      }
+
+      const nostrEvent: NostrEvent = {
+        id: eventId,
+        pubkey: event.pubkey as string,
+        created_at: event.created_at as number,
+        kind: event.kind as number,
+        tags: formattedTags,
+        content: event.content as string,
+        sig: event.sig as string
+      };
+
+      await r2.put(key, JSON.stringify(nostrEvent));
+    }
+
+    // Delete from D1 (use primary session for writes)
+    const writeSession = db.withSession('first-primary');
+    const eventIds = oldEvents.results.map(e => e.id as string);
+    
+    for (let i = 0; i < eventIds.length; i += 100) {
+      const chunk = eventIds.slice(i, i + 100);
+      const placeholders = chunk.map(() => '?').join(',');
+      
+      await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
+      await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
+    }
+
+    offset += ARCHIVE_BATCH_SIZE;
+  }
+
+  // Update manifest
+  manifest.hoursWithEvents.sort();
+  manifest.firstHour = manifest.hoursWithEvents[0] || '';
+  manifest.lastHour = manifest.hoursWithEvents[manifest.hoursWithEvents.length - 1] || '';
+  manifest.totalEvents += totalArchived;
+  manifest.lastUpdated = new Date().toISOString();
+
+  // Convert Sets to Arrays for JSON serialization
+  const serializableManifest = {
+    ...manifest,
+    indices: {
+      authors: Array.from(manifest.indices.authors),
+      kinds: Array.from(manifest.indices.kinds),
+      tags: Object.fromEntries(
+        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v)])
+      )
+    }
+  };
+
+  await r2.put('manifest.json', JSON.stringify(serializableManifest, null, 2));
+
+  console.log(`Archive process completed. Archived ${totalArchived} events.`);
+}
+
+// Query archive function with hourly partitions
+async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bucket): Promise<NostrEvent[]> {
+  const results: NostrEvent[] = [];
+  const processedEventIds = new Set<string>();
+
+  // Load manifest
+  let manifest: ArchiveManifest | null = null;
+  try {
+    const manifestObj = await r2.get('manifest.json');
+    if (manifestObj) {
+      const data = JSON.parse(await manifestObj.text());
+      manifest = {
+        ...data,
+        indices: {
+          authors: new Set(data.indices?.authors || []),
+          kinds: new Set(data.indices?.kinds || []),
+          tags: data.indices?.tags || {}
+        }
+      };
+    }
+  } catch (e) {
+    console.warn('Failed to load archive manifest');
+  }
+
+  // If we have specific IDs, use direct lookup
+  if (filter.ids && filter.ids.length > 0 && filter.ids.length <= 100) {
+    for (const eventId of filter.ids) {
+      const firstTwo = eventId.substring(0, 2);
+      const key = `index/id/${firstTwo}/${eventId}.json`;
+      
+      try {
+        const obj = await r2.get(key);
+        if (obj) {
+          const event = JSON.parse(await obj.text()) as NostrEvent;
+          
+          // Apply other filters
+          if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+          if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+          if (filter.since && event.created_at < filter.since) continue;
+          if (filter.until && event.created_at > filter.until) continue;
+          
+          results.push(event);
+          processedEventIds.add(event.id);
+        }
+      } catch (e) {
+        // Event not found
+      }
+    }
+    
+    // If we found all requested IDs, return early
+    if (filter.ids.length === results.length) {
+      return results;
+    }
+  }
+
+  // Calculate date/hour range
+  const startDate = filter.since ? new Date(filter.since * 1000) : new Date(0);
+  const endDate = filter.until ? 
+    new Date(Math.min(filter.until * 1000, hotDataCutoff * 1000)) : 
+    new Date(hotDataCutoff * 1000);
+
+  if (startDate > endDate) {
+    return results;
+  }
+
+  // Determine the most efficient index to use
+  const useAuthorIndex = filter.authors && filter.authors.length <= 10;
+  const useKindIndex = filter.kinds && filter.kinds.length <= 5;
+  const useTagIndex = Object.entries(filter).some(([k, v]) => 
+    k.startsWith('#') && Array.isArray(v) && v.length <= 10
+  );
+
+  // Generate list of hours to query
+  const getHourKeys = (): string[] => {
+    const hourKeys: string[] = [];
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+      for (let hour = 0; hour < 24; hour++) {
+        const hourKey = `${currentDate.getUTCFullYear()}-${String(currentDate.getUTCMonth() + 1).padStart(2, '0')}-${String(currentDate.getUTCDate()).padStart(2, '0')}/${String(hour).padStart(2, '0')}`;
+        
+        // Check if within our time range
+        const hourTimestamp = new Date(currentDate);
+        hourTimestamp.setUTCHours(hour);
+        
+        if (hourTimestamp >= startDate && hourTimestamp <= endDate) {
+          if (!manifest || manifest.hoursWithEvents.includes(hourKey)) {
+            hourKeys.push(hourKey);
+          }
+        }
+      }
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+    
+    return hourKeys;
+  };
+
+  // Use secondary indices if available
+  if (useAuthorIndex && filter.authors) {
+    // Query by author index
+    for (const author of filter.authors) {
+      for (const hourKey of getHourKeys()) {
+        const key = `index/author/${author}/${hourKey}.jsonl`;
+        
+        try {
+          const obj = await r2.get(key);
+          if (obj) {
+            const content = await obj.text();
+            const lines = content.split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+              try {
+                const event = JSON.parse(line) as NostrEvent;
+                
+                if (processedEventIds.has(event.id)) continue;
+                
+                // Apply remaining filters
+                if (filter.ids && !filter.ids.includes(event.id)) continue;
+                if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+                if (filter.since && event.created_at < filter.since) continue;
+                if (filter.until && event.created_at > filter.until) continue;
+                
+                // Apply tag filters
+                let matchesTags = true;
+                for (const [key, values] of Object.entries(filter)) {
+                  if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+                    const tagName = key.substring(1);
+                    const eventTagValues = event.tags
+                      .filter(tag => tag[0] === tagName)
+                      .map(tag => tag[1]);
+                    
+                    if (!values.some(v => eventTagValues.includes(v))) {
+                      matchesTags = false;
+                      break;
+                    }
+                  }
+                }
+                
+                if (!matchesTags) continue;
+                
+                results.push(event);
+                processedEventIds.add(event.id);
+              } catch (e) {
+                console.error('Failed to parse archive event:', e);
+              }
+            }
+          }
+        } catch (e) {
+          // File doesn't exist
+        }
+      }
+    }
+  } else if (useKindIndex && filter.kinds) {
+    // Query by kind index
+    for (const kind of filter.kinds) {
+      for (const hourKey of getHourKeys()) {
+        const key = `index/kind/${kind}/${hourKey}.jsonl`;
+        
+        try {
+          const obj = await r2.get(key);
+          if (obj) {
+            const content = await obj.text();
+            const lines = content.split('\n').filter(line => line.trim());
+            
+            for (const line of lines) {
+              try {
+                const event = JSON.parse(line) as NostrEvent;
+                
+                if (processedEventIds.has(event.id)) continue;
+                
+                // Apply remaining filters
+                if (filter.ids && !filter.ids.includes(event.id)) continue;
+                if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+                if (filter.since && event.created_at < filter.since) continue;
+                if (filter.until && event.created_at > filter.until) continue;
+                
+                // Apply tag filters
+                let matchesTags = true;
+                for (const [key, values] of Object.entries(filter)) {
+                  if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+                    const tagName = key.substring(1);
+                    const eventTagValues = event.tags
+                      .filter(tag => tag[0] === tagName)
+                      .map(tag => tag[1]);
+                    
+                    if (!values.some(v => eventTagValues.includes(v))) {
+                      matchesTags = false;
+                      break;
+                    }
+                  }
+                }
+                
+                if (!matchesTags) continue;
+                
+                results.push(event);
+                processedEventIds.add(event.id);
+              } catch (e) {
+                console.error('Failed to parse archive event:', e);
+              }
+            }
+          }
+        } catch (e) {
+          // File doesn't exist
+        }
+      }
+    }
+  } else {
+    // Fall back to primary hourly storage
+    const filesToQuery = getHourKeys().map(hourKey => `events/${hourKey}.jsonl`);
+
+    // Limit files to query
+    if (filesToQuery.length > 2160) { // 90 days * 24 hours
+      console.warn(`Large archive query spanning ${filesToQuery.length} hours, limiting to most recent 2160`);
+      filesToQuery.splice(0, filesToQuery.length - 2160);
+    }
+
+    // Query each file
+    for (const file of filesToQuery) {
+      try {
+        const object = await r2.get(file);
+        if (!object) continue;
+
+        const content = await object.text();
+        const lines = content.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line) as NostrEvent;
+            
+            if (processedEventIds.has(event.id)) continue;
+            
+            // Apply filters
+            if (filter.ids && !filter.ids.includes(event.id)) continue;
+            if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+            if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+            if (filter.since && event.created_at < filter.since) continue;
+            if (filter.until && event.created_at > filter.until) continue;
+
+            // Apply tag filters
+            let matchesTags = true;
+            for (const [key, values] of Object.entries(filter)) {
+              if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+                const tagName = key.substring(1);
+                const eventTagValues = event.tags
+                  .filter(tag => tag[0] === tagName)
+                  .map(tag => tag[1]);
+                
+                if (!values.some(v => eventTagValues.includes(v))) {
+                  matchesTags = false;
+                  break;
+                }
+              }
+            }
+            
+            if (!matchesTags) continue;
+
+            results.push(event);
+            processedEventIds.add(event.id);
+          } catch (e) {
+            console.error('Failed to parse archive event:', e);
+          }
+        }
+      } catch (e) {
+        // File doesn't exist
+        continue;
+      }
+    }
+  }
+
+  console.log(`Archive query returned ${results.length} events`);
+  return results;
+}
+
+// Query events with archive support
+async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
+  // First get results from D1
+  const d1Result = await queryEvents(filters, bookmark, env);
+  
+  // Check if we need to query archive
+  const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
+  const needsArchive = filters.some(filter => 
+    !filter.since || filter.since < hotDataCutoff
+  );
+
+  if (!needsArchive || !env.EVENT_ARCHIVE) {
+    return d1Result;
+  }
+
+  // Query archive for each filter that needs it
+  const archiveEvents: NostrEvent[] = [];
+  for (const filter of filters) {
+    if (!filter.since || filter.since < hotDataCutoff) {
+      const archived = await queryArchive(filter, hotDataCutoff, env.EVENT_ARCHIVE);
+      archiveEvents.push(...archived);
+    }
+  }
+
+  // Merge results
+  const allEvents = new Map<string, NostrEvent>();
+  
+  // Add D1 events
+  for (const event of d1Result.events) {
+    allEvents.set(event.id, event);
+  }
+  
+  // Add archive events
+  for (const event of archiveEvents) {
+    allEvents.set(event.id, event);
+  }
+
+  // Sort by created_at descending and apply overall limit
+  const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
+    if (b.created_at !== a.created_at) {
+      return b.created_at - a.created_at;
+    }
+    return a.id.localeCompare(b.id);
+  });
+
+  // Apply the most restrictive limit from filters
+  const limit = Math.min(...filters.map(f => f.limit || 10000));
+  const limitedEvents = sortedEvents.slice(0, limit);
+
+  return {
+    events: limitedEvents,
+    bookmark: d1Result.bookmark
+  };
+}
+
 // HTTP endpoints
 function handleRelayInfoRequest(request: Request): Response {
   const responseInfo = { ...relayInfo };
@@ -1539,7 +2199,8 @@ export {
   verifyEventSignature,
   hasPaidForRelay,
   processEvent,
-  queryEvents
+  queryEvents,
+  queryEventsWithArchive
 };
 
 // Main worker export with Durable Object
@@ -1595,6 +2256,18 @@ export default {
     } catch (error) {
       console.error("Error in fetch handler:", error);
       return new Response("Internal Server Error", { status: 500 });
+    }
+  },
+
+  // Scheduled handler for archiving
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log('Running scheduled archive process...');
+    
+    try {
+      await archiveOldEvents(env.relayDb, env.EVENT_ARCHIVE);
+      console.log('Archive process completed successfully');
+    } catch (error) {
+      console.error('Archive process failed:', error);
     }
   }
 };

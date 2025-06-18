@@ -15,6 +15,11 @@ binding = "relayDb"
 database_name = "nostr-relay"
 database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 
+# R2 bucket binding for event archive
+[[r2_buckets]]
+binding = "EVENT_ARCHIVE"
+bucket_name = "nosflare-event-archive"
+
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
 cpu_ms = 30000
@@ -27,3 +32,7 @@ enabled = true
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["RelayWebSocket"]
+
+# Add scheduled worker for archiving
+[triggers]
+crons = ["0 */6 * * *"]  # Run every 6 hours

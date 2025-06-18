@@ -9,7 +9,7 @@ import {
   isTagAllowed,
   excludedRateLimitKinds
 } from './config';
-import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
+import { verifyEventSignature, hasPaidForRelay, processEvent, queryEventsWithArchive } from './relay-worker';
 
 // Session attachment data structure
 interface SessionAttachment {
@@ -466,8 +466,8 @@ export class RelayWebSocket implements DurableObject {
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
-      // Query events from database
-      const result = await queryEvents(filters, session.bookmark, this.env);
+      // Query events from database (including archive if needed)
+      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
 
       // Update session bookmark
       if (result.bookmark) {

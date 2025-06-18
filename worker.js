@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.1.6",
+  version: "7.2.6",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2590,6 +2590,8 @@ var {
   blockedNip05Domains: blockedNip05Domains2,
   allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
+var ARCHIVE_RETENTION_DAYS = 90;
+var ARCHIVE_BATCH_SIZE = 1e4;
 async function initializeDatabase(db) {
   try {
     const session2 = db.withSession("first-unconstrained");
@@ -3288,6 +3290,487 @@ function buildQuery(filter) {
   return { sql, params };
 }
 __name(buildQuery, "buildQuery");
+async function archiveOldEvents(db, r2) {
+  const cutoffTime = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
+  console.log(`Archiving events older than ${new Date(cutoffTime * 1e3).toISOString()}`);
+  let manifest;
+  try {
+    const manifestObj = await r2.get("manifest.json");
+    if (manifestObj) {
+      const data = JSON.parse(await manifestObj.text());
+      manifest = {
+        ...data,
+        indices: {
+          authors: new Set(data.indices?.authors || []),
+          kinds: new Set(data.indices?.kinds || []),
+          tags: data.indices?.tags || {}
+        }
+      };
+    } else {
+      manifest = {
+        lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
+        hoursWithEvents: [],
+        firstHour: "",
+        lastHour: "",
+        totalEvents: 0,
+        indices: {
+          authors: /* @__PURE__ */ new Set(),
+          kinds: /* @__PURE__ */ new Set(),
+          tags: {}
+        }
+      };
+    }
+  } catch (e) {
+    manifest = {
+      lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
+      hoursWithEvents: [],
+      firstHour: "",
+      lastHour: "",
+      totalEvents: 0,
+      indices: {
+        authors: /* @__PURE__ */ new Set(),
+        kinds: /* @__PURE__ */ new Set(),
+        tags: {}
+      }
+    };
+  }
+  let offset = 0;
+  let hasMore = true;
+  let totalArchived = 0;
+  while (hasMore) {
+    const session = db.withSession("first-unconstrained");
+    const oldEvents = await session.prepare(`
+      SELECT * FROM events 
+      WHERE created_at < ? AND deleted = 0
+      ORDER BY created_at
+      LIMIT ?
+      OFFSET ?
+    `).bind(cutoffTime, ARCHIVE_BATCH_SIZE, offset).all();
+    if (!oldEvents.results || oldEvents.results.length === 0) {
+      hasMore = false;
+      break;
+    }
+    const eventsByHour = /* @__PURE__ */ new Map();
+    const eventsByAuthorHour = /* @__PURE__ */ new Map();
+    const eventsByKindHour = /* @__PURE__ */ new Map();
+    const eventsByTagHour = /* @__PURE__ */ new Map();
+    for (const event of oldEvents.results) {
+      const date = new Date(event.created_at * 1e3);
+      const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCHours()).padStart(2, "0")}`;
+      const tags = await session.prepare(
+        "SELECT tag_name, tag_value FROM tags WHERE event_id = ?"
+      ).bind(event.id).all();
+      const formattedTags = [];
+      const tagMap = {};
+      for (const tag of tags.results || []) {
+        if (!tagMap[tag.tag_name]) {
+          tagMap[tag.tag_name] = [];
+        }
+        tagMap[tag.tag_name].push(tag.tag_value);
+      }
+      for (const [name, values] of Object.entries(tagMap)) {
+        formattedTags.push([name, ...values]);
+      }
+      const nostrEvent = {
+        id: event.id,
+        pubkey: event.pubkey,
+        created_at: event.created_at,
+        kind: event.kind,
+        tags: formattedTags,
+        content: event.content,
+        sig: event.sig
+      };
+      if (!eventsByHour.has(hourKey)) {
+        eventsByHour.set(hourKey, []);
+      }
+      eventsByHour.get(hourKey).push(nostrEvent);
+      const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
+      if (!eventsByAuthorHour.has(authorHourKey)) {
+        eventsByAuthorHour.set(authorHourKey, []);
+      }
+      eventsByAuthorHour.get(authorHourKey).push(nostrEvent);
+      manifest.indices.authors.add(nostrEvent.pubkey);
+      const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
+      if (!eventsByKindHour.has(kindHourKey)) {
+        eventsByKindHour.set(kindHourKey, []);
+      }
+      eventsByKindHour.get(kindHourKey).push(nostrEvent);
+      manifest.indices.kinds.add(nostrEvent.kind);
+      for (const [tagName, ...tagValues] of formattedTags) {
+        for (const tagValue of tagValues) {
+          const tagKey = `${tagName}/${tagValue}/${hourKey}`;
+          if (!eventsByTagHour.has(tagKey)) {
+            eventsByTagHour.set(tagKey, []);
+          }
+          eventsByTagHour.get(tagKey).push(nostrEvent);
+          if (!manifest.indices.tags[tagName]) {
+            manifest.indices.tags[tagName] = /* @__PURE__ */ new Set();
+          }
+          manifest.indices.tags[tagName].add(tagValue);
+        }
+      }
+      totalArchived++;
+    }
+    for (const [hourKey, events] of eventsByHour) {
+      const key = `events/${hourKey}.jsonl`;
+      let existingData = "";
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + "\n";
+        }
+      } catch (e) {
+      }
+      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+      await r2.put(key, existingData + jsonLines, {
+        customMetadata: {
+          eventCount: String(events.length + (existingData ? existingData.split("\n").length - 1 : 0)),
+          minCreatedAt: String(Math.min(...events.map((e) => e.created_at))),
+          maxCreatedAt: String(Math.max(...events.map((e) => e.created_at)))
+        }
+      });
+      if (!manifest.hoursWithEvents.includes(hourKey)) {
+        manifest.hoursWithEvents.push(hourKey);
+      }
+    }
+    for (const [authorHourKey, events] of eventsByAuthorHour) {
+      const [pubkey, hour] = authorHourKey.split("/");
+      const key = `index/author/${pubkey}/${hour}.jsonl`;
+      let existingData = "";
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + "\n";
+        }
+      } catch (e) {
+      }
+      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+      await r2.put(key, existingData + jsonLines);
+    }
+    for (const [kindHourKey, events] of eventsByKindHour) {
+      const [kind, hour] = kindHourKey.split("/");
+      const key = `index/kind/${kind}/${hour}.jsonl`;
+      let existingData = "";
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + "\n";
+        }
+      } catch (e) {
+      }
+      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+      await r2.put(key, existingData + jsonLines);
+    }
+    for (const [tagKey, events] of eventsByTagHour) {
+      const parts = tagKey.split("/");
+      const tagName = parts[0];
+      const tagValue = parts[1];
+      const hour = `${parts[2]}/${parts[3]}`;
+      const key = `index/tag/${tagName}/${tagValue}/${hour}.jsonl`;
+      let existingData = "";
+      try {
+        const existing = await r2.get(key);
+        if (existing) {
+          existingData = await existing.text() + "\n";
+        }
+      } catch (e) {
+      }
+      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+      await r2.put(key, existingData + jsonLines);
+    }
+    for (const event of oldEvents.results) {
+      const eventId = event.id;
+      const firstTwo = eventId.substring(0, 2);
+      const key = `index/id/${firstTwo}/${eventId}.json`;
+      const tags = await session.prepare(
+        "SELECT tag_name, tag_value FROM tags WHERE event_id = ?"
+      ).bind(eventId).all();
+      const formattedTags = [];
+      const tagMap = {};
+      for (const tag of tags.results || []) {
+        if (!tagMap[tag.tag_name]) {
+          tagMap[tag.tag_name] = [];
+        }
+        tagMap[tag.tag_name].push(tag.tag_value);
+      }
+      for (const [name, values] of Object.entries(tagMap)) {
+        formattedTags.push([name, ...values]);
+      }
+      const nostrEvent = {
+        id: eventId,
+        pubkey: event.pubkey,
+        created_at: event.created_at,
+        kind: event.kind,
+        tags: formattedTags,
+        content: event.content,
+        sig: event.sig
+      };
+      await r2.put(key, JSON.stringify(nostrEvent));
+    }
+    const writeSession = db.withSession("first-primary");
+    const eventIds = oldEvents.results.map((e) => e.id);
+    for (let i = 0; i < eventIds.length; i += 100) {
+      const chunk = eventIds.slice(i, i + 100);
+      const placeholders = chunk.map(() => "?").join(",");
+      await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
+      await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
+    }
+    offset += ARCHIVE_BATCH_SIZE;
+  }
+  manifest.hoursWithEvents.sort();
+  manifest.firstHour = manifest.hoursWithEvents[0] || "";
+  manifest.lastHour = manifest.hoursWithEvents[manifest.hoursWithEvents.length - 1] || "";
+  manifest.totalEvents += totalArchived;
+  manifest.lastUpdated = (/* @__PURE__ */ new Date()).toISOString();
+  const serializableManifest = {
+    ...manifest,
+    indices: {
+      authors: Array.from(manifest.indices.authors),
+      kinds: Array.from(manifest.indices.kinds),
+      tags: Object.fromEntries(
+        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v)])
+      )
+    }
+  };
+  await r2.put("manifest.json", JSON.stringify(serializableManifest, null, 2));
+  console.log(`Archive process completed. Archived ${totalArchived} events.`);
+}
+__name(archiveOldEvents, "archiveOldEvents");
+async function queryArchive(filter, hotDataCutoff, r2) {
+  const results = [];
+  const processedEventIds = /* @__PURE__ */ new Set();
+  let manifest = null;
+  try {
+    const manifestObj = await r2.get("manifest.json");
+    if (manifestObj) {
+      const data = JSON.parse(await manifestObj.text());
+      manifest = {
+        ...data,
+        indices: {
+          authors: new Set(data.indices?.authors || []),
+          kinds: new Set(data.indices?.kinds || []),
+          tags: data.indices?.tags || {}
+        }
+      };
+    }
+  } catch (e) {
+    console.warn("Failed to load archive manifest");
+  }
+  if (filter.ids && filter.ids.length > 0 && filter.ids.length <= 100) {
+    for (const eventId of filter.ids) {
+      const firstTwo = eventId.substring(0, 2);
+      const key = `index/id/${firstTwo}/${eventId}.json`;
+      try {
+        const obj = await r2.get(key);
+        if (obj) {
+          const event = JSON.parse(await obj.text());
+          if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+          if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+          if (filter.since && event.created_at < filter.since) continue;
+          if (filter.until && event.created_at > filter.until) continue;
+          results.push(event);
+          processedEventIds.add(event.id);
+        }
+      } catch (e) {
+      }
+    }
+    if (filter.ids.length === results.length) {
+      return results;
+    }
+  }
+  const startDate = filter.since ? new Date(filter.since * 1e3) : /* @__PURE__ */ new Date(0);
+  const endDate = filter.until ? new Date(Math.min(filter.until * 1e3, hotDataCutoff * 1e3)) : new Date(hotDataCutoff * 1e3);
+  if (startDate > endDate) {
+    return results;
+  }
+  const useAuthorIndex = filter.authors && filter.authors.length <= 10;
+  const useKindIndex = filter.kinds && filter.kinds.length <= 5;
+  const useTagIndex = Object.entries(filter).some(
+    ([k, v]) => k.startsWith("#") && Array.isArray(v) && v.length <= 10
+  );
+  const getHourKeys = /* @__PURE__ */ __name(() => {
+    const hourKeys = [];
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+      for (let hour = 0; hour < 24; hour++) {
+        const hourKey = `${currentDate.getUTCFullYear()}-${String(currentDate.getUTCMonth() + 1).padStart(2, "0")}-${String(currentDate.getUTCDate()).padStart(2, "0")}/${String(hour).padStart(2, "0")}`;
+        const hourTimestamp = new Date(currentDate);
+        hourTimestamp.setUTCHours(hour);
+        if (hourTimestamp >= startDate && hourTimestamp <= endDate) {
+          if (!manifest || manifest.hoursWithEvents.includes(hourKey)) {
+            hourKeys.push(hourKey);
+          }
+        }
+      }
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+    return hourKeys;
+  }, "getHourKeys");
+  if (useAuthorIndex && filter.authors) {
+    for (const author of filter.authors) {
+      for (const hourKey of getHourKeys()) {
+        const key = `index/author/${author}/${hourKey}.jsonl`;
+        try {
+          const obj = await r2.get(key);
+          if (obj) {
+            const content = await obj.text();
+            const lines = content.split("\n").filter((line) => line.trim());
+            for (const line of lines) {
+              try {
+                const event = JSON.parse(line);
+                if (processedEventIds.has(event.id)) continue;
+                if (filter.ids && !filter.ids.includes(event.id)) continue;
+                if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+                if (filter.since && event.created_at < filter.since) continue;
+                if (filter.until && event.created_at > filter.until) continue;
+                let matchesTags = true;
+                for (const [key2, values] of Object.entries(filter)) {
+                  if (key2.startsWith("#") && Array.isArray(values) && values.length > 0) {
+                    const tagName = key2.substring(1);
+                    const eventTagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1]);
+                    if (!values.some((v) => eventTagValues.includes(v))) {
+                      matchesTags = false;
+                      break;
+                    }
+                  }
+                }
+                if (!matchesTags) continue;
+                results.push(event);
+                processedEventIds.add(event.id);
+              } catch (e) {
+                console.error("Failed to parse archive event:", e);
+              }
+            }
+          }
+        } catch (e) {
+        }
+      }
+    }
+  } else if (useKindIndex && filter.kinds) {
+    for (const kind of filter.kinds) {
+      for (const hourKey of getHourKeys()) {
+        const key = `index/kind/${kind}/${hourKey}.jsonl`;
+        try {
+          const obj = await r2.get(key);
+          if (obj) {
+            const content = await obj.text();
+            const lines = content.split("\n").filter((line) => line.trim());
+            for (const line of lines) {
+              try {
+                const event = JSON.parse(line);
+                if (processedEventIds.has(event.id)) continue;
+                if (filter.ids && !filter.ids.includes(event.id)) continue;
+                if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+                if (filter.since && event.created_at < filter.since) continue;
+                if (filter.until && event.created_at > filter.until) continue;
+                let matchesTags = true;
+                for (const [key2, values] of Object.entries(filter)) {
+                  if (key2.startsWith("#") && Array.isArray(values) && values.length > 0) {
+                    const tagName = key2.substring(1);
+                    const eventTagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1]);
+                    if (!values.some((v) => eventTagValues.includes(v))) {
+                      matchesTags = false;
+                      break;
+                    }
+                  }
+                }
+                if (!matchesTags) continue;
+                results.push(event);
+                processedEventIds.add(event.id);
+              } catch (e) {
+                console.error("Failed to parse archive event:", e);
+              }
+            }
+          }
+        } catch (e) {
+        }
+      }
+    }
+  } else {
+    const filesToQuery = getHourKeys().map((hourKey) => `events/${hourKey}.jsonl`);
+    if (filesToQuery.length > 2160) {
+      console.warn(`Large archive query spanning ${filesToQuery.length} hours, limiting to most recent 2160`);
+      filesToQuery.splice(0, filesToQuery.length - 2160);
+    }
+    for (const file of filesToQuery) {
+      try {
+        const object = await r2.get(file);
+        if (!object) continue;
+        const content = await object.text();
+        const lines = content.split("\n").filter((line) => line.trim());
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if (processedEventIds.has(event.id)) continue;
+            if (filter.ids && !filter.ids.includes(event.id)) continue;
+            if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+            if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
+            if (filter.since && event.created_at < filter.since) continue;
+            if (filter.until && event.created_at > filter.until) continue;
+            let matchesTags = true;
+            for (const [key, values] of Object.entries(filter)) {
+              if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
+                const tagName = key.substring(1);
+                const eventTagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1]);
+                if (!values.some((v) => eventTagValues.includes(v))) {
+                  matchesTags = false;
+                  break;
+                }
+              }
+            }
+            if (!matchesTags) continue;
+            results.push(event);
+            processedEventIds.add(event.id);
+          } catch (e) {
+            console.error("Failed to parse archive event:", e);
+          }
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+  }
+  console.log(`Archive query returned ${results.length} events`);
+  return results;
+}
+__name(queryArchive, "queryArchive");
+async function queryEventsWithArchive(filters, bookmark, env) {
+  const d1Result = await queryEvents(filters, bookmark, env);
+  const hotDataCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
+  const needsArchive = filters.some(
+    (filter) => !filter.since || filter.since < hotDataCutoff
+  );
+  if (!needsArchive || !env.EVENT_ARCHIVE) {
+    return d1Result;
+  }
+  const archiveEvents = [];
+  for (const filter of filters) {
+    if (!filter.since || filter.since < hotDataCutoff) {
+      const archived = await queryArchive(filter, hotDataCutoff, env.EVENT_ARCHIVE);
+      archiveEvents.push(...archived);
+    }
+  }
+  const allEvents = /* @__PURE__ */ new Map();
+  for (const event of d1Result.events) {
+    allEvents.set(event.id, event);
+  }
+  for (const event of archiveEvents) {
+    allEvents.set(event.id, event);
+  }
+  const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
+    if (b.created_at !== a.created_at) {
+      return b.created_at - a.created_at;
+    }
+    return a.id.localeCompare(b.id);
+  });
+  const limit = Math.min(...filters.map((f) => f.limit || 1e4));
+  const limitedEvents = sortedEvents.slice(0, limit);
+  return {
+    events: limitedEvents,
+    bookmark: d1Result.bookmark
+  };
+}
+__name(queryEventsWithArchive, "queryEventsWithArchive");
 function handleRelayInfoRequest(request) {
   const responseInfo = { ...relayInfo2 };
   if (PAY_TO_RELAY_ENABLED2) {
@@ -4120,6 +4603,16 @@ var relay_worker_default = {
       console.error("Error in fetch handler:", error);
       return new Response("Internal Server Error", { status: 500 });
     }
+  },
+  // Scheduled handler for archiving
+  async scheduled(event, env, ctx) {
+    console.log("Running scheduled archive process...");
+    try {
+      await archiveOldEvents(env.relayDb, env.EVENT_ARCHIVE);
+      console.log("Archive process completed successfully");
+    } catch (error) {
+      console.error("Archive process failed:", error);
+    }
   }
 };
 
@@ -4431,7 +4924,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     await this.saveSubscriptions(session.id, session.subscriptions);
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
     try {
-      const result = await queryEvents(filters, session.bookmark, this.env);
+      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
       if (result.bookmark) {
         session.bookmark = result.bookmark;
       }
