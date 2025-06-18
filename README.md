@@ -14,6 +14,8 @@ This relay implementation also uses a multi-regional [Durable Objects](https://d
 
 It also uses the [Websocket Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocket-hibernation-api) in order to reduce costs for billable Duration (GB-s) charges with Durable Objects so the billable usage is not incurred during periods of inactivity, but where clients haven't disconnected.
 
+![Nosflare diagram](images/diagram.png)
+
 ## One-click Deploy
 
 Don't know how to code or operate a server but still want to run your own Nostr relay? Nosflare Deploy is the easiest, no-code, one-click deployment of your very own relay using your own Cloudflare account for a one-time setup fee of 21,420 sats!
