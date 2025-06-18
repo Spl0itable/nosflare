@@ -18,7 +18,7 @@ database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 # R2 bucket binding for event archive
 [[r2_buckets]]
 binding = "EVENT_ARCHIVE"
-bucket_name = "nosflare-event-archive"
+bucket_name = "nostr-event-archive"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
