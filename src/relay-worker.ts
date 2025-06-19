@@ -1224,12 +1224,6 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
   const results: NostrEvent[] = [];
   const processedEventIds = new Set<string>();
 
-  // Early return if the filter is asking for data newer than our archive
-  if (filter.since && filter.since >= hotDataCutoff) {
-    console.log('Archive query skipped - filter.since is newer than archive cutoff');
-    return results;
-  }
-
   // Load manifest
   let manifest: ArchiveManifest | null = null;
   try {
@@ -1249,8 +1243,10 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     console.warn('Failed to load archive manifest');
   }
 
-  // If we have specific IDs, use direct lookup
-  if (filter.ids && filter.ids.length > 0 && filter.ids.length <= 100) {
+  // Enhanced direct ID lookup - no time constraints for direct lookups
+  if (filter.ids && filter.ids.length > 0) {
+    console.log(`Archive: Direct ID lookup for ${filter.ids.length} events`);
+    
     for (const eventId of filter.ids) {
       const firstTwo = eventId.substring(0, 2);
       const key = `index/id/${firstTwo}/${eventId}.json`;
@@ -1260,8 +1256,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
         if (obj) {
           const event = JSON.parse(await obj.text()) as NostrEvent;
           
-          // Apply time filters - ensure event is actually in archive range
-          if (event.created_at >= hotDataCutoff) continue; // Skip if too new
+          // For direct ID lookups, don't apply hotDataCutoff constraint
+          // Apply other filters but not time-based ones unless explicitly provided
           if (filter.since && event.created_at < filter.since) continue;
           if (filter.until && event.created_at > filter.until) continue;
           
@@ -1289,28 +1285,41 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
           
           results.push(event);
           processedEventIds.add(event.id);
+          console.log(`Archive: Found event ${eventId} in archive`);
+        } else {
+          console.log(`Archive: Event ${eventId} not found in archive`);
         }
       } catch (e) {
-        // Event not found
+        console.log(`Archive: Error fetching event ${eventId}: ${e}`);
       }
     }
     
-    // If we found all requested IDs, return early
-    if (filter.ids.length === results.length) {
+    // If this was purely a direct ID lookup, return early
+    if (!filter.since && !filter.until && !filter.authors && !filter.kinds && 
+        !Object.keys(filter).some(k => k.startsWith('#'))) {
+      console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
       return results;
     }
   }
 
-  // Calculate date/hour range - ensure we only query archived data
+  // Early return if the filter is asking for data newer than our archive
+  // BUT only apply this constraint for time-based queries, not direct ID lookups
+  if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
+    console.log('Archive query skipped - filter.since is newer than archive cutoff');
+    return results;
+  }
+
+  // Calculate date/hour range - ensure we only query archived data for time-based queries
   const startDate = filter.since ? new Date(Math.max(filter.since * 1000, 0)) : new Date(0);
   const endDate = filter.until ? 
     new Date(Math.min(filter.until * 1000, hotDataCutoff * 1000)) : 
     new Date(hotDataCutoff * 1000);
 
   // Important: Cap endDate at hotDataCutoff to avoid querying data that should be in D1
-  const cappedEndDate = new Date(Math.min(endDate.getTime(), hotDataCutoff * 1000));
+  // BUT only for time-based queries
+  const cappedEndDate = filter.ids ? endDate : new Date(Math.min(endDate.getTime(), hotDataCutoff * 1000));
 
-  if (startDate >= cappedEndDate) {
+  if (startDate >= cappedEndDate && !filter.ids) {
     console.log('Archive query skipped - date range does not overlap with archive');
     return results;
   }
@@ -1368,8 +1377,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                 
                 if (processedEventIds.has(event.id)) continue;
                 
-                // Ensure event is in archive range
-                if (event.created_at >= hotDataCutoff) continue;
+                // For time-based queries, ensure event is in archive range
+                if (!filter.ids && event.created_at >= hotDataCutoff) continue;
                 
                 // Apply remaining filters
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
@@ -1425,8 +1434,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                 
                 if (processedEventIds.has(event.id)) continue;
                 
-                // Ensure event is in archive range
-                if (event.created_at >= hotDataCutoff) continue;
+                // For time-based queries, ensure event is in archive range
+                if (!filter.ids && event.created_at >= hotDataCutoff) continue;
                 
                 // Apply remaining filters
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
@@ -1486,8 +1495,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                     
                     if (processedEventIds.has(event.id)) continue;
                     
-                    // Ensure event is in archive range
-                    if (event.created_at >= hotDataCutoff) continue;
+                    // For time-based queries, ensure event is in archive range
+                    if (!filter.ids && event.created_at >= hotDataCutoff) continue;
                     
                     // Apply remaining filters
                     if (filter.ids && !filter.ids.includes(event.id)) continue;
@@ -1554,8 +1563,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
             
             if (processedEventIds.has(event.id)) continue;
             
-            // Ensure event is in archive range
-            if (event.created_at >= hotDataCutoff) continue;
+            // For time-based queries, ensure event is in archive range
+            if (!filter.ids && event.created_at >= hotDataCutoff) continue;
             
             // Apply filters
             if (filter.ids && !filter.ids.includes(event.id)) continue;
@@ -1607,27 +1616,21 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
   // Check if we need to query archive
   const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
   
-  // Only query archive if the filter explicitly requests data older than 90 days
+  // Determine if we need archive access
   const needsArchive = filters.some(filter => {
-    // If there's no time range specified, we should NOT query archive
-    // The client should be explicit about wanting old data
+    // Always check archive for direct ID lookups (no time constraints)
+    if (filter.ids && filter.ids.length > 0) {
+      return true;
+    }
+    
+    // Check archive if the filter explicitly requests data older than 90 days
     if (!filter.since && !filter.until) {
       return false;
     }
     
-    // Only query archive if:
-    // 1. The filter has a time range that includes data older than 90 days
-    // 2. This means either:
-    //    - `since` is before the cutoff (wants old data)
-    //    - `until` is before the cutoff (query ends in old data)
-    //    - Both are specified and the range includes the cutoff
-    
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    const querySpansCutoff = (!filter.since || filter.since < hotDataCutoff) && 
-                             (!filter.until || filter.until > hotDataCutoff);
     
-    // Only query archive if the filter explicitly wants old data
     return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
   });
 
@@ -1635,26 +1638,46 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
     return d1Result;
   }
 
-  console.log('Query requires archive access - time range includes data older than 90 days');
+  console.log('Query requires archive access - checking for missing events or old data');
 
   // Query archive for each filter that needs it
   const archiveEvents: NostrEvent[] = [];
   for (const filter of filters) {
     // Check if this specific filter needs archive
+    const hasDirectIds = filter.ids && filter.ids.length > 0;
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
     
-    if (queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
-      // Adjust the filter for archive query to avoid overlap
-      const archiveFilter = { ...filter };
-      
-      // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
-      if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
-        archiveFilter.until = hotDataCutoff;
+    if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+      // For direct ID lookups, check which IDs are missing from D1 results
+      if (hasDirectIds) {
+        const foundIds = new Set(d1Result.events.map(e => e.id));
+        // @ts-ignore
+        const missingIds = filter.ids.filter(id => !foundIds.has(id));
+        
+        if (missingIds.length > 0) {
+          console.log(`Checking archive for ${missingIds.length} missing event IDs`);
+          const archiveFilter = { ...filter, ids: missingIds };
+          
+          // Don't apply time constraints for direct ID lookups in archive
+          delete archiveFilter.since;
+          delete archiveFilter.until;
+          
+          const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+          archiveEvents.push(...archived);
+        }
+      } else {
+        // For time-based queries, adjust the filter for archive query to avoid overlap
+        const archiveFilter = { ...filter };
+        
+        // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
+        if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+          archiveFilter.until = hotDataCutoff;
+        }
+        
+        const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+        archiveEvents.push(...archived);
       }
-      
-      const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-      archiveEvents.push(...archived);
     }
   }
 
