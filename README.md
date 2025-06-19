@@ -32,7 +32,7 @@ Or, continue below to manually deploy Nosflare...
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database and Durable Objects.
+- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database, Durable Objects, and R2 bucket.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
 - (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
 
