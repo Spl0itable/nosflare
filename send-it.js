@@ -2465,11 +2465,11 @@ async function processEvent(event, server) {
 async function processReq(event, server) {
   try {
     sendNotice(server, "Denied! This relay does not accept REQs.");
-    sendEOSE(server);
+    server.send(JSON.stringify(["CLOSED", event[1], "restricted: this relay does not accept REQs"]));
   } catch (error) {
     console.error("Error in REQ processing:", error);
     sendNotice(server, `Error: REQ processing failed - ${error.message}`);
-    sendEOSE(server);
+    server.send(JSON.stringify(["CLOSED", event[1], `restricted: REQ processing failed - ${error.message}`]));
   }
 }
 
