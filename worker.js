@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.2.6",
+  version: "7.2.7",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -290,6 +290,7 @@ var allowedTags = /* @__PURE__ */ new Set([
 var PUBKEY_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
 var REQ_RATE_LIMIT = { rate: 5e3 / 6e4, capacity: 5e3 };
 var excludedRateLimitKinds = /* @__PURE__ */ new Set([
+  1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
 function isPubkeyAllowed(pubkey) {
@@ -2756,7 +2757,7 @@ async function processEvent(event, sessionId, env) {
       console.log(`Duplicate event detected: ${event.id}`);
       return { success: false, message: "duplicate: already have this event" };
     }
-    if (checkValidNip052 && event.kind !== 0) {
+    if (event.kind !== 1059 && checkValidNip052 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
       if (!isValidNIP05) {
         console.error(`Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
@@ -4788,7 +4789,7 @@ var _RelayWebSocket = class _RelayWebSocket {
           return;
         }
       }
-      if (!isPubkeyAllowed(event.pubkey)) {
+      if (event.kind !== 1059 && !isPubkeyAllowed(event.pubkey)) {
         console.error(`Event denied. Pubkey ${event.pubkey} is not allowed.`);
         this.sendOK(session.webSocket, event.id, false, "blocked: pubkey not allowed");
         return;

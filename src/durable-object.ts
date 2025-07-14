@@ -329,8 +329,8 @@ export class RelayWebSocket implements DurableObject {
         }
       }
 
-      // Check if pubkey is allowed
-      if (!isPubkeyAllowed(event.pubkey)) {
+      // Check if pubkey is allowed (bypassed for kind 1059)
+      if (event.kind !== 1059 && !isPubkeyAllowed(event.pubkey)) {
         console.error(`Event denied. Pubkey ${event.pubkey} is not allowed.`);
         this.sendOK(session.webSocket, event.id, false, 'blocked: pubkey not allowed');
         return;

@@ -1,3 +1,7 @@
+## v7.2.7 - 2025-07-15
+
+- Hotfix: bypass kind 1059 from pubkey allowlist, nip05 validation, and rate-limiting
+
 ## v7.2.6 - 2025-06-18
 
 - New: hybrid storage capacity to archive older events than 90 days to R2 bucket

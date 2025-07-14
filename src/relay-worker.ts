@@ -404,8 +404,8 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
       return { success: false, message: "duplicate: already have this event" };
     }
 
-    // NIP-05 validation if enabled
-    if (checkValidNip05 && event.kind !== 0) {
+    // NIP-05 validation if enabled (bypassed for kind 1059)
+    if (event.kind !== 1059 && checkValidNip05 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
       if (!isValidNIP05) {
         console.error(`Event denied. NIP-05 validation failed for pubkey ${event.pubkey}.`);
@@ -908,7 +908,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 // Archive functions with hourly partitions
 async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
   const cutoffTime = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
-  
+
   console.log(`Archiving events older than ${new Date(cutoffTime * 1000).toISOString()}`);
 
   // Load existing manifest
@@ -960,7 +960,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
   while (hasMore) {
     const session = db.withSession('first-unconstrained');
-    
+
     // Get batch of old events
     const oldEvents = await session.prepare(`
       SELECT * FROM events 
@@ -980,11 +980,11 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const eventsByAuthorHour = new Map<string, NostrEvent[]>();
     const eventsByKindHour = new Map<string, NostrEvent[]>();
     const eventsByTagHour = new Map<string, NostrEvent[]>();
-    
+
     for (const event of oldEvents.results) {
       const date = new Date(event.created_at as number * 1000);
       const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}/${String(date.getUTCHours()).padStart(2, '0')}`;
-      
+
       // Get tags for this event
       const tags = await session.prepare(
         'SELECT tag_name, tag_value FROM tags WHERE event_id = ?'
@@ -992,14 +992,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
       const formattedTags: string[][] = [];
       const tagMap: Record<string, string[]> = {};
-      
+
       for (const tag of tags.results || []) {
         if (!tagMap[tag.tag_name as string]) {
           tagMap[tag.tag_name as string] = [];
         }
         tagMap[tag.tag_name as string].push(tag.tag_value as string);
       }
-      
+
       for (const [name, values] of Object.entries(tagMap)) {
         formattedTags.push([name, ...values]);
       }
@@ -1059,7 +1059,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     // Store primary data by hour
     for (const [hourKey, events] of eventsByHour) {
       const key = `events/${hourKey}.jsonl`;
-      
+
       // Check if file exists
       let existingData = '';
       try {
@@ -1073,7 +1073,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
       // Convert to JSON Lines
       const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
-      
+
       await r2.put(key, existingData + jsonLines, {
         customMetadata: {
           eventCount: String(events.length + (existingData ? existingData.split('\n').length - 1 : 0)),
@@ -1092,14 +1092,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     for (const [authorHourKey, events] of eventsByAuthorHour) {
       const [pubkey, hour] = authorHourKey.split('/');
       const key = `index/author/${pubkey}/${hour}.jsonl`;
-      
+
       let existingData = '';
       try {
         const existing = await r2.get(key);
         if (existing) {
           existingData = await existing.text() + '\n';
         }
-      } catch (e) {}
+      } catch (e) { }
 
       const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
       await r2.put(key, existingData + jsonLines);
@@ -1109,14 +1109,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     for (const [kindHourKey, events] of eventsByKindHour) {
       const [kind, hour] = kindHourKey.split('/');
       const key = `index/kind/${kind}/${hour}.jsonl`;
-      
+
       let existingData = '';
       try {
         const existing = await r2.get(key);
         if (existing) {
           existingData = await existing.text() + '\n';
         }
-      } catch (e) {}
+      } catch (e) { }
 
       const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
       await r2.put(key, existingData + jsonLines);
@@ -1129,14 +1129,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       const tagValue = parts[1];
       const hour = `${parts[2]}/${parts[3]}`;
       const key = `index/tag/${tagName}/${tagValue}/${hour}.jsonl`;
-      
+
       let existingData = '';
       try {
         const existing = await r2.get(key);
         if (existing) {
           existingData = await existing.text() + '\n';
         }
-      } catch (e) {}
+      } catch (e) { }
 
       const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
       await r2.put(key, existingData + jsonLines);
@@ -1147,7 +1147,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       const eventId = event.id as string;
       const firstTwo = eventId.substring(0, 2);
       const key = `index/id/${firstTwo}/${eventId}.json`;
-      
+
       // Get full event with tags
       const tags = await session.prepare(
         'SELECT tag_name, tag_value FROM tags WHERE event_id = ?'
@@ -1155,14 +1155,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
       const formattedTags: string[][] = [];
       const tagMap: Record<string, string[]> = {};
-      
+
       for (const tag of tags.results || []) {
         if (!tagMap[tag.tag_name as string]) {
           tagMap[tag.tag_name as string] = [];
         }
         tagMap[tag.tag_name as string].push(tag.tag_value as string);
       }
-      
+
       for (const [name, values] of Object.entries(tagMap)) {
         formattedTags.push([name, ...values]);
       }
@@ -1183,11 +1183,11 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     // Delete from D1 (use primary session for writes)
     const writeSession = db.withSession('first-primary');
     const eventIds = oldEvents.results.map(e => e.id as string);
-    
+
     for (let i = 0; i < eventIds.length; i += 100) {
       const chunk = eventIds.slice(i, i + 100);
       const placeholders = chunk.map(() => '?').join(',');
-      
+
       await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
       await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
     }
@@ -1246,25 +1246,25 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
   // Enhanced direct ID lookup - no time constraints for direct lookups
   if (filter.ids && filter.ids.length > 0) {
     console.log(`Archive: Direct ID lookup for ${filter.ids.length} events`);
-    
+
     for (const eventId of filter.ids) {
       const firstTwo = eventId.substring(0, 2);
       const key = `index/id/${firstTwo}/${eventId}.json`;
-      
+
       try {
         const obj = await r2.get(key);
         if (obj) {
           const event = JSON.parse(await obj.text()) as NostrEvent;
-          
+
           // For direct ID lookups, don't apply hotDataCutoff constraint
           // Apply other filters but not time-based ones unless explicitly provided
           if (filter.since && event.created_at < filter.since) continue;
           if (filter.until && event.created_at > filter.until) continue;
-          
+
           // Apply other filters
           if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
           if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
-          
+
           // Apply tag filters
           let matchesTags = true;
           for (const [key, values] of Object.entries(filter)) {
@@ -1273,16 +1273,16 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
               const eventTagValues = event.tags
                 .filter(tag => tag[0] === tagName)
                 .map(tag => tag[1]);
-              
+
               if (!values.some(v => eventTagValues.includes(v))) {
                 matchesTags = false;
                 break;
               }
             }
           }
-          
+
           if (!matchesTags) continue;
-          
+
           results.push(event);
           processedEventIds.add(event.id);
           console.log(`Archive: Found event ${eventId} in archive`);
@@ -1293,10 +1293,10 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
         console.log(`Archive: Error fetching event ${eventId}: ${e}`);
       }
     }
-    
+
     // If this was purely a direct ID lookup, return early
-    if (!filter.since && !filter.until && !filter.authors && !filter.kinds && 
-        !Object.keys(filter).some(k => k.startsWith('#'))) {
+    if (!filter.since && !filter.until && !filter.authors && !filter.kinds &&
+      !Object.keys(filter).some(k => k.startsWith('#'))) {
       console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
       return results;
     }
@@ -1311,8 +1311,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
 
   // Calculate date/hour range - ensure we only query archived data for time-based queries
   const startDate = filter.since ? new Date(Math.max(filter.since * 1000, 0)) : new Date(0);
-  const endDate = filter.until ? 
-    new Date(Math.min(filter.until * 1000, hotDataCutoff * 1000)) : 
+  const endDate = filter.until ?
+    new Date(Math.min(filter.until * 1000, hotDataCutoff * 1000)) :
     new Date(hotDataCutoff * 1000);
 
   // Important: Cap endDate at hotDataCutoff to avoid querying data that should be in D1
@@ -1329,7 +1329,7 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
   // Determine the most efficient index to use
   const useAuthorIndex = filter.authors && filter.authors.length <= 10;
   const useKindIndex = filter.kinds && filter.kinds.length <= 5;
-  const useTagIndex = Object.entries(filter).some(([k, v]) => 
+  const useTagIndex = Object.entries(filter).some(([k, v]) =>
     k.startsWith('#') && Array.isArray(v) && v.length <= 10
   );
 
@@ -1337,15 +1337,15 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
   const getHourKeys = (): string[] => {
     const hourKeys: string[] = [];
     const currentDate = new Date(startDate);
-    
+
     while (currentDate <= cappedEndDate) {
       for (let hour = 0; hour < 24; hour++) {
         const hourKey = `${currentDate.getUTCFullYear()}-${String(currentDate.getUTCMonth() + 1).padStart(2, '0')}-${String(currentDate.getUTCDate()).padStart(2, '0')}/${String(hour).padStart(2, '0')}`;
-        
+
         // Check if within our time range
         const hourTimestamp = new Date(currentDate);
         hourTimestamp.setUTCHours(hour);
-        
+
         if (hourTimestamp >= startDate && hourTimestamp <= cappedEndDate) {
           if (!manifest || manifest.hoursWithEvents.includes(hourKey)) {
             hourKeys.push(hourKey);
@@ -1354,7 +1354,7 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
       }
       currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }
-    
+
     return hourKeys;
   };
 
@@ -1364,28 +1364,28 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     for (const author of filter.authors) {
       for (const hourKey of getHourKeys()) {
         const key = `index/author/${author}/${hourKey}.jsonl`;
-        
+
         try {
           const obj = await r2.get(key);
           if (obj) {
             const content = await obj.text();
             const lines = content.split('\n').filter(line => line.trim());
-            
+
             for (const line of lines) {
               try {
                 const event = JSON.parse(line) as NostrEvent;
-                
+
                 if (processedEventIds.has(event.id)) continue;
-                
+
                 // For time-based queries, ensure event is in archive range
                 if (!filter.ids && event.created_at >= hotDataCutoff) continue;
-                
+
                 // Apply remaining filters
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
                 if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
                 if (filter.since && event.created_at < filter.since) continue;
                 if (filter.until && event.created_at > filter.until) continue;
-                
+
                 // Apply tag filters
                 let matchesTags = true;
                 for (const [key, values] of Object.entries(filter)) {
@@ -1394,16 +1394,16 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                     const eventTagValues = event.tags
                       .filter(tag => tag[0] === tagName)
                       .map(tag => tag[1]);
-                    
+
                     if (!values.some(v => eventTagValues.includes(v))) {
                       matchesTags = false;
                       break;
                     }
                   }
                 }
-                
+
                 if (!matchesTags) continue;
-                
+
                 results.push(event);
                 processedEventIds.add(event.id);
               } catch (e) {
@@ -1421,28 +1421,28 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     for (const kind of filter.kinds) {
       for (const hourKey of getHourKeys()) {
         const key = `index/kind/${kind}/${hourKey}.jsonl`;
-        
+
         try {
           const obj = await r2.get(key);
           if (obj) {
             const content = await obj.text();
             const lines = content.split('\n').filter(line => line.trim());
-            
+
             for (const line of lines) {
               try {
                 const event = JSON.parse(line) as NostrEvent;
-                
+
                 if (processedEventIds.has(event.id)) continue;
-                
+
                 // For time-based queries, ensure event is in archive range
                 if (!filter.ids && event.created_at >= hotDataCutoff) continue;
-                
+
                 // Apply remaining filters
                 if (filter.ids && !filter.ids.includes(event.id)) continue;
                 if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
                 if (filter.since && event.created_at < filter.since) continue;
                 if (filter.until && event.created_at > filter.until) continue;
-                
+
                 // Apply tag filters
                 let matchesTags = true;
                 for (const [key, values] of Object.entries(filter)) {
@@ -1451,16 +1451,16 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                     const eventTagValues = event.tags
                       .filter(tag => tag[0] === tagName)
                       .map(tag => tag[1]);
-                    
+
                     if (!values.some(v => eventTagValues.includes(v))) {
                       matchesTags = false;
                       break;
                     }
                   }
                 }
-                
+
                 if (!matchesTags) continue;
-                
+
                 results.push(event);
                 processedEventIds.add(event.id);
               } catch (e) {
@@ -1478,52 +1478,52 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     for (const [filterKey, filterValues] of Object.entries(filter)) {
       if (filterKey.startsWith('#') && Array.isArray(filterValues) && filterValues.length > 0) {
         const tagName = filterKey.substring(1);
-        
+
         for (const tagValue of filterValues) {
           for (const hourKey of getHourKeys()) {
             const key = `index/tag/${tagName}/${tagValue}/${hourKey}.jsonl`;
-            
+
             try {
               const obj = await r2.get(key);
               if (obj) {
                 const content = await obj.text();
                 const lines = content.split('\n').filter(line => line.trim());
-                
+
                 for (const line of lines) {
                   try {
                     const event = JSON.parse(line) as NostrEvent;
-                    
+
                     if (processedEventIds.has(event.id)) continue;
-                    
+
                     // For time-based queries, ensure event is in archive range
                     if (!filter.ids && event.created_at >= hotDataCutoff) continue;
-                    
+
                     // Apply remaining filters
                     if (filter.ids && !filter.ids.includes(event.id)) continue;
                     if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
                     if (filter.kinds && !filter.kinds.includes(event.kind)) continue;
                     if (filter.since && event.created_at < filter.since) continue;
                     if (filter.until && event.created_at > filter.until) continue;
-                    
+
                     // Check other tag filters
                     let matchesOtherTags = true;
                     for (const [otherKey, otherValues] of Object.entries(filter)) {
-                      if (otherKey.startsWith('#') && otherKey !== filterKey && 
-                          Array.isArray(otherValues) && otherValues.length > 0) {
+                      if (otherKey.startsWith('#') && otherKey !== filterKey &&
+                        Array.isArray(otherValues) && otherValues.length > 0) {
                         const otherTagName = otherKey.substring(1);
                         const eventOtherTagValues = event.tags
                           .filter(tag => tag[0] === otherTagName)
                           .map(tag => tag[1]);
-                        
+
                         if (!otherValues.some(v => eventOtherTagValues.includes(v))) {
                           matchesOtherTags = false;
                           break;
                         }
                       }
                     }
-                    
+
                     if (!matchesOtherTags) continue;
-                    
+
                     results.push(event);
                     processedEventIds.add(event.id);
                   } catch (e) {
@@ -1560,12 +1560,12 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
         for (const line of lines) {
           try {
             const event = JSON.parse(line) as NostrEvent;
-            
+
             if (processedEventIds.has(event.id)) continue;
-            
+
             // For time-based queries, ensure event is in archive range
             if (!filter.ids && event.created_at >= hotDataCutoff) continue;
-            
+
             // Apply filters
             if (filter.ids && !filter.ids.includes(event.id)) continue;
             if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
@@ -1581,14 +1581,14 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
                 const eventTagValues = event.tags
                   .filter(tag => tag[0] === tagName)
                   .map(tag => tag[1]);
-                
+
                 if (!values.some(v => eventTagValues.includes(v))) {
                   matchesTags = false;
                   break;
                 }
               }
             }
-            
+
             if (!matchesTags) continue;
 
             results.push(event);
@@ -1612,25 +1612,25 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
 async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
   // First get results from D1
   const d1Result = await queryEvents(filters, bookmark, env);
-  
+
   // Check if we need to query archive
   const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
-  
+
   // Determine if we need archive access
   const needsArchive = filters.some(filter => {
     // Always check archive for direct ID lookups (no time constraints)
     if (filter.ids && filter.ids.length > 0) {
       return true;
     }
-    
+
     // Check archive if the filter explicitly requests data older than 90 days
     if (!filter.since && !filter.until) {
       return false;
     }
-    
+
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    
+
     return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
   });
 
@@ -1647,34 +1647,34 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
     const hasDirectIds = filter.ids && filter.ids.length > 0;
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    
+
     if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
       // For direct ID lookups, check which IDs are missing from D1 results
       if (hasDirectIds) {
         const foundIds = new Set(d1Result.events.map(e => e.id));
         // @ts-ignore
         const missingIds = filter.ids.filter(id => !foundIds.has(id));
-        
+
         if (missingIds.length > 0) {
           console.log(`Checking archive for ${missingIds.length} missing event IDs`);
           const archiveFilter = { ...filter, ids: missingIds };
-          
+
           // Don't apply time constraints for direct ID lookups in archive
           delete archiveFilter.since;
           delete archiveFilter.until;
-          
+
           const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
           archiveEvents.push(...archived);
         }
       } else {
         // For time-based queries, adjust the filter for archive query to avoid overlap
         const archiveFilter = { ...filter };
-        
+
         // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
         if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
           archiveFilter.until = hotDataCutoff;
         }
-        
+
         const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
         archiveEvents.push(...archived);
       }
@@ -1683,12 +1683,12 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
 
   // Merge results
   const allEvents = new Map<string, NostrEvent>();
-  
+
   // Add D1 events
   for (const event of d1Result.events) {
     allEvents.set(event.id, event);
   }
-  
+
   // Add archive events
   for (const event of archiveEvents) {
     allEvents.set(event.id, event);
@@ -2202,9 +2202,9 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   const country = cf?.country || 'US';
   const region = cf?.region || 'unknown';
   const colo = cf?.colo || 'unknown';
-  
+
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
-  
+
   // Define all 9 endpoints with their location hints
   const ALL_ENDPOINTS = [
     { name: 'relay-WNAM-primary', hint: 'wnam' },
@@ -2217,38 +2217,38 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     { name: 'relay-AFR-primary', hint: 'afr' },
     { name: 'relay-ME-primary', hint: 'me' }
   ];
-  
+
   // Comprehensive country to hint mapping
   const countryToHint: Record<string, string> = {
     // North America
     'US': 'enam', 'CA': 'enam', 'MX': 'wnam',
-    
+
     // Central America & Caribbean (route to WNAM)
-    'GT': 'wnam', 'BZ': 'wnam', 'SV': 'wnam', 'HN': 'wnam', 'NI': 'wnam', 
+    'GT': 'wnam', 'BZ': 'wnam', 'SV': 'wnam', 'HN': 'wnam', 'NI': 'wnam',
     'CR': 'wnam', 'PA': 'wnam', 'CU': 'wnam', 'DO': 'wnam', 'HT': 'wnam',
     'JM': 'wnam', 'PR': 'wnam', 'TT': 'wnam', 'BB': 'wnam',
-    
+
     // South America
     'BR': 'sam', 'AR': 'sam', 'CL': 'sam', 'CO': 'sam', 'PE': 'sam',
     'VE': 'sam', 'EC': 'sam', 'BO': 'sam', 'PY': 'sam', 'UY': 'sam',
     'GY': 'sam', 'SR': 'sam', 'GF': 'sam',
-    
+
     // Western Europe
     'GB': 'weur', 'FR': 'weur', 'DE': 'weur', 'ES': 'weur', 'IT': 'weur',
     'NL': 'weur', 'BE': 'weur', 'CH': 'weur', 'AT': 'weur', 'PT': 'weur',
     'IE': 'weur', 'LU': 'weur', 'MC': 'weur', 'AD': 'weur', 'SM': 'weur',
     'VA': 'weur', 'LI': 'weur', 'MT': 'weur',
-    
+
     // Nordic countries (route to WEUR)
     'SE': 'weur', 'NO': 'weur', 'DK': 'weur', 'FI': 'weur', 'IS': 'weur',
-    
+
     // Eastern Europe
     'PL': 'eeur', 'RU': 'eeur', 'UA': 'eeur', 'RO': 'eeur', 'CZ': 'eeur',
     'HU': 'eeur', 'GR': 'eeur', 'BG': 'eeur', 'SK': 'eeur', 'HR': 'eeur',
     'RS': 'eeur', 'SI': 'eeur', 'BA': 'eeur', 'AL': 'eeur', 'MK': 'eeur',
     'ME': 'eeur', 'XK': 'eeur', 'BY': 'eeur', 'MD': 'eeur', 'LT': 'eeur',
     'LV': 'eeur', 'EE': 'eeur', 'CY': 'eeur',
-    
+
     // Asia-Pacific
     'JP': 'apac', 'CN': 'apac', 'KR': 'apac', 'IN': 'apac', 'SG': 'apac',
     'TH': 'apac', 'ID': 'apac', 'MY': 'apac', 'VN': 'apac', 'PH': 'apac',
@@ -2260,16 +2260,16 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'KI': 'apac', 'PW': 'apac', 'MH': 'apac', 'FM': 'apac', 'NR': 'apac',
     'TV': 'apac', 'CK': 'apac', 'NU': 'apac', 'TK': 'apac', 'GU': 'apac',
     'MP': 'apac', 'AS': 'apac',
-    
+
     // Oceania
     'AU': 'oc', 'NZ': 'oc',
-    
+
     // Middle East
     'AE': 'me', 'SA': 'me', 'IL': 'me', 'TR': 'me', 'EG': 'me',
     'IQ': 'me', 'IR': 'me', 'SY': 'me', 'JO': 'me', 'LB': 'me',
     'KW': 'me', 'QA': 'me', 'BH': 'me', 'OM': 'me', 'YE': 'me',
     'PS': 'me', 'GE': 'me', 'AM': 'me', 'AZ': 'me',
-    
+
     // Africa
     'ZA': 'afr', 'NG': 'afr', 'KE': 'afr', 'MA': 'afr', 'TN': 'afr',
     'DZ': 'afr', 'LY': 'afr', 'ET': 'afr', 'GH': 'afr', 'TZ': 'afr',
@@ -2282,18 +2282,18 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'LS': 'afr', 'GW': 'afr', 'GQ': 'afr', 'MU': 'afr', 'SZ': 'afr',
     'DJ': 'afr', 'KM': 'afr', 'CV': 'afr', 'SC': 'afr', 'ST': 'afr',
     'SS': 'afr', 'EH': 'afr', 'CG': 'afr', 'CD': 'afr',
-    
+
     // Central Asia (route to APAC)
     'KZ': 'apac', 'UZ': 'apac', 'TM': 'apac', 'TJ': 'apac', 'KG': 'apac',
   };
-  
+
   // US state-level routing
   const usStateToHint: Record<string, string> = {
     // Western states -> WNAM
     'California': 'wnam', 'Oregon': 'wnam', 'Washington': 'wnam', 'Nevada': 'wnam', 'Arizona': 'wnam',
     'Utah': 'wnam', 'Idaho': 'wnam', 'Montana': 'wnam', 'Wyoming': 'wnam', 'Colorado': 'wnam',
     'New Mexico': 'wnam', 'Alaska': 'wnam', 'Hawaii': 'wnam',
-    
+
     // Eastern states -> ENAM
     'New York': 'enam', 'Florida': 'enam', 'Texas': 'enam', 'Illinois': 'enam', 'Georgia': 'enam',
     'Pennsylvania': 'enam', 'Ohio': 'enam', 'Michigan': 'enam', 'North Carolina': 'enam', 'Virginia': 'enam',
@@ -2303,11 +2303,11 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'Iowa': 'enam', 'Minnesota': 'enam', 'Wisconsin': 'enam', 'Indiana': 'enam', 'Kentucky': 'enam',
     'West Virginia': 'enam', 'Delaware': 'enam', 'Oklahoma': 'enam', 'Kansas': 'enam', 'Nebraska': 'enam',
     'South Dakota': 'enam', 'North Dakota': 'enam',
-    
+
     // DC
     'District of Columbia': 'enam',
   };
-  
+
   // Continent to hint fallback
   const continentToHint: Record<string, string> = {
     'NA': 'enam',
@@ -2317,10 +2317,10 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'AF': 'afr',
     'OC': 'oc'
   };
-  
+
   // Determine best hint 
   let bestHint: string;
-  
+
   // Only check US states if country is actually US
   if (country === 'US' && region && region !== 'unknown') {
     bestHint = usStateToHint[region] || 'enam';
@@ -2328,22 +2328,22 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     // First try country mapping, then continent fallback
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
-  
+
   // Find the primary endpoint based on hint
   const primaryEndpoint = ALL_ENDPOINTS.find(ep => ep.hint === bestHint) || ALL_ENDPOINTS[1]; // Default to ENAM
-  
+
   // Order endpoints by proximity (primary first, then others)
   const orderedEndpoints = [
     primaryEndpoint,
     ...ALL_ENDPOINTS.filter(ep => ep.name !== primaryEndpoint.name)
   ];
-  
+
   // Try each endpoint
   for (const endpoint of orderedEndpoints) {
     try {
       const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
       const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
-      
+
       console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
       // @ts-ignore
       return { stub, doName: endpoint.name };
@@ -2351,7 +2351,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
       console.log(`Failed to connect to ${endpoint.name}: ${error}`);
     }
   }
-  
+
   // Fallback to ENAM
   const fallback = ALL_ENDPOINTS[1]; // ENAM
   const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
@@ -2429,7 +2429,7 @@ export default {
   // Scheduled handler for archiving
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     console.log('Running scheduled archive process...');
-    
+
     try {
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
