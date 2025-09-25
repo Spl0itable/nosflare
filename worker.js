@@ -4733,10 +4733,8 @@ var _RelayWebSocket = class _RelayWebSocket {
     const cacheKey = JSON.stringify({ filters, bookmark });
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log("Query cache hit");
       return cached.result;
     }
-    console.log("Query cache miss - fetching from database");
     const result = await queryEventsWithArchive(filters, bookmark, this.env);
     this.queryCache.set(cacheKey, {
       result,
@@ -4753,7 +4751,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     for (let i = 0; i < toRemove; i++) {
       this.queryCache.delete(sortedEntries[i][0]);
     }
-    console.log(`Cache cleanup: removed ${toRemove} old entries`);
   }
   invalidateRelevantCaches(event) {
     let invalidated = 0;

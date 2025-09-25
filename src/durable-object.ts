@@ -102,12 +102,10 @@ export class RelayWebSocket implements DurableObject {
     // Check cache
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log('Query cache hit');
       return cached.result;
     }
     
     // Query database
-    console.log('Query cache miss - fetching from database');
     const result = await queryEventsWithArchive(filters, bookmark, this.env);
     
     // Cache the result
@@ -134,8 +132,6 @@ export class RelayWebSocket implements DurableObject {
     for (let i = 0; i < toRemove; i++) {
       this.queryCache.delete(sortedEntries[i][0]);
     }
-    
-    console.log(`Cache cleanup: removed ${toRemove} old entries`);
   }
 
   private invalidateRelevantCaches(event: NostrEvent): void {
