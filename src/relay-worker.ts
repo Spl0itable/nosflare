@@ -450,8 +450,7 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig).run();
 
-    // Process tags in chunks if there are many
-    const TAG_CHUNK_SIZE = 50;
+    // Process tags in chunks
     const tagInserts = [];
 
     for (const tag of event.tags) {
@@ -460,14 +459,14 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
       }
     }
 
-    // Insert tags in chunks
-    for (let i = 0; i < tagInserts.length; i += TAG_CHUNK_SIZE) {
-      const chunk = tagInserts.slice(i, i + TAG_CHUNK_SIZE);
+    // Insert tags in chunks of 50
+    for (let i = 0; i < tagInserts.length; i += 50) {
+      const chunk = tagInserts.slice(i, i + 50);
       const batch = chunk.map(t =>
         session.prepare(`
-          INSERT INTO tags (event_id, tag_name, tag_value)
-          VALUES (?, ?, ?)
-        `).bind(event.id, t.tag_name, t.tag_value)
+      INSERT INTO tags (event_id, tag_name, tag_value)
+      VALUES (?, ?, ?)
+    `).bind(event.id, t.tag_name, t.tag_value)
       );
 
       if (batch.length > 0) {
@@ -546,28 +545,6 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
     success: true,
     message: deletedCount > 0 ? `Event successfully deleted` : "No matching events found to delete"
   };
-}
-
-// Helper function to count query parameters
-function countQueryParameters(filters: NostrFilter): number {
-  let count = 1; // Start with 1 for the base "deleted = 0" parameter
-
-  if (filters.ids) count += filters.ids.length;
-  if (filters.authors) count += filters.authors.length;
-  if (filters.kinds) count += filters.kinds.length;
-  if (filters.since) count += 1;
-  if (filters.until) count += 1;
-
-  // Count tag filter parameters
-  for (const [key, values] of Object.entries(filters)) {
-    if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
-      count += 1 + values.length; // 1 for tag name + number of values
-    }
-  }
-
-  if (filters.limit) count += 1;
-
-  return count;
 }
 
 // Helper function to chunk arrays
@@ -754,11 +731,19 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     const eventSet = new Map<string, NostrEvent>();
 
     for (const filter of filters) {
-      // Check if we need to use chunked query
-      const paramCount = countQueryParameters(filter);
 
-      if (paramCount > 200) { // Lower threshold for D1's limits of 255
-        console.log(`Query has ${paramCount} parameters, using chunked query...`);
+      // Check if any array in the filter exceeds chunk size
+      const needsChunking = (
+        (filter.ids && filter.ids.length > 50) ||
+        (filter.authors && filter.authors.length > 50) ||
+        (filter.kinds && filter.kinds.length > 50) ||
+        Object.entries(filter).some(([key, values]) =>
+          key.startsWith('#') && Array.isArray(values) && values.length > 50
+        )
+      );
+
+      if (needsChunking) {
+        console.log(`Filter has arrays >50 items, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {
           eventSet.set(event.id, event);
@@ -766,29 +751,8 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
         continue;
       }
 
-      // For queries under the threshold, still apply safety limits
-      const safeFilter = { ...filter };
-      if (safeFilter.ids && safeFilter.ids.length > 100) {
-        console.log(`Large ID filter detected: ${safeFilter.ids.length} IDs. Truncating to 100.`);
-        safeFilter.ids = safeFilter.ids.slice(0, 100);
-      }
-
-      if (safeFilter.authors && safeFilter.authors.length > 100) {
-        console.log(`Large authors filter detected: ${safeFilter.authors.length} authors. Truncating to 100.`);
-        safeFilter.authors = safeFilter.authors.slice(0, 100);
-      }
-
-      // Check tag filters
-      for (const [key, values] of Object.entries(safeFilter)) {
-        if (key.startsWith('#') && Array.isArray(values) && values.length > 100) {
-          console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 100.`);
-          safeFilter[key] = values.slice(0, 100);
-        }
-      }
-
       // Build and execute the query
-      const query = buildQuery(safeFilter);
-      console.log(`Executing query: ${query.sql}`);
+      const query = buildQuery(filter);
 
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
@@ -815,16 +779,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
         }
       } catch (error: any) {
         console.error(`Query execution error: ${error.message}`);
-        // If we still hit the limit, try with even smaller chunks
-        if (error.message.includes('too many SQL variables')) {
-          console.log('Still hit parameter limit, falling back to chunked query');
-          const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
-          for (const event of chunkedResult.events) {
-            eventSet.set(event.id, event);
-          }
-        } else {
-          throw error;
-        }
+        throw error;
       }
     }
 

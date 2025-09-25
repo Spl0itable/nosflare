@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.2.7",
+  version: "7.3.7",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2789,20 +2789,19 @@ async function saveEventToD1(event, env) {
       INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig).run();
-    const TAG_CHUNK_SIZE = 50;
     const tagInserts = [];
     for (const tag of event.tags) {
       if (tag[0] && tag[1]) {
         tagInserts.push({ tag_name: tag[0], tag_value: tag[1] });
       }
     }
-    for (let i = 0; i < tagInserts.length; i += TAG_CHUNK_SIZE) {
-      const chunk = tagInserts.slice(i, i + TAG_CHUNK_SIZE);
+    for (let i = 0; i < tagInserts.length; i += 50) {
+      const chunk = tagInserts.slice(i, i + 50);
       const batch = chunk.map(
         (t) => session.prepare(`
-          INSERT INTO tags (event_id, tag_name, tag_value)
-          VALUES (?, ?, ?)
-        `).bind(event.id, t.tag_name, t.tag_value)
+      INSERT INTO tags (event_id, tag_name, tag_value)
+      VALUES (?, ?, ?)
+    `).bind(event.id, t.tag_name, t.tag_value)
       );
       if (batch.length > 0) {
         await session.batch(batch);
@@ -2868,22 +2867,6 @@ async function processDeletionEvent(event, env) {
   };
 }
 __name(processDeletionEvent, "processDeletionEvent");
-function countQueryParameters(filters) {
-  let count = 1;
-  if (filters.ids) count += filters.ids.length;
-  if (filters.authors) count += filters.authors.length;
-  if (filters.kinds) count += filters.kinds.length;
-  if (filters.since) count += 1;
-  if (filters.until) count += 1;
-  for (const [key, values] of Object.entries(filters)) {
-    if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
-      count += 1 + values.length;
-    }
-  }
-  if (filters.limit) count += 1;
-  return count;
-}
-__name(countQueryParameters, "countQueryParameters");
 function chunkArray(array, chunkSize) {
   const chunks = [];
   for (let i = 0; i < array.length; i += chunkSize) {
@@ -3023,32 +3006,18 @@ async function queryEvents(filters, bookmark, env) {
     const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = /* @__PURE__ */ new Map();
     for (const filter of filters) {
-      const paramCount = countQueryParameters(filter);
-      if (paramCount > 200) {
-        console.log(`Query has ${paramCount} parameters, using chunked query...`);
+      const needsChunking = filter.ids && filter.ids.length > 50 || filter.authors && filter.authors.length > 50 || filter.kinds && filter.kinds.length > 50 || Object.entries(filter).some(
+        ([key, values]) => key.startsWith("#") && Array.isArray(values) && values.length > 50
+      );
+      if (needsChunking) {
+        console.log(`Filter has arrays >50 items, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {
           eventSet.set(event.id, event);
         }
         continue;
       }
-      const safeFilter = { ...filter };
-      if (safeFilter.ids && safeFilter.ids.length > 100) {
-        console.log(`Large ID filter detected: ${safeFilter.ids.length} IDs. Truncating to 100.`);
-        safeFilter.ids = safeFilter.ids.slice(0, 100);
-      }
-      if (safeFilter.authors && safeFilter.authors.length > 100) {
-        console.log(`Large authors filter detected: ${safeFilter.authors.length} authors. Truncating to 100.`);
-        safeFilter.authors = safeFilter.authors.slice(0, 100);
-      }
-      for (const [key, values] of Object.entries(safeFilter)) {
-        if (key.startsWith("#") && Array.isArray(values) && values.length > 100) {
-          console.log(`Large tag filter detected for ${key}: ${values.length} values. Truncating to 100.`);
-          safeFilter[key] = values.slice(0, 100);
-        }
-      }
-      const query = buildQuery(safeFilter);
-      console.log(`Executing query: ${query.sql}`);
+      const query = buildQuery(filter);
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
         if (result.meta) {
@@ -3071,15 +3040,7 @@ async function queryEvents(filters, bookmark, env) {
         }
       } catch (error) {
         console.error(`Query execution error: ${error.message}`);
-        if (error.message.includes("too many SQL variables")) {
-          console.log("Still hit parameter limit, falling back to chunked query");
-          const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
-          for (const event of chunkedResult.events) {
-            eventSet.set(event.id, event);
-          }
-        } else {
-          throw error;
-        }
+        throw error;
       }
     }
     const events = Array.from(eventSet.values()).sort((a, b) => {

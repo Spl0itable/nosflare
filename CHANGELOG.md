@@ -1,3 +1,7 @@
+## v7.3.7 - 2025-09-25
+
+Tweak: enhanced database query chunking to encompass any REQ filter with array values greater than 50
+
 ## v7.2.7 - 2025-07-15
 
 - Hotfix: bypass kind 1059 from pubkey allowlist, nip05 validation, and rate-limiting
