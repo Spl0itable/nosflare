@@ -20,7 +20,7 @@ const {
 
 // Archive configuration constants
 const ARCHIVE_RETENTION_DAYS = 90;
-const ARCHIVE_BATCH_SIZE = 10000;
+const ARCHIVE_BATCH_SIZE = 1000;
 
 // Archive index types
 interface ArchiveManifest {
@@ -72,16 +72,13 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         tags TEXT NOT NULL,
         content TEXT NOT NULL,
         sig TEXT NOT NULL,
-        deleted INTEGER DEFAULT 0,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_deleted_kind ON events(deleted, kind)`,
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
@@ -508,6 +505,7 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
 
   for (const eventId of deletedEventIds) {
     try {
+      // First check if the event exists and belongs to the requesting pubkey
       const existing = await session.prepare(
         "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
       ).bind(eventId).first();
@@ -523,12 +521,23 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
         continue;
       }
 
+      // Delete associated tags first (due to foreign key constraint)
+      await session.prepare(
+        "DELETE FROM tags WHERE event_id = ?"
+      ).bind(eventId).run();
+
+      // Delete from content_hashes if exists
+      await session.prepare(
+        "DELETE FROM content_hashes WHERE event_id = ?"
+      ).bind(eventId).run();
+
+      // Now delete the event
       const result = await session.prepare(
-        "UPDATE events SET deleted = 1 WHERE id = ?"
+        "DELETE FROM events WHERE id = ?"
       ).bind(eventId).run();
 
       if (result.meta.changes > 0) {
-        console.log(`Event ${eventId} marked as deleted successfully.`);
+        console.log(`Event ${eventId} deleted successfully.`);
         deletedCount++;
       }
     } catch (error) {
@@ -537,13 +546,16 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
     }
   }
 
+  // Save the deletion event itself
+  await saveEventToD1(event, env);
+
   if (errors.length > 0) {
     return { success: false, message: errors[0] };
   }
 
   return {
     success: true,
-    message: deletedCount > 0 ? `Event successfully deleted` : "No matching events found to delete"
+    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete"
   };
 }
 
@@ -801,7 +813,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
 }
 
 function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
-  let sql = "SELECT * FROM events WHERE deleted = 0";
+  let sql = "SELECT * FROM events";
   const params: any[] = [];
   const conditions: string[] = [];
 
@@ -850,12 +862,12 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   }
 
   if (conditions.length > 0) {
-    sql += " AND " + conditions.join(" AND ");
+    sql += " WHERE " + conditions.join(" AND ");
   }
 
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(Math.min(filter.limit || 10000, 10000));
+  params.push(Math.min(filter.limit || 1000, 5000));
 
   return { sql, params };
 }
@@ -919,7 +931,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     // Get batch of old events
     const oldEvents = await session.prepare(`
       SELECT * FROM events 
-      WHERE created_at < ? AND deleted = 0
+      WHERE created_at < ?
       ORDER BY created_at
       LIMIT ?
       OFFSET ?

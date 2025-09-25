@@ -1,3 +1,7 @@
+## v7.3.8 - 2025-09-25
+
+Hotfix: optimized event deletions and fixed redundant deletion check
+
 ## v7.3.7 - 2025-09-25
 
 Tweak: enhanced database query chunking to encompass any REQ filter with array values greater than 50

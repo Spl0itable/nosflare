@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.3.7",
+  version: "7.3.8",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2447,7 +2447,7 @@ var {
   allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
 var ARCHIVE_RETENTION_DAYS = 90;
-var ARCHIVE_BATCH_SIZE = 1e4;
+var ARCHIVE_BATCH_SIZE = 1e3;
 async function initializeDatabase(db) {
   try {
     const session2 = db.withSession("first-unconstrained");
@@ -2479,16 +2479,13 @@ async function initializeDatabase(db) {
         tags TEXT NOT NULL,
         content TEXT NOT NULL,
         sig TEXT NOT NULL,
-        deleted INTEGER DEFAULT 0,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_deleted_kind ON events(deleted, kind)`,
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
@@ -2846,11 +2843,17 @@ async function processDeletionEvent(event, env) {
         errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
         continue;
       }
+      await session.prepare(
+        "DELETE FROM tags WHERE event_id = ?"
+      ).bind(eventId).run();
+      await session.prepare(
+        "DELETE FROM content_hashes WHERE event_id = ?"
+      ).bind(eventId).run();
       const result = await session.prepare(
-        "UPDATE events SET deleted = 1 WHERE id = ?"
+        "DELETE FROM events WHERE id = ?"
       ).bind(eventId).run();
       if (result.meta.changes > 0) {
-        console.log(`Event ${eventId} marked as deleted successfully.`);
+        console.log(`Event ${eventId} deleted successfully.`);
         deletedCount++;
       }
     } catch (error) {
@@ -2858,12 +2861,13 @@ async function processDeletionEvent(event, env) {
       errors.push(`error deleting ${eventId}`);
     }
   }
+  await saveEventToD1(event, env);
   if (errors.length > 0) {
     return { success: false, message: errors[0] };
   }
   return {
     success: true,
-    message: deletedCount > 0 ? `Event successfully deleted` : "No matching events found to delete"
+    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete"
   };
 }
 __name(processDeletionEvent, "processDeletionEvent");
@@ -3059,7 +3063,7 @@ async function queryEvents(filters, bookmark, env) {
 }
 __name(queryEvents, "queryEvents");
 function buildQuery(filter) {
-  let sql = "SELECT * FROM events WHERE deleted = 0";
+  let sql = "SELECT * FROM events";
   const params = [];
   const conditions = [];
   if (filter.ids && filter.ids.length > 0) {
@@ -3099,11 +3103,11 @@ function buildQuery(filter) {
     conditions.push(`(${tagConditions.join(" OR ")})`);
   }
   if (conditions.length > 0) {
-    sql += " AND " + conditions.join(" AND ");
+    sql += " WHERE " + conditions.join(" AND ");
   }
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(Math.min(filter.limit || 1e4, 1e4));
+  params.push(Math.min(filter.limit || 1e3, 5e3));
   return { sql, params };
 }
 __name(buildQuery, "buildQuery");
@@ -3158,7 +3162,7 @@ async function archiveOldEvents(db, r2) {
     const session = db.withSession("first-unconstrained");
     const oldEvents = await session.prepare(`
       SELECT * FROM events 
-      WHERE created_at < ? AND deleted = 0
+      WHERE created_at < ?
       ORDER BY created_at
       LIMIT ?
       OFFSET ?
