@@ -2,17 +2,6 @@
 
 Tweak: enhanced compound indexes and added query caching to durable objects
 
-*NOTE* this update includes minor breaking changes for an already initialized database. From the Storage & Databases > D1 SQL database page in the Cloudflare dashboard, select your Nosflare database and enter the console. Then run the following command:
-
-CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id);
-UPDATE system_config SET value = '3' WHERE key = 'schema_version';
-ANALYZE events;
-ANALYZE tags;
-
 ## v7.3.8 - 2025-09-25
 
 Hotfix: optimized event deletions and fixed redundant deletion check
