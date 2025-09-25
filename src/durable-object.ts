@@ -1,4 +1,4 @@
-import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcastRequest, QueryResult } from './types';
+import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcastRequest } from './types';
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
@@ -19,12 +19,6 @@ interface SessionAttachment {
   doName: string;
 }
 
-// Cache entry interface
-interface CacheEntry {
-  result: QueryResult;
-  timestamp: number;
-}
-
 export class RelayWebSocket implements DurableObject {
   private sessions: Map<string, WebSocketSession>;
   private env: Env;
@@ -33,11 +27,6 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
-  
-  // Query cache
-  private queryCache: Map<string, CacheEntry> = new Map();
-  private readonly CACHE_TTL = 5000; // 5 seconds
-  private readonly MAX_CACHE_SIZE = 100;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -73,7 +62,6 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
-    this.queryCache = new Map();
   }
 
   // Storage helper methods for subscriptions
@@ -92,78 +80,6 @@ export class RelayWebSocket implements DurableObject {
   private async deleteSubscriptions(sessionId: string): Promise<void> {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
-  }
-
-  // Query cache methods
-  private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
-    // Create cache key from filters and bookmark
-    const cacheKey = JSON.stringify({ filters, bookmark });
-    
-    // Check cache
-    const cached = this.queryCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log('Query cache hit');
-      return cached.result;
-    }
-    
-    // Query database
-    console.log('Query cache miss - fetching from database');
-    const result = await queryEventsWithArchive(filters, bookmark, this.env);
-    
-    // Cache the result
-    this.queryCache.set(cacheKey, { 
-      result, 
-      timestamp: Date.now() 
-    });
-    
-    // Clean up old cache entries if cache is too large
-    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
-      this.cleanupCache();
-    }
-    
-    return result;
-  }
-
-  private cleanupCache(): void {
-    // Remove oldest entries
-    const sortedEntries = Array.from(this.queryCache.entries())
-      .sort((a, b) => a[1].timestamp - b[1].timestamp);
-    
-    // Remove oldest 20% of entries
-    const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
-    for (let i = 0; i < toRemove; i++) {
-      this.queryCache.delete(sortedEntries[i][0]);
-    }
-    
-    console.log(`Cache cleanup: removed ${toRemove} old entries`);
-  }
-
-  private invalidateRelevantCaches(event: NostrEvent): void {
-    // Invalidate caches that might include this new event
-    let invalidated = 0;
-    
-    for (const [cacheKey] of this.queryCache.entries()) {
-      try {
-        const { filters } = JSON.parse(cacheKey);
-        
-        // Check if the new event matches any of the cached filters
-        const wouldMatch = filters.some((filter: NostrFilter) => 
-          this.matchesFilter(event, filter)
-        );
-        
-        if (wouldMatch) {
-          this.queryCache.delete(cacheKey);
-          invalidated++;
-        }
-      } catch (error) {
-        // If we can't parse the key, remove it
-        this.queryCache.delete(cacheKey);
-      }
-    }
-    
-    if (invalidated > 0) {
-      console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
-    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -452,9 +368,6 @@ export class RelayWebSocket implements DurableObject {
 
         // Mark as processed
         this.processedEvents.set(event.id, Date.now());
-        
-        // Invalidate relevant caches
-        this.invalidateRelevantCaches(event);
 
         // Broadcast to all (local + remote)
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
@@ -553,8 +466,8 @@ export class RelayWebSocket implements DurableObject {
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
-      // Query events with caching
-      const result = await this.getCachedOrQuery(filters, session.bookmark);
+      // Query events from database (including archive if needed)
+      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
 
       // Update session bookmark
       if (result.bookmark) {
