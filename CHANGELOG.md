@@ -6,7 +6,15 @@ Tweak: added REQ query cachhing to durable objects and added new compound indice
 
 ```
 DROP INDEX IF EXISTS idx_events_pubkey_kind;
+CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey);
+CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind);
+CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value);
+CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id);
+CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id);
 CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value);
 CREATE TABLE IF NOT EXISTS event_tags_cache (
   event_id TEXT NOT NULL,
