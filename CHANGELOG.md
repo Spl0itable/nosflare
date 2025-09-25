@@ -1,3 +1,47 @@
+## v7.4.8 - 2025-09-26
+
+Tweak: added REQ query cachhing to durable objects and added new compound indices.
+
+*NOTE* this update includes is a small breaking change if database is already live. Please run the following from the Storage & Databases > D1 SQL database page in the Cloudflare dashboard and select your relay's database. Then click into console from the top menu. From there, run these commands:
+
+```
+DROP INDEX IF EXISTS idx_events_pubkey_kind;
+CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind);
+CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value);
+CREATE TABLE IF NOT EXISTS event_tags_cache (
+  event_id TEXT NOT NULL,
+  pubkey TEXT NOT NULL,
+  kind INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  tag_p TEXT,
+  tag_e TEXT,
+  tag_a TEXT,
+  PRIMARY KEY (event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p);
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2');
+ANALYZE events;
+ANALYZE tags;
+ANALYZE event_tags_cache;
+INSERT OR IGNORE INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+SELECT 
+  e.id,
+  e.pubkey,
+  e.kind,
+  e.created_at,
+  (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'p' LIMIT 1) as tag_p,
+  (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'e' LIMIT 1) as tag_e,
+  (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'a' LIMIT 1) as tag_a
+FROM events e
+WHERE EXISTS (
+  SELECT 1 FROM tags t 
+  WHERE t.event_id = e.id 
+  AND t.tag_name IN ('p', 'e', 'a')
+);
+```
+
 ## v7.3.8 - 2025-09-25
 
 Hotfix: optimized event deletions and fixed redundant deletion check

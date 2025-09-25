@@ -1,4 +1,4 @@
-import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcastRequest } from './types';
+import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcastRequest, QueryResult } from './types';
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
@@ -17,6 +17,19 @@ interface SessionAttachment {
   bookmark: string;
   host: string;
   doName: string;
+  hasPaid?: boolean; // Cache payment status in session
+}
+
+// Cache entry interface
+interface CacheEntry {
+  result: QueryResult;
+  timestamp: number;
+}
+
+// Payment cache entry
+interface PaymentCacheEntry {
+  hasPaid: boolean;
+  timestamp: number;
 }
 
 export class RelayWebSocket implements DurableObject {
@@ -27,6 +40,15 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
+  
+  // Query cache for REQ messages
+  private queryCache: Map<string, CacheEntry> = new Map();
+  private readonly QUERY_CACHE_TTL = 60000;
+  private readonly MAX_CACHE_SIZE = 100;
+  
+  // Payment status cache
+  private paymentCache: Map<string, PaymentCacheEntry> = new Map();
+  private readonly PAYMENT_CACHE_TTL = 60000;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -62,6 +84,8 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
+    this.queryCache = new Map();
+    this.paymentCache = new Map();
   }
 
   // Storage helper methods for subscriptions
@@ -80,6 +104,116 @@ export class RelayWebSocket implements DurableObject {
   private async deleteSubscriptions(sessionId: string): Promise<void> {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
+  }
+
+  // Payment cache methods
+  private async getCachedPaymentStatus(pubkey: string): Promise<boolean | null> {
+    const cached = this.paymentCache.get(pubkey);
+    if (cached && Date.now() - cached.timestamp < this.PAYMENT_CACHE_TTL) {
+      return cached.hasPaid;
+    }
+    // Remove expired entry
+    if (cached) {
+      this.paymentCache.delete(pubkey);
+    }
+    return null;
+  }
+
+  private setCachedPaymentStatus(pubkey: string, hasPaid: boolean): void {
+    this.paymentCache.set(pubkey, {
+      hasPaid,
+      timestamp: Date.now()
+    });
+    
+    // Clean up old payment cache entries if too large
+    if (this.paymentCache.size > 1000) {
+      const sortedEntries = Array.from(this.paymentCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      
+      // Remove oldest 20%
+      const toRemove = Math.floor(this.paymentCache.size * 0.2);
+      for (let i = 0; i < toRemove; i++) {
+        this.paymentCache.delete(sortedEntries[i][0]);
+      }
+    }
+  }
+
+  // Query cache methods
+  private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
+    // Create cache key from filters and bookmark
+    const cacheKey = JSON.stringify({ filters, bookmark });
+    
+    // Check cache
+    const cached = this.queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
+      console.log('Returning cached query result');
+      return cached.result;
+    }
+    
+    // Query database
+    const result = await queryEventsWithArchive(filters, bookmark, this.env);
+    
+    // Cache the result
+    this.queryCache.set(cacheKey, { 
+      result, 
+      timestamp: Date.now() 
+    });
+    
+    // Clean up old cache entries if cache is too large
+    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
+      this.cleanupQueryCache();
+    }
+    
+    return result;
+  }
+
+  private cleanupQueryCache(): void {
+    // Remove expired entries first
+    const now = Date.now();
+    for (const [key, entry] of this.queryCache.entries()) {
+      if (now - entry.timestamp > this.QUERY_CACHE_TTL) {
+        this.queryCache.delete(key);
+      }
+    }
+    
+    // If still too large, remove oldest entries
+    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
+      const sortedEntries = Array.from(this.queryCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      
+      const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
+      for (let i = 0; i < toRemove; i++) {
+        this.queryCache.delete(sortedEntries[i][0]);
+      }
+    }
+  }
+
+  private invalidateRelevantCaches(event: NostrEvent): void {
+    // Invalidate query caches that might include this new event
+    let invalidated = 0;
+    
+    for (const [cacheKey] of this.queryCache.entries()) {
+      try {
+        const { filters } = JSON.parse(cacheKey);
+        
+        // Check if the new event matches any of the cached filters
+        const wouldMatch = filters.some((filter: NostrFilter) => 
+          this.matchesFilter(event, filter)
+        );
+        
+        if (wouldMatch) {
+          this.queryCache.delete(cacheKey);
+          invalidated++;
+        }
+      } catch (error) {
+        // If we can't parse the key, remove it
+        this.queryCache.delete(cacheKey);
+      }
+    }
+    
+    if (invalidated > 0) {
+      console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -185,7 +319,8 @@ export class RelayWebSocket implements DurableObject {
         sessionId: session.id,
         bookmark: session.bookmark,
         host: session.host,
-        doName: this.doName
+        doName: this.doName,
+        hasPaid: attachment.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -319,7 +454,16 @@ export class RelayWebSocket implements DurableObject {
 
       // Check if pay to relay is enabled
       if (PAY_TO_RELAY_ENABLED) {
-        const hasPaid = await hasPaidForRelay(event.pubkey, this.env);
+        // Check cache first
+        let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
+        
+        if (hasPaid === null) {
+          // Not in cache, check database
+          hasPaid = await hasPaidForRelay(event.pubkey, this.env);
+          // Cache the result
+          this.setCachedPaymentStatus(event.pubkey, hasPaid);
+        }
+        
         if (!hasPaid) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
@@ -368,6 +512,9 @@ export class RelayWebSocket implements DurableObject {
 
         // Mark as processed
         this.processedEvents.set(event.id, Date.now());
+        
+        // Invalidate relevant query caches
+        this.invalidateRelevantCaches(event);
 
         // Broadcast to all (local + remote)
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
@@ -466,8 +613,8 @@ export class RelayWebSocket implements DurableObject {
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
     try {
-      // Query events from database (including archive if needed)
-      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
+      // Query events with caching
+      const result = await this.getCachedOrQuery(filters, session.bookmark);
 
       // Update session bookmark
       if (result.bookmark) {

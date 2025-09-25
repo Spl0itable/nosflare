@@ -22,6 +22,11 @@ const {
 const ARCHIVE_RETENTION_DAYS = 90;
 const ARCHIVE_BATCH_SIZE = 1000;
 
+// Query optimization constants
+const GLOBAL_MAX_EVENTS = 5000;
+const DEFAULT_TIME_WINDOW_DAYS = 7;
+const MAX_QUERY_COMPLEXITY = 1000;
+
 // Archive index types
 interface ArchiveManifest {
   lastUpdated: string;
@@ -74,25 +79,43 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         sig TEXT NOT NULL,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
+
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
+
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
+
+      `CREATE TABLE IF NOT EXISTS event_tags_cache (
+        event_id TEXT NOT NULL,
+        pubkey TEXT NOT NULL,
+        kind INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        tag_p TEXT,
+        tag_e TEXT,
+        tag_a TEXT,
+        PRIMARY KEY (event_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p)`,
+
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
         pubkey TEXT PRIMARY KEY,
         paid_at INTEGER NOT NULL,
         amount_sats INTEGER,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
+
       `CREATE TABLE IF NOT EXISTS content_hashes (
         hash TEXT PRIMARY KEY,
         event_id TEXT NOT NULL,
@@ -112,8 +135,11 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
     ).run();
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2')"
     ).run();
+
+    // Run ANALYZE to initialize statistics
+    await session.prepare("ANALYZE").run();
 
     console.log("Database initialization completed!");
   } catch (error) {
@@ -387,6 +413,35 @@ async function validateNIP05(nip05Address: string, pubkey: string): Promise<bool
   }
 }
 
+// Query complexity calculation
+function calculateQueryComplexity(filter: NostrFilter): number {
+  let complexity = 0;
+
+  // Base complexity
+  complexity += (filter.ids?.length || 0) * 1;
+  complexity += (filter.authors?.length || 0) * 2;
+  complexity += (filter.kinds?.length || 0) * 5;
+
+  // Tag filters are expensive
+  for (const [key, values] of Object.entries(filter)) {
+    if (key.startsWith('#') && Array.isArray(values)) {
+      complexity += values.length * 10;
+    }
+  }
+
+  // No time bounds is very expensive
+  if (!filter.since && !filter.until) {
+    complexity *= 2;
+  }
+
+  // Large limits are expensive
+  if ((filter.limit || 0) > 1000) {
+    complexity *= 1.5;
+  }
+
+  return complexity;
+}
+
 // Event processing
 async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string }> {
   try {
@@ -449,10 +504,16 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
 
     // Process tags in chunks
     const tagInserts = [];
+    let tagP = null, tagE = null, tagA = null;
 
     for (const tag of event.tags) {
       if (tag[0] && tag[1]) {
         tagInserts.push({ tag_name: tag[0], tag_value: tag[1] });
+
+        // Capture common tags for cache
+        if (tag[0] === 'p' && !tagP) tagP = tag[1];
+        if (tag[0] === 'e' && !tagE) tagE = tag[1];
+        if (tag[0] === 'a' && !tagA) tagA = tag[1];
       }
     }
 
@@ -461,14 +522,26 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
       const chunk = tagInserts.slice(i, i + 50);
       const batch = chunk.map(t =>
         session.prepare(`
-      INSERT INTO tags (event_id, tag_name, tag_value)
-      VALUES (?, ?, ?)
-    `).bind(event.id, t.tag_name, t.tag_value)
+          INSERT INTO tags (event_id, tag_name, tag_value)
+          VALUES (?, ?, ?)
+        `).bind(event.id, t.tag_name, t.tag_value)
       );
 
       if (batch.length > 0) {
         await session.batch(batch);
       }
+    }
+
+    // Update event tags cache for common tags
+    if (tagP || tagE || tagA) {
+      await session.prepare(`
+        INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          tag_p = excluded.tag_p,
+          tag_e = excluded.tag_e,
+          tag_a = excluded.tag_a
+      `).bind(event.id, event.pubkey, event.kind, event.created_at, tagP, tagE, tagA).run();
     }
 
     // Insert content hash separately (only if anti-spam is enabled)
@@ -531,6 +604,11 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
         "DELETE FROM content_hashes WHERE event_id = ?"
       ).bind(eventId).run();
 
+      // Delete from event_tags_cache
+      await session.prepare(
+        "DELETE FROM event_tags_cache WHERE event_id = ?"
+      ).bind(eventId).run();
+
       // Now delete the event
       const result = await session.prepare(
         "DELETE FROM events WHERE id = ?"
@@ -568,16 +646,162 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
   return chunks;
 }
 
+// Query builder
+function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
+  const params: any[] = [];
+  const conditions: string[] = [];
+
+  // Determine the most selective filter to use as primary
+  const selectivityScore = {
+    ids: filter.ids ? filter.ids.length : Infinity,
+    authors: filter.authors ? filter.authors.length * 10 : Infinity,
+    kinds: filter.kinds ? filter.kinds.length * 1000 : Infinity,
+    tags: Infinity
+  };
+
+  // Count tag filters
+  let tagCount = 0;
+  const tagFilters: Array<{ name: string; values: string[] }> = [];
+  for (const [key, values] of Object.entries(filter)) {
+    if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+      tagCount += values.length;
+      tagFilters.push({ name: key.substring(1), values });
+    }
+  }
+  if (tagCount > 0) {
+    selectivityScore.tags = tagCount * 5;
+  }
+
+  // Build query starting with most selective column
+  let sql = "SELECT * FROM events";
+
+  // Special optimization for tag-heavy queries with good selectivity
+  if (tagCount > 0 && tagCount < 10 && selectivityScore.tags <= Math.min(selectivityScore.authors, selectivityScore.kinds)) {
+    // Use CTE to get matching event IDs first
+    const tagConditions: string[] = [];
+    const cteParams: any[] = [];
+
+    for (const tagFilter of tagFilters) {
+      tagConditions.push(`(tag_name = ? AND tag_value IN (${tagFilter.values.map(() => '?').join(',')}))`);
+      cteParams.push(tagFilter.name, ...tagFilter.values);
+    }
+
+    sql = `WITH matching_events AS (
+      SELECT DISTINCT event_id 
+      FROM tags 
+      WHERE ${tagConditions.join(' OR ')}
+    )
+    SELECT e.* FROM events e
+    INNER JOIN matching_events m ON e.id = m.event_id`;
+
+    params.push(...cteParams);
+
+    // Add other conditions
+    const whereConditions: string[] = [];
+
+    if (filter.ids && filter.ids.length > 0) {
+      whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+      params.push(...filter.ids);
+    }
+
+    if (filter.authors && filter.authors.length > 0) {
+      whereConditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+      params.push(...filter.authors);
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      whereConditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+      params.push(...filter.kinds);
+    }
+
+    if (filter.since) {
+      whereConditions.push("e.created_at >= ?");
+      params.push(filter.since);
+    }
+
+    if (filter.until) {
+      whereConditions.push("e.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    if (whereConditions.length > 0) {
+      sql += " WHERE " + whereConditions.join(" AND ");
+    }
+
+    sql += " ORDER BY e.created_at DESC";
+  } else {
+    // Standard query building with index hints
+    let indexHint = "";
+
+    // Determine best index to use
+    if (filter.kinds && filter.kinds.length <= 5 && (!filter.authors || filter.authors.length > 10)) {
+      indexHint = " INDEXED BY idx_events_kind_created_at";
+    } else if (filter.authors && filter.authors.length <= 5) {
+      indexHint = " INDEXED BY idx_events_pubkey_created_at";
+    } else if (!filter.kinds && !filter.authors && (filter.since || filter.until)) {
+      indexHint = " INDEXED BY idx_events_created_at";
+    }
+
+    sql = `SELECT * FROM events${indexHint}`;
+
+    if (filter.ids && filter.ids.length > 0) {
+      conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
+      params.push(...filter.ids);
+    }
+
+    if (filter.authors && filter.authors.length > 0) {
+      conditions.push(`pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+      params.push(...filter.authors);
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      conditions.push(`kind IN (${filter.kinds.map(() => '?').join(',')})`);
+      params.push(...filter.kinds);
+    }
+
+    if (filter.since) {
+      conditions.push("created_at >= ?");
+      params.push(filter.since);
+    }
+
+    if (filter.until) {
+      conditions.push("created_at <= ?");
+      params.push(filter.until);
+    }
+
+    // Handle tag filters as subqueries
+    for (const tagFilter of tagFilters) {
+      conditions.push(`
+        id IN (
+          SELECT event_id FROM tags 
+          WHERE tag_name = ? AND tag_value IN (${tagFilter.values.map(() => '?').join(',')})
+        )
+      `);
+      params.push(tagFilter.name, ...tagFilter.values);
+    }
+
+    if (conditions.length > 0) {
+      sql += " WHERE " + conditions.join(" AND ");
+    }
+
+    sql += " ORDER BY created_at DESC";
+  }
+
+  sql += " LIMIT ?";
+  params.push(Math.min(filter.limit || 1000, 5000));
+
+  return { sql, params };
+}
+
 // Helper function to handle chunked queries
-async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
+async function queryDatabaseChunked(filter: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
   const session = env.RELAY_DATABASE.withSession(bookmark);
   const allEvents = new Map<string, NostrEvent>();
 
-  // Use smaller chunk size for D1's limits
   const CHUNK_SIZE = 50;
 
   // Create a base filter with everything except the large arrays
-  const baseFilter: NostrFilter = { ...filters };
+  const baseFilter: NostrFilter = { ...filter };
   const needsChunking = {
     ids: false,
     authors: false,
@@ -586,23 +810,23 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   };
 
   // Identify what needs chunking and remove from base filter
-  if (filters.ids && filters.ids.length > CHUNK_SIZE) {
+  if (filter.ids && filter.ids.length > CHUNK_SIZE) {
     needsChunking.ids = true;
     delete baseFilter.ids;
   }
 
-  if (filters.authors && filters.authors.length > CHUNK_SIZE) {
+  if (filter.authors && filter.authors.length > CHUNK_SIZE) {
     needsChunking.authors = true;
     delete baseFilter.authors;
   }
 
-  if (filters.kinds && filters.kinds.length > CHUNK_SIZE) {
+  if (filter.kinds && filter.kinds.length > CHUNK_SIZE) {
     needsChunking.kinds = true;
     delete baseFilter.kinds;
   }
 
   // Check tag filters
-  for (const [key, values] of Object.entries(filters)) {
+  for (const [key, values] of Object.entries(filter)) {
     if (key.startsWith('#') && Array.isArray(values) && values.length > CHUNK_SIZE) {
       needsChunking.tags[key] = true;
       delete baseFilter[key];
@@ -683,21 +907,21 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
   };
 
   // Process each filter type that needs chunking
-  if (needsChunking.ids && filters.ids) {
-    await processStringChunks('ids', filters.ids);
+  if (needsChunking.ids && filter.ids) {
+    await processStringChunks('ids', filter.ids);
   }
 
-  if (needsChunking.authors && filters.authors) {
-    await processStringChunks('authors', filters.authors);
+  if (needsChunking.authors && filter.authors) {
+    await processStringChunks('authors', filter.authors);
   }
 
-  if (needsChunking.kinds && filters.kinds) {
-    await processNumberChunks('kinds', filters.kinds);
+  if (needsChunking.kinds && filter.kinds) {
+    await processNumberChunks('kinds', filter.kinds);
   }
 
   // Process tag filters
   for (const [tagKey, _] of Object.entries(needsChunking.tags)) {
-    const tagValues = filters[tagKey];
+    const tagValues = filter[tagKey];
     if (Array.isArray(tagValues) && tagValues.every((v: any) => typeof v === 'string')) {
       await processStringChunks(tagKey, tagValues as string[]);
     }
@@ -705,7 +929,7 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
 
   // If nothing needed chunking, just run the query as-is
   if (!needsChunking.ids && !needsChunking.authors && !needsChunking.kinds && Object.keys(needsChunking.tags).length === 0) {
-    const query = buildQuery(filters);
+    const query = buildQuery(filter);
 
     try {
       const result = await session.prepare(query.sql)
@@ -742,7 +966,29 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = new Map<string, NostrEvent>();
 
+    let totalEventsRead = 0;
+
     for (const filter of filters) {
+      // Skip if we've already hit the global limit
+      if (totalEventsRead >= GLOBAL_MAX_EVENTS) {
+        console.warn(`Global event limit reached (${GLOBAL_MAX_EVENTS}), stopping query`);
+        break;
+      }
+
+      // Check query complexity
+      const complexity = calculateQueryComplexity(filter);
+      if (complexity > MAX_QUERY_COMPLEXITY) {
+        console.warn(`Query too complex (complexity: ${complexity}), skipping filter`);
+        continue;
+      }
+
+      // For filters with no time bounds and broad criteria, add default time window
+      if (!filter.since && !filter.until) {
+        // Default to last 7 days for unbounded queries
+        const sevenDaysAgo = Math.floor(Date.now() / 1000) - (DEFAULT_TIME_WINDOW_DAYS * 24 * 60 * 60);
+        filter.since = sevenDaysAgo;
+        console.log(`Added default ${DEFAULT_TIME_WINDOW_DAYS}-day time bound to unbounded query`);
+      }
 
       // Check if any array in the filter exceeds chunk size
       const needsChunking = (
@@ -758,7 +1004,9 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
         console.log(`Filter has arrays >50 items, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {
+          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
           eventSet.set(event.id, event);
+          totalEventsRead++;
         }
         continue;
       }
@@ -774,10 +1022,13 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
           console.log({
             servedByRegion: result.meta.served_by_region ?? "",
             servedByPrimary: result.meta.served_by_primary ?? false,
+            rowsRead: result.results.length
           });
         }
 
         for (const row of result.results) {
+          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+
           const event: NostrEvent = {
             id: row.id as string,
             pubkey: row.pubkey as string,
@@ -788,6 +1039,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
             sig: row.sig as string
           };
           eventSet.set(event.id, event);
+          totalEventsRead++;
         }
       } catch (error: any) {
         console.error(`Query execution error: ${error.message}`);
@@ -810,66 +1062,6 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     console.error(`Error querying events: ${error.message}`);
     return { events: [], bookmark: null };
   }
-}
-
-function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
-  let sql = "SELECT * FROM events";
-  const params: any[] = [];
-  const conditions: string[] = [];
-
-  if (filter.ids && filter.ids.length > 0) {
-    conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
-    params.push(...filter.ids);
-  }
-
-  if (filter.authors && filter.authors.length > 0) {
-    conditions.push(`pubkey IN (${filter.authors.map(() => '?').join(',')})`);
-    params.push(...filter.authors);
-  }
-
-  if (filter.kinds && filter.kinds.length > 0) {
-    conditions.push(`kind IN (${filter.kinds.map(() => '?').join(',')})`);
-    params.push(...filter.kinds);
-  }
-
-  if (filter.since) {
-    conditions.push("created_at >= ?");
-    params.push(filter.since);
-  }
-
-  if (filter.until) {
-    conditions.push("created_at <= ?");
-    params.push(filter.until);
-  }
-
-  // Tag filters
-  const tagConditions: string[] = [];
-  for (const [key, values] of Object.entries(filter)) {
-    if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
-      const tagName = key.substring(1);
-      tagConditions.push(`
-        id IN (
-          SELECT event_id FROM tags 
-          WHERE tag_name = ? AND tag_value IN (${values.map(() => '?').join(',')})
-        )
-      `);
-      params.push(tagName, ...values);
-    }
-  }
-
-  if (tagConditions.length > 0) {
-    conditions.push(`(${tagConditions.join(' OR ')})`);
-  }
-
-  if (conditions.length > 0) {
-    sql += " WHERE " + conditions.join(" AND ");
-  }
-
-  sql += " ORDER BY created_at DESC";
-  sql += " LIMIT ?";
-  params.push(Math.min(filter.limit || 1000, 5000));
-
-  return { sql, params };
 }
 
 // Archive functions with hourly partitions
@@ -1156,6 +1348,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       const placeholders = chunk.map(() => '?').join(',');
 
       await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
+      await writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})`).bind(...chunk).run();
       await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
     }
 
@@ -1210,7 +1403,6 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     console.warn('Failed to load archive manifest');
   }
 
-  // Enhanced direct ID lookup - no time constraints for direct lookups
   if (filter.ids && filter.ids.length > 0) {
     console.log(`Archive: Direct ID lookup for ${filter.ids.length} events`);
 
@@ -1223,8 +1415,6 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
         if (obj) {
           const event = JSON.parse(await obj.text()) as NostrEvent;
 
-          // For direct ID lookups, don't apply hotDataCutoff constraint
-          // Apply other filters but not time-based ones unless explicitly provided
           if (filter.since && event.created_at < filter.since) continue;
           if (filter.until && event.created_at > filter.until) continue;
 
@@ -1269,21 +1459,16 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     }
   }
 
-  // Early return if the filter is asking for data newer than our archive
-  // BUT only apply this constraint for time-based queries, not direct ID lookups
   if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
     console.log('Archive query skipped - filter.since is newer than archive cutoff');
     return results;
   }
 
-  // Calculate date/hour range - ensure we only query archived data for time-based queries
   const startDate = filter.since ? new Date(Math.max(filter.since * 1000, 0)) : new Date(0);
   const endDate = filter.until ?
     new Date(Math.min(filter.until * 1000, hotDataCutoff * 1000)) :
     new Date(hotDataCutoff * 1000);
 
-  // Important: Cap endDate at hotDataCutoff to avoid querying data that should be in D1
-  // BUT only for time-based queries
   const cappedEndDate = filter.ids ? endDate : new Date(Math.min(endDate.getTime(), hotDataCutoff * 1000));
 
   if (startDate >= cappedEndDate && !filter.ids) {
@@ -2172,7 +2357,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
 
   console.log(`User location: continent=${continent}, country=${country}, region=${region}, colo=${colo}`);
 
-  // Define all 9 endpoints with their location hints
+  // All 9 endpoints with their location hints
   const ALL_ENDPOINTS = [
     { name: 'relay-WNAM-primary', hint: 'wnam' },
     { name: 'relay-ENAM-primary', hint: 'enam' },
@@ -2185,7 +2370,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     { name: 'relay-ME-primary', hint: 'me' }
   ];
 
-  // Comprehensive country to hint mapping
+  // Country to hint mapping
   const countryToHint: Record<string, string> = {
     // North America
     'US': 'enam', 'CA': 'enam', 'MX': 'wnam',
@@ -2334,7 +2519,8 @@ export {
   hasPaidForRelay,
   processEvent,
   queryEvents,
-  queryEventsWithArchive
+  queryEventsWithArchive,
+  calculateQueryComplexity
 };
 
 // Main worker export with Durable Object
@@ -2393,15 +2579,23 @@ export default {
     }
   },
 
-  // Scheduled handler for archiving
+  // Scheduled handler for archiving and maintenance
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    console.log('Running scheduled archive process...');
+    console.log('Running scheduled maintenance...');
 
     try {
+      // Run ANALYZE to update query planner statistics
+      const session = env.RELAY_DATABASE.withSession('first-primary');
+      await session.prepare('ANALYZE events').run();
+      await session.prepare('ANALYZE tags').run();
+      await session.prepare('ANALYZE event_tags_cache').run();
+      console.log('Database statistics updated');
+
+      // Then run archive process
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
     } catch (error) {
-      console.error('Archive process failed:', error);
+      console.error('Scheduled maintenance failed:', error);
     }
   }
 };
