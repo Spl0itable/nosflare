@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.3.8",
+  version: "7.4.8",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2481,18 +2481,19 @@ async function initializeDatabase(db) {
         sig TEXT NOT NULL,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_id ON events(id)`,
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
         pubkey TEXT PRIMARY KEY,
@@ -2517,7 +2518,7 @@ async function initializeDatabase(db) {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
     ).run();
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2')"
     ).run();
     console.log("Database initialization completed!");
   } catch (error) {
@@ -3007,7 +3008,14 @@ __name(queryDatabaseChunked, "queryDatabaseChunked");
 async function queryEvents(filters, bookmark, env) {
   try {
     console.log(`Processing query with ${filters.length} filters and bookmark: ${bookmark}`);
-    const session = env.RELAY_DATABASE.withSession(bookmark);
+    const now = Math.floor(Date.now() / 1e3);
+    const isRecentQuery = filters.some(
+      (f) => f.since && now - f.since < 300 || // Less than 5 minutes old
+      f.until && now - f.until < 300 || !f.since && !f.until
+      // No time bounds = likely want recent events
+    );
+    const sessionType = isRecentQuery ? "first-primary" : bookmark;
+    const session = env.RELAY_DATABASE.withSession(sessionType);
     const eventSet = /* @__PURE__ */ new Map();
     for (const filter of filters) {
       const needsChunking = filter.ids && filter.ids.length > 50 || filter.authors && filter.authors.length > 50 || filter.kinds && filter.kinds.length > 50 || Object.entries(filter).some(
@@ -3015,17 +3023,19 @@ async function queryEvents(filters, bookmark, env) {
       );
       if (needsChunking) {
         console.log(`Filter has arrays >50 items, using chunked query...`);
-        const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
+        const chunkedResult = await queryDatabaseChunked(filter, sessionType, env);
         for (const event of chunkedResult.events) {
           eventSet.set(event.id, event);
         }
         continue;
       }
-      const query = buildQuery(filter);
+      const query = buildOptimizedQuery(filter);
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
         if (result.meta) {
           console.log({
+            rowsRead: result.meta.rows_read ?? 0,
+            rowsWritten: result.meta.rows_written ?? 0,
             servedByRegion: result.meta.served_by_region ?? "",
             servedByPrimary: result.meta.served_by_primary ?? false
           });
@@ -3063,9 +3073,57 @@ async function queryEvents(filters, bookmark, env) {
 }
 __name(queryEvents, "queryEvents");
 function buildQuery(filter) {
-  let sql = "SELECT * FROM events";
   const params = [];
   const conditions = [];
+  const hasTagFilters = Object.entries(filter).some(
+    ([k, v]) => k.startsWith("#") && Array.isArray(v) && v.length > 0
+  );
+  if (hasTagFilters) {
+    let sql2 = "SELECT e.* FROM events e WHERE ";
+    const tagConditions = [];
+    for (const [key, values] of Object.entries(filter)) {
+      if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
+        const tagName = key.substring(1);
+        tagConditions.push(`
+          EXISTS (
+            SELECT 1 FROM tags t 
+            WHERE t.event_id = e.id 
+            AND t.tag_name = ? 
+            AND t.tag_value IN (${values.map(() => "?").join(",")})
+            LIMIT 1
+          )
+        `);
+        params.push(tagName, ...values);
+      }
+    }
+    conditions.push(...tagConditions);
+    if (filter.ids && filter.ids.length > 0) {
+      conditions.push(`e.id IN (${filter.ids.map(() => "?").join(",")})`);
+      params.push(...filter.ids);
+    }
+    if (filter.authors && filter.authors.length > 0) {
+      conditions.push(`e.pubkey IN (${filter.authors.map(() => "?").join(",")})`);
+      params.push(...filter.authors);
+    }
+    if (filter.kinds && filter.kinds.length > 0) {
+      conditions.push(`e.kind IN (${filter.kinds.map(() => "?").join(",")})`);
+      params.push(...filter.kinds);
+    }
+    if (filter.since) {
+      conditions.push("e.created_at >= ?");
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      conditions.push("e.created_at <= ?");
+      params.push(filter.until);
+    }
+    sql2 += conditions.join(" AND ");
+    sql2 += " ORDER BY e.created_at DESC";
+    sql2 += " LIMIT ?";
+    params.push(Math.min(filter.limit || 1e4, 1e4));
+    return { sql: sql2, params };
+  }
+  let sql = "SELECT * FROM events";
   if (filter.ids && filter.ids.length > 0) {
     conditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
     params.push(...filter.ids);
@@ -3086,31 +3144,125 @@ function buildQuery(filter) {
     conditions.push("created_at <= ?");
     params.push(filter.until);
   }
-  const tagConditions = [];
-  for (const [key, values] of Object.entries(filter)) {
-    if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
-      const tagName = key.substring(1);
-      tagConditions.push(`
-        id IN (
-          SELECT event_id FROM tags 
-          WHERE tag_name = ? AND tag_value IN (${values.map(() => "?").join(",")})
-        )
-      `);
-      params.push(tagName, ...values);
-    }
-  }
-  if (tagConditions.length > 0) {
-    conditions.push(`(${tagConditions.join(" OR ")})`);
-  }
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
-  sql += " ORDER BY created_at DESC";
+  if (filter.kinds && filter.authors) {
+    sql += " ORDER BY created_at DESC";
+  } else if (filter.kinds) {
+    sql += " ORDER BY created_at DESC";
+  } else {
+    sql += " ORDER BY created_at DESC";
+  }
   sql += " LIMIT ?";
   params.push(Math.min(filter.limit || 1e3, 5e3));
   return { sql, params };
 }
 __name(buildQuery, "buildQuery");
+function buildOptimizedQuery(filter) {
+  const params = [];
+  const filterSelectivity = {
+    ids: filter.ids?.length || Infinity,
+    singleAuthor: filter.authors?.length === 1 ? 1 : Infinity,
+    multipleAuthors: filter.authors?.length || Infinity,
+    kinds: filter.kinds?.length || Infinity
+  };
+  if (filter.ids && filter.ids.length > 0 && filter.ids.length <= 100) {
+    const sql = `
+      SELECT * FROM events 
+      WHERE id IN (${filter.ids.map(() => "?").join(",")})
+      ${filter.limit ? "LIMIT ?" : ""}
+    `;
+    params.push(...filter.ids);
+    if (filter.limit) params.push(Math.min(filter.limit, 1e4));
+    return { sql, params };
+  }
+  if (filter.authors?.length === 1 && filter.kinds && filter.kinds.length > 0) {
+    let sql = `
+      SELECT * FROM events INDEXED BY idx_events_pubkey_kind_created_at
+      WHERE pubkey = ? AND kind IN (${filter.kinds.map(() => "?").join(",")})
+    `;
+    params.push(filter.authors[0], ...filter.kinds);
+    if (filter.since) {
+      sql += ` AND created_at >= ?`;
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      sql += ` AND created_at <= ?`;
+      params.push(filter.until);
+    }
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(Math.min(filter.limit || 1e4, 1e4));
+    return { sql, params };
+  }
+  if (filter.kinds && filter.kinds.length > 0 && !filter.authors) {
+    let sql = `
+      SELECT * FROM events INDEXED BY idx_events_kind_created_at
+      WHERE kind IN (${filter.kinds.map(() => "?").join(",")})
+    `;
+    params.push(...filter.kinds);
+    if (filter.since) {
+      sql += ` AND created_at >= ?`;
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      sql += ` AND created_at <= ?`;
+      params.push(filter.until);
+    }
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(Math.min(filter.limit || 1e4, 1e4));
+    return { sql, params };
+  }
+  const hasTagFilters = Object.entries(filter).some(
+    ([k, v]) => k.startsWith("#") && Array.isArray(v) && v.length > 0
+  );
+  if (hasTagFilters) {
+    let sql = "SELECT e.* FROM events e WHERE ";
+    const conditions = [];
+    for (const [key, values] of Object.entries(filter)) {
+      if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
+        const tagName = key.substring(1);
+        conditions.push(`
+          EXISTS (
+            SELECT 1 FROM tags t INDEXED BY idx_tags_name_value_event
+            WHERE t.event_id = e.id 
+            AND t.tag_name = ? 
+            AND t.tag_value IN (${values.map(() => "?").join(",")})
+            LIMIT 1
+          )
+        `);
+        params.push(tagName, ...values);
+      }
+    }
+    if (filter.ids && filter.ids.length > 0) {
+      conditions.push(`e.id IN (${filter.ids.map(() => "?").join(",")})`);
+      params.push(...filter.ids);
+    }
+    if (filter.authors && filter.authors.length > 0) {
+      conditions.push(`e.pubkey IN (${filter.authors.map(() => "?").join(",")})`);
+      params.push(...filter.authors);
+    }
+    if (filter.kinds && filter.kinds.length > 0) {
+      conditions.push(`e.kind IN (${filter.kinds.map(() => "?").join(",")})`);
+      params.push(...filter.kinds);
+    }
+    if (filter.since) {
+      conditions.push("e.created_at >= ?");
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      conditions.push("e.created_at <= ?");
+      params.push(filter.until);
+    }
+    sql += conditions.join(" AND ");
+    sql += " ORDER BY e.created_at DESC";
+    sql += " LIMIT ?";
+    params.push(Math.min(filter.limit || 1e4, 1e4));
+    return { sql, params };
+  }
+  return buildQuery(filter);
+}
+__name(buildOptimizedQuery, "buildOptimizedQuery");
 async function archiveOldEvents(db, r2) {
   const cutoffTime = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
   console.log(`Archiving events older than ${new Date(cutoffTime * 1e3).toISOString()}`);
@@ -3943,7 +4095,7 @@ function serveLandingPage() {
         
         <div class="links">
             <a href="https://github.com/Spl0itable/nosflare" class="link" target="_blank">GitHub</a>
-            <a href="https://nostr.info" class="link" target="_blank">Learn about Nostr</a>
+            <a href="https://nostr.com" class="link" target="_blank">Learn about Nostr</a>
         </div>
     </div>
     
@@ -4546,6 +4698,12 @@ var relay_worker_default = {
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
     this.processedEvents = /* @__PURE__ */ new Map();
+    // eventId -> timestamp
+    // Query cache
+    this.queryCache = /* @__PURE__ */ new Map();
+    this.CACHE_TTL = 5e3;
+    // 5 seconds
+    this.MAX_CACHE_SIZE = 100;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -4553,6 +4711,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
+    this.queryCache = /* @__PURE__ */ new Map();
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4568,6 +4727,53 @@ var _RelayWebSocket = class _RelayWebSocket {
   async deleteSubscriptions(sessionId) {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
+  }
+  // Query cache methods
+  async getCachedOrQuery(filters, bookmark) {
+    const cacheKey = JSON.stringify({ filters, bookmark });
+    const cached = this.queryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log("Query cache hit");
+      return cached.result;
+    }
+    console.log("Query cache miss - fetching from database");
+    const result = await queryEventsWithArchive(filters, bookmark, this.env);
+    this.queryCache.set(cacheKey, {
+      result,
+      timestamp: Date.now()
+    });
+    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
+      this.cleanupCache();
+    }
+    return result;
+  }
+  cleanupCache() {
+    const sortedEntries = Array.from(this.queryCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
+    for (let i = 0; i < toRemove; i++) {
+      this.queryCache.delete(sortedEntries[i][0]);
+    }
+    console.log(`Cache cleanup: removed ${toRemove} old entries`);
+  }
+  invalidateRelevantCaches(event) {
+    let invalidated = 0;
+    for (const [cacheKey] of this.queryCache.entries()) {
+      try {
+        const { filters } = JSON.parse(cacheKey);
+        const wouldMatch = filters.some(
+          (filter) => this.matchesFilter(event, filter)
+        );
+        if (wouldMatch) {
+          this.queryCache.delete(cacheKey);
+          invalidated++;
+        }
+      } catch (error) {
+        this.queryCache.delete(cacheKey);
+      }
+    }
+    if (invalidated > 0) {
+      console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
+    }
   }
   async fetch(request) {
     const url = new URL(request.url);
@@ -4780,6 +4986,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       if (result.success) {
         this.sendOK(session.webSocket, event.id, true, result.message);
         this.processedEvents.set(event.id, Date.now());
+        this.invalidateRelevantCaches(event);
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
         await this.broadcastEvent(event);
       } else {
@@ -4850,7 +5057,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     await this.saveSubscriptions(session.id, session.subscriptions);
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
     try {
-      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
+      const result = await this.getCachedOrQuery(filters, session.bookmark);
       if (result.bookmark) {
         session.bookmark = result.bookmark;
       }
@@ -5028,7 +5235,6 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
-// eventId -> timestamp
 // Define allowed endpoints
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-WNAM-primary",

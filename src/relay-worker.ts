@@ -74,25 +74,32 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         sig TEXT NOT NULL,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
+
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
+
+      `CREATE INDEX IF NOT EXISTS idx_events_id ON events(id)`,
+
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
+
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
         pubkey TEXT PRIMARY KEY,
         paid_at INTEGER NOT NULL,
         amount_sats INTEGER,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
+
       `CREATE TABLE IF NOT EXISTS content_hashes (
         hash TEXT PRIMARY KEY,
         event_id TEXT NOT NULL,
@@ -100,6 +107,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         created_at INTEGER NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
+
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`
     ];
 
@@ -112,7 +120,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
     ).run();
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '1')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2')"
     ).run();
 
     console.log("Database initialization completed!");
@@ -739,11 +747,22 @@ async function queryDatabaseChunked(filters: NostrFilter, bookmark: string, env:
 async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
   try {
     console.log(`Processing query with ${filters.length} filters and bookmark: ${bookmark}`);
-    const session = env.RELAY_DATABASE.withSession(bookmark);
+
+    // Determine session type based on query recency
+    const now = Math.floor(Date.now() / 1000);
+    const isRecentQuery = filters.some(f =>
+      (f.since && now - f.since < 300) || // Less than 5 minutes old
+      (f.until && now - f.until < 300) ||
+      (!f.since && !f.until) // No time bounds = likely want recent events
+    );
+
+    // Use primary for recent data, replicas for older data
+    const sessionType = isRecentQuery ? 'first-primary' : bookmark;
+    const session = env.RELAY_DATABASE.withSession(sessionType);
+
     const eventSet = new Map<string, NostrEvent>();
 
     for (const filter of filters) {
-
       // Check if any array in the filter exceeds chunk size
       const needsChunking = (
         (filter.ids && filter.ids.length > 50) ||
@@ -756,15 +775,15 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
 
       if (needsChunking) {
         console.log(`Filter has arrays >50 items, using chunked query...`);
-        const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
+        const chunkedResult = await queryDatabaseChunked(filter, sessionType, env);
         for (const event of chunkedResult.events) {
           eventSet.set(event.id, event);
         }
         continue;
       }
 
-      // Build and execute the query
-      const query = buildQuery(filter);
+      // Build optimized query
+      const query = buildOptimizedQuery(filter);
 
       try {
         const result = await session.prepare(query.sql).bind(...query.params).all();
@@ -772,6 +791,8 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
         // Log query metadata
         if (result.meta) {
           console.log({
+            rowsRead: result.meta.rows_read ?? 0,
+            rowsWritten: result.meta.rows_written ?? 0,
             servedByRegion: result.meta.served_by_region ?? "",
             servedByPrimary: result.meta.served_by_primary ?? false,
           });
@@ -813,11 +834,78 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
 }
 
 function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
-  let sql = "SELECT * FROM events";
   const params: any[] = [];
   const conditions: string[] = [];
 
+  // Check if we have tag filters first - this affects our query strategy
+  const hasTagFilters = Object.entries(filter).some(([k, v]) =>
+    k.startsWith('#') && Array.isArray(v) && v.length > 0
+  );
+
+  // For tag queries, use a more efficient approach with EXISTS
+  if (hasTagFilters) {
+    let sql = "SELECT e.* FROM events e WHERE ";
+    const tagConditions: string[] = [];
+
+    for (const [key, values] of Object.entries(filter)) {
+      if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+        const tagName = key.substring(1);
+
+        // Use EXISTS for better performance
+        tagConditions.push(`
+          EXISTS (
+            SELECT 1 FROM tags t 
+            WHERE t.event_id = e.id 
+            AND t.tag_name = ? 
+            AND t.tag_value IN (${values.map(() => '?').join(',')})
+            LIMIT 1
+          )
+        `);
+        params.push(tagName, ...values);
+      }
+    }
+
+    conditions.push(...tagConditions);
+
+    // Add other conditions
+    if (filter.ids && filter.ids.length > 0) {
+      conditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+      params.push(...filter.ids);
+    }
+
+    if (filter.authors && filter.authors.length > 0) {
+      conditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+      params.push(...filter.authors);
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      conditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+      params.push(...filter.kinds);
+    }
+
+    if (filter.since) {
+      conditions.push("e.created_at >= ?");
+      params.push(filter.since);
+    }
+
+    if (filter.until) {
+      conditions.push("e.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    sql += conditions.join(" AND ");
+    sql += " ORDER BY e.created_at DESC";
+    sql += " LIMIT ?";
+    params.push(Math.min(filter.limit || 10000, 10000));
+
+    return { sql, params };
+  }
+
+  // For non-tag queries, use simpler approach
+  let sql = "SELECT * FROM events";
+
   if (filter.ids && filter.ids.length > 0) {
+    // For ID queries, don't need ordering by created_at
     conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
     params.push(...filter.ids);
   }
@@ -842,34 +930,158 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     params.push(filter.until);
   }
 
-  // Tag filters
-  const tagConditions: string[] = [];
-  for (const [key, values] of Object.entries(filter)) {
-    if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
-      const tagName = key.substring(1);
-      tagConditions.push(`
-        id IN (
-          SELECT event_id FROM tags 
-          WHERE tag_name = ? AND tag_value IN (${values.map(() => '?').join(',')})
-        )
-      `);
-      params.push(tagName, ...values);
-    }
-  }
-
-  if (tagConditions.length > 0) {
-    conditions.push(`(${tagConditions.join(' OR ')})`);
-  }
-
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
 
-  sql += " ORDER BY created_at DESC";
+  // Use index hints through column ordering
+  if (filter.kinds && filter.authors) {
+    sql += " ORDER BY created_at DESC";
+  } else if (filter.kinds) {
+    sql += " ORDER BY created_at DESC";
+  } else {
+    sql += " ORDER BY created_at DESC";
+  }
+
   sql += " LIMIT ?";
   params.push(Math.min(filter.limit || 1000, 5000));
 
   return { sql, params };
+}
+
+// Helper function for optimized query building
+function buildOptimizedQuery(filter: NostrFilter): { sql: string; params: any[] } {
+  const params: any[] = [];
+
+  // Determine the most selective filter to use as primary index
+  const filterSelectivity = {
+    ids: filter.ids?.length || Infinity,
+    singleAuthor: filter.authors?.length === 1 ? 1 : Infinity,
+    multipleAuthors: filter.authors?.length || Infinity,
+    kinds: filter.kinds?.length || Infinity,
+  };
+
+  // If we have specific IDs, that's most selective
+  if (filter.ids && filter.ids.length > 0 && filter.ids.length <= 100) {
+    const sql = `
+      SELECT * FROM events 
+      WHERE id IN (${filter.ids.map(() => '?').join(',')})
+      ${filter.limit ? 'LIMIT ?' : ''}
+    `;
+    params.push(...filter.ids);
+    if (filter.limit) params.push(Math.min(filter.limit, 10000));
+    return { sql, params };
+  }
+
+  // For single author with kinds, use the compound index
+  if (filter.authors?.length === 1 && filter.kinds && filter.kinds.length > 0) {
+    let sql = `
+      SELECT * FROM events INDEXED BY idx_events_pubkey_kind_created_at
+      WHERE pubkey = ? AND kind IN (${filter.kinds.map(() => '?').join(',')})
+    `;
+    params.push(filter.authors[0], ...filter.kinds);
+
+    if (filter.since) {
+      sql += ` AND created_at >= ?`;
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      sql += ` AND created_at <= ?`;
+      params.push(filter.until);
+    }
+
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(Math.min(filter.limit || 10000, 10000));
+
+    return { sql, params };
+  }
+
+  // For kinds only, use kind index
+  if (filter.kinds && filter.kinds.length > 0 && !filter.authors) {
+    let sql = `
+      SELECT * FROM events INDEXED BY idx_events_kind_created_at
+      WHERE kind IN (${filter.kinds.map(() => '?').join(',')})
+    `;
+    params.push(...filter.kinds);
+
+    if (filter.since) {
+      sql += ` AND created_at >= ?`;
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      sql += ` AND created_at <= ?`;
+      params.push(filter.until);
+    }
+
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(Math.min(filter.limit || 10000, 10000));
+
+    return { sql, params };
+  }
+
+  // Check if we have tag filters - use optimized EXISTS approach
+  const hasTagFilters = Object.entries(filter).some(([k, v]) =>
+    k.startsWith('#') && Array.isArray(v) && v.length > 0
+  );
+
+  if (hasTagFilters) {
+    let sql = "SELECT e.* FROM events e WHERE ";
+    const conditions: string[] = [];
+
+    // Add tag conditions using EXISTS for better performance
+    for (const [key, values] of Object.entries(filter)) {
+      if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+        const tagName = key.substring(1);
+
+        conditions.push(`
+          EXISTS (
+            SELECT 1 FROM tags t INDEXED BY idx_tags_name_value_event
+            WHERE t.event_id = e.id 
+            AND t.tag_name = ? 
+            AND t.tag_value IN (${values.map(() => '?').join(',')})
+            LIMIT 1
+          )
+        `);
+        params.push(tagName, ...values);
+      }
+    }
+
+    // Add other conditions
+    if (filter.ids && filter.ids.length > 0) {
+      conditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+      params.push(...filter.ids);
+    }
+
+    if (filter.authors && filter.authors.length > 0) {
+      conditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+      params.push(...filter.authors);
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      conditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+      params.push(...filter.kinds);
+    }
+
+    if (filter.since) {
+      conditions.push("e.created_at >= ?");
+      params.push(filter.since);
+    }
+
+    if (filter.until) {
+      conditions.push("e.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    sql += conditions.join(" AND ");
+    sql += " ORDER BY e.created_at DESC";
+    sql += " LIMIT ?";
+    params.push(Math.min(filter.limit || 10000, 10000));
+
+    return { sql, params };
+  }
+
+  // Fall back to standard query for other cases
+  return buildQuery(filter);
 }
 
 // Archive functions with hourly partitions
@@ -1931,7 +2143,7 @@ function serveLandingPage(): Response {
         
         <div class="links">
             <a href="https://github.com/Spl0itable/nosflare" class="link" target="_blank">GitHub</a>
-            <a href="https://nostr.info" class="link" target="_blank">Learn about Nostr</a>
+            <a href="https://nostr.com" class="link" target="_blank">Learn about Nostr</a>
         </div>
     </div>
     
