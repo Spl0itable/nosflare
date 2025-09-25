@@ -1,7 +1,3 @@
-## v7.4.8 - 2025-09-25
-
-Tweak: added query caching to durable objects
-
 ## v7.3.8 - 2025-09-25
 
 Hotfix: optimized event deletions and fixed redundant deletion check

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.8",
+  version: "7.3.8",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4546,12 +4546,6 @@ var relay_worker_default = {
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
     this.processedEvents = /* @__PURE__ */ new Map();
-    // eventId -> timestamp
-    // Query cache
-    this.queryCache = /* @__PURE__ */ new Map();
-    this.CACHE_TTL = 5e3;
-    // 5 seconds
-    this.MAX_CACHE_SIZE = 100;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -4559,7 +4553,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
-    this.queryCache = /* @__PURE__ */ new Map();
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4575,50 +4568,6 @@ var _RelayWebSocket = class _RelayWebSocket {
   async deleteSubscriptions(sessionId) {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
-  }
-  // Query cache methods
-  async getCachedOrQuery(filters, bookmark) {
-    const cacheKey = JSON.stringify({ filters, bookmark });
-    const cached = this.queryCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      return cached.result;
-    }
-    const result = await queryEventsWithArchive(filters, bookmark, this.env);
-    this.queryCache.set(cacheKey, {
-      result,
-      timestamp: Date.now()
-    });
-    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
-      this.cleanupCache();
-    }
-    return result;
-  }
-  cleanupCache() {
-    const sortedEntries = Array.from(this.queryCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
-    const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
-    for (let i = 0; i < toRemove; i++) {
-      this.queryCache.delete(sortedEntries[i][0]);
-    }
-  }
-  invalidateRelevantCaches(event) {
-    let invalidated = 0;
-    for (const [cacheKey] of this.queryCache.entries()) {
-      try {
-        const { filters } = JSON.parse(cacheKey);
-        const wouldMatch = filters.some(
-          (filter) => this.matchesFilter(event, filter)
-        );
-        if (wouldMatch) {
-          this.queryCache.delete(cacheKey);
-          invalidated++;
-        }
-      } catch (error) {
-        this.queryCache.delete(cacheKey);
-      }
-    }
-    if (invalidated > 0) {
-      console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
-    }
   }
   async fetch(request) {
     const url = new URL(request.url);
@@ -4831,7 +4780,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       if (result.success) {
         this.sendOK(session.webSocket, event.id, true, result.message);
         this.processedEvents.set(event.id, Date.now());
-        this.invalidateRelevantCaches(event);
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
         await this.broadcastEvent(event);
       } else {
@@ -4902,7 +4850,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     await this.saveSubscriptions(session.id, session.subscriptions);
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
     try {
-      const result = await this.getCachedOrQuery(filters, session.bookmark);
+      const result = await queryEventsWithArchive(filters, session.bookmark, this.env);
       if (result.bookmark) {
         session.bookmark = result.bookmark;
       }
@@ -5080,6 +5028,7 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
 };
 __name(_RelayWebSocket, "RelayWebSocket");
+// eventId -> timestamp
 // Define allowed endpoints
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-WNAM-primary",
