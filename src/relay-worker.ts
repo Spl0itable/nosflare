@@ -80,10 +80,15 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
       )`,
 
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
 
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
@@ -91,6 +96,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         tag_value TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
+      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
@@ -730,17 +736,38 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
     sql += " ORDER BY e.created_at DESC";
   } else {
-    // Standard query building with index hints
+    // Standard query building with SMART index selection
     let indexHint = "";
 
-    // Determine best index to use
-    if (filter.kinds && filter.kinds.length <= 5 && (!filter.authors || filter.authors.length > 10)) {
-      indexHint = " INDEXED BY idx_events_kind_created_at";
-    } else if (filter.authors && filter.authors.length <= 5) {
+    // Determine best index based on filter combination
+    const hasAuthors = filter.authors && filter.authors.length > 0;
+    const hasKinds = filter.kinds && filter.kinds.length > 0;
+    const hasTimeRange = filter.since || filter.until;
+    const authorCount = filter.authors?.length || 0;
+    const kindCount = filter.kinds?.length || 0;
+
+    // Choose index based on query pattern
+    if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
+      // Use compound index for author+kind queries
+      if (authorCount <= kindCount) {
+        indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
+      } else {
+        indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
+      }
+    } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
+      // Pure author query
       indexHint = " INDEXED BY idx_events_pubkey_created_at";
-    } else if (!filter.kinds && !filter.authors && (filter.since || filter.until)) {
+    } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
+      // Pure kind query
+      indexHint = " INDEXED BY idx_events_kind_created_at";
+    } else if (hasAuthors && hasKinds && authorCount > 10) {
+      // Many authors, few kinds - kind index is better
+      indexHint = " INDEXED BY idx_events_kind_created_at";
+    } else if (!hasAuthors && !hasKinds && hasTimeRange) {
+      // Time-only query
       indexHint = " INDEXED BY idx_events_created_at";
     }
+    // For complex queries with many values, let SQLite choose
 
     sql = `SELECT * FROM events${indexHint}`;
 
