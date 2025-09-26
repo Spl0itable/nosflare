@@ -1,3 +1,7 @@
+## v7.4.9 - 2025-09-27
+
+Hotfix: removed excessive ANALYZE functionality, replaced with PRAGMA optimize
+
 ## v7.4.8 - 2025-09-26
 
 Tweak: added REQ query cachhing to durable objects and added new compound indices.

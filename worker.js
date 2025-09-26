@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.8",
+  version: "7.4.9",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4735,13 +4735,11 @@ var relay_worker_default = {
   async scheduled(event, env, ctx) {
     console.log("Running scheduled maintenance...");
     try {
-      const session = env.RELAY_DATABASE.withSession("first-primary");
-      await session.prepare("ANALYZE events").run();
-      await session.prepare("ANALYZE tags").run();
-      await session.prepare("ANALYZE event_tags_cache").run();
-      console.log("Database statistics updated");
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log("Archive process completed successfully");
+      const session = env.RELAY_DATABASE.withSession("first-primary");
+      await session.prepare("PRAGMA optimize").run();
+      console.log("Database optimization completed");
     } catch (error) {
       console.error("Scheduled maintenance failed:", error);
     }

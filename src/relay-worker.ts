@@ -2660,16 +2660,14 @@ export default {
     console.log('Running scheduled maintenance...');
 
     try {
-      // Run ANALYZE to update query planner statistics
-      const session = env.RELAY_DATABASE.withSession('first-primary');
-      await session.prepare('ANALYZE events').run();
-      await session.prepare('ANALYZE tags').run();
-      await session.prepare('ANALYZE event_tags_cache').run();
-      console.log('Database statistics updated');
-
-      // Then run archive process
+      // Run archive process
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
+
+      // Use PRAGMA optimize - much more efficient
+      const session = env.RELAY_DATABASE.withSession('first-primary');
+      await session.prepare('PRAGMA optimize').run();
+      console.log('Database optimization completed');
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
     }
