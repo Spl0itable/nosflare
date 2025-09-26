@@ -114,6 +114,9 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p)`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p_e ON event_tags_cache(tag_p, tag_e) WHERE tag_p IS NOT NULL AND tag_e IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_created_at ON event_tags_cache(kind, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_pubkey_kind_created_at ON event_tags_cache(pubkey, kind, created_at DESC)`,
 
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
         pubkey TEXT PRIMARY KEY,
@@ -144,8 +147,28 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2')"
     ).run();
 
+    await session.prepare(`
+      INSERT OR IGNORE INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+      SELECT 
+        e.id,
+        e.pubkey,
+        e.kind,
+        e.created_at,
+        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'p' LIMIT 1) as tag_p,
+        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'e' LIMIT 1) as tag_e,
+        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'a' LIMIT 1) as tag_a
+      FROM events e
+      WHERE EXISTS (
+        SELECT 1 FROM tags t 
+        WHERE t.event_id = e.id 
+        AND t.tag_name IN ('p', 'e', 'a')
+      )
+    `).run();
+
     // Run ANALYZE to initialize statistics
-    await session.prepare("ANALYZE").run();
+    await session.prepare("ANALYZE events").run();
+    await session.prepare("ANALYZE tags").run();
+    await session.prepare("ANALYZE event_tags_cache").run();
 
     console.log("Database initialization completed!");
   } catch (error) {
@@ -657,42 +680,84 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   const params: any[] = [];
   const conditions: string[] = [];
 
-  // Determine the most selective filter to use as primary
-  const selectivityScore = {
-    ids: filter.ids ? filter.ids.length : Infinity,
-    authors: filter.authors ? filter.authors.length * 10 : Infinity,
-    kinds: filter.kinds ? filter.kinds.length * 1000 : Infinity,
-    tags: Infinity
-  };
-
-  // Count tag filters
+  // Count and categorize tag filters
   let tagCount = 0;
-  const tagFilters: Array<{ name: string; values: string[] }> = [];
+  const cacheableTags: Array<{ name: string; values: string[] }> = [];
+  const otherTags: Array<{ name: string; values: string[] }> = [];
+
   for (const [key, values] of Object.entries(filter)) {
     if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
       tagCount += values.length;
-      tagFilters.push({ name: key.substring(1), values });
+      const tagName = key.substring(1);
+
+      // Check if this is a cacheable tag (p, e, or a)
+      if (['p', 'e', 'a'].includes(tagName)) {
+        cacheableTags.push({ name: tagName, values });
+      } else {
+        otherTags.push({ name: tagName, values });
+      }
     }
   }
-  if (tagCount > 0) {
-    selectivityScore.tags = tagCount * 5;
+
+  // Only cacheable tags (p, e, a) - use event_tags_cache
+  if (cacheableTags.length > 0 && otherTags.length === 0) {
+    let sql = "SELECT e.* FROM events e INNER JOIN event_tags_cache c ON e.id = c.event_id";
+    const whereConditions: string[] = [];
+
+    for (const tagFilter of cacheableTags) {
+      const tagColumn = `tag_${tagFilter.name}`;
+      whereConditions.push(`c.${tagColumn} IN (${tagFilter.values.map(() => '?').join(',')})`);
+      params.push(...tagFilter.values);
+    }
+
+    if (filter.ids && filter.ids.length > 0) {
+      whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+      params.push(...filter.ids);
+    }
+
+    if (filter.authors && filter.authors.length > 0) {
+      whereConditions.push(`c.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+      params.push(...filter.authors);
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      whereConditions.push(`c.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+      params.push(...filter.kinds);
+    }
+
+    if (filter.since) {
+      whereConditions.push("c.created_at >= ?");
+      params.push(filter.since);
+    }
+
+    if (filter.until) {
+      whereConditions.push("c.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    if (whereConditions.length > 0) {
+      sql += " WHERE " + whereConditions.join(" AND ");
+    }
+
+    sql += " ORDER BY c.created_at DESC";
+    sql += " LIMIT ?";
+    params.push(Math.min(filter.limit || 1000, 5000));
+
+    return { sql, params };
   }
 
-  // Build query starting with most selective column
-  let sql = "SELECT * FROM events";
-
-  // Special optimization for tag-heavy queries with good selectivity
-  if (tagCount > 0 && tagCount < 10 && selectivityScore.tags <= Math.min(selectivityScore.authors, selectivityScore.kinds)) {
-    // Use CTE to get matching event IDs first
+  // Has any non-cacheable tags - use CTE with tags table
+  if (tagCount > 0) {
     const tagConditions: string[] = [];
     const cteParams: any[] = [];
 
-    for (const tagFilter of tagFilters) {
+    // Include ALL tags in the CTE (both cacheable and non-cacheable)
+    for (const tagFilter of [...cacheableTags, ...otherTags]) {
       tagConditions.push(`(tag_name = ? AND tag_value IN (${tagFilter.values.map(() => '?').join(',')}))`);
       cteParams.push(tagFilter.name, ...tagFilter.values);
     }
 
-    sql = `WITH matching_events AS (
+    let sql = `WITH matching_events AS (
       SELECT DISTINCT event_id 
       FROM tags 
       WHERE ${tagConditions.join(' OR ')}
@@ -702,7 +767,6 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
     params.push(...cteParams);
 
-    // Add other conditions
     const whereConditions: string[] = [];
 
     if (filter.ids && filter.ids.length > 0) {
@@ -735,85 +799,70 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     }
 
     sql += " ORDER BY e.created_at DESC";
-  } else {
-    // Standard query building with SMART index selection
-    let indexHint = "";
+    sql += " LIMIT ?";
+    params.push(Math.min(filter.limit || 1000, 5000));
 
-    // Determine best index based on filter combination
-    const hasAuthors = filter.authors && filter.authors.length > 0;
-    const hasKinds = filter.kinds && filter.kinds.length > 0;
-    const hasTimeRange = filter.since || filter.until;
-    const authorCount = filter.authors?.length || 0;
-    const kindCount = filter.kinds?.length || 0;
-
-    // Choose index based on query pattern
-    if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
-      // Use compound index for author+kind queries
-      if (authorCount <= kindCount) {
-        indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
-      } else {
-        indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
-      }
-    } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
-      // Pure author query
-      indexHint = " INDEXED BY idx_events_pubkey_created_at";
-    } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
-      // Pure kind query
-      indexHint = " INDEXED BY idx_events_kind_created_at";
-    } else if (hasAuthors && hasKinds && authorCount > 10) {
-      // Many authors, few kinds - kind index is better
-      indexHint = " INDEXED BY idx_events_kind_created_at";
-    } else if (!hasAuthors && !hasKinds && hasTimeRange) {
-      // Time-only query
-      indexHint = " INDEXED BY idx_events_created_at";
-    }
-    // For complex queries with many values, let SQLite choose
-
-    sql = `SELECT * FROM events${indexHint}`;
-
-    if (filter.ids && filter.ids.length > 0) {
-      conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
-      params.push(...filter.ids);
-    }
-
-    if (filter.authors && filter.authors.length > 0) {
-      conditions.push(`pubkey IN (${filter.authors.map(() => '?').join(',')})`);
-      params.push(...filter.authors);
-    }
-
-    if (filter.kinds && filter.kinds.length > 0) {
-      conditions.push(`kind IN (${filter.kinds.map(() => '?').join(',')})`);
-      params.push(...filter.kinds);
-    }
-
-    if (filter.since) {
-      conditions.push("created_at >= ?");
-      params.push(filter.since);
-    }
-
-    if (filter.until) {
-      conditions.push("created_at <= ?");
-      params.push(filter.until);
-    }
-
-    // Handle tag filters as subqueries
-    for (const tagFilter of tagFilters) {
-      conditions.push(`
-        id IN (
-          SELECT event_id FROM tags 
-          WHERE tag_name = ? AND tag_value IN (${tagFilter.values.map(() => '?').join(',')})
-        )
-      `);
-      params.push(tagFilter.name, ...tagFilter.values);
-    }
-
-    if (conditions.length > 0) {
-      sql += " WHERE " + conditions.join(" AND ");
-    }
-
-    sql += " ORDER BY created_at DESC";
+    return { sql, params };
   }
 
+  // No tag filters - standard query with index hints
+  let indexHint = "";
+
+  const hasAuthors = filter.authors && filter.authors.length > 0;
+  const hasKinds = filter.kinds && filter.kinds.length > 0;
+  const hasTimeRange = filter.since || filter.until;
+  const authorCount = filter.authors?.length || 0;
+  const kindCount = filter.kinds?.length || 0;
+
+  // Choose index based on query pattern
+  if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
+    if (authorCount <= kindCount) {
+      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
+    } else {
+      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
+    }
+  } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
+    indexHint = " INDEXED BY idx_events_pubkey_created_at";
+  } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
+    indexHint = " INDEXED BY idx_events_kind_created_at";
+  } else if (hasAuthors && hasKinds && authorCount > 10) {
+    indexHint = " INDEXED BY idx_events_kind_created_at";
+  } else if (!hasAuthors && !hasKinds && hasTimeRange) {
+    indexHint = " INDEXED BY idx_events_created_at";
+  }
+
+  let sql = `SELECT * FROM events${indexHint}`;
+
+  if (filter.ids && filter.ids.length > 0) {
+    conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
+    params.push(...filter.ids);
+  }
+
+  if (filter.authors && filter.authors.length > 0) {
+    conditions.push(`pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+    params.push(...filter.authors);
+  }
+
+  if (filter.kinds && filter.kinds.length > 0) {
+    conditions.push(`kind IN (${filter.kinds.map(() => '?').join(',')})`);
+    params.push(...filter.kinds);
+  }
+
+  if (filter.since) {
+    conditions.push("created_at >= ?");
+    params.push(filter.since);
+  }
+
+  if (filter.until) {
+    conditions.push("created_at <= ?");
+    params.push(filter.until);
+  }
+
+  if (conditions.length > 0) {
+    sql += " WHERE " + conditions.join(" AND ");
+  }
+
+  sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
   params.push(Math.min(filter.limit || 1000, 5000));
 

@@ -6,6 +6,8 @@ Tweak: added REQ query cachhing to durable objects and added new compound indice
 
 ```
 DROP INDEX IF EXISTS idx_events_pubkey_kind;
+DROP INDEX IF EXISTS idx_events_deleted;
+DROP INDEX IF EXISTS idx_events_deleted_kind;
 CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey);
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind);
 CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC);
@@ -32,6 +34,9 @@ CREATE TABLE IF NOT EXISTS event_tags_cache (
 CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p);
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p_e ON event_tags_cache(tag_p, tag_e) WHERE tag_p IS NOT NULL AND tag_e IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_created_at ON event_tags_cache(kind, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_tags_cache_pubkey_kind_created_at ON event_tags_cache(pubkey, kind, created_at DESC);
 INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2');
 ANALYZE events;
 ANALYZE tags;
@@ -51,6 +56,7 @@ WHERE EXISTS (
   WHERE t.event_id = e.id 
   AND t.tag_name IN ('p', 'e', 'a')
 );
+ANALYZE event_tags_cache;
 ```
 
 ## v7.3.8 - 2025-09-25
