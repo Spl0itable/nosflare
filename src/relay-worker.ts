@@ -20,7 +20,7 @@ const {
 
 // Archive configuration constants
 const ARCHIVE_RETENTION_DAYS = 90;
-const ARCHIVE_BATCH_SIZE = 1000;
+const ARCHIVE_BATCH_SIZE = 100;
 
 // Query optimization constants
 const GLOBAL_MAX_EVENTS = 5000;
