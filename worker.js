@@ -4936,13 +4936,9 @@ var relay_worker_default = {
   },
   // Scheduled handler for archiving and maintenance
   async scheduled(event, env, ctx) {
-    console.log("Running scheduled maintenance...");
     try {
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log("Archive process completed successfully");
-      const session = env.RELAY_DATABASE.withSession("first-primary");
-      await session.prepare("PRAGMA optimize").run();
-      console.log("Database optimization completed");
     } catch (error) {
       console.error("Scheduled maintenance failed:", error);
     }

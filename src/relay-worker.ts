@@ -2737,17 +2737,10 @@ export default {
 
   // Scheduled handler for archiving and maintenance
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    console.log('Running scheduled maintenance...');
-
     try {
-      // Run archive process
+      // Run archive process (10 events per minute)
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
-
-      // Use PRAGMA optimize - much more efficient
-      const session = env.RELAY_DATABASE.withSession('first-primary');
-      await session.prepare('PRAGMA optimize').run();
-      console.log('Database optimization completed');
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
     }
