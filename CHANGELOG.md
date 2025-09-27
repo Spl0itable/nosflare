@@ -1,3 +1,7 @@
+## v7.4.11 - 2025-09-27
+
+Hotfix: lowered archive batch size and added daily database optimization
+
 ## v7.4.10 - 2025-09-27
 
 Hotfix: error with tag archival to R2 bucket

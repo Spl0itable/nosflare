@@ -2737,10 +2737,27 @@ export default {
 
   // Scheduled handler for archiving and maintenance
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log('Running scheduled maintenance...');
+
     try {
       // Run archive process (10 events per minute)
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
+
+      // Run optimization once per day at 3am UTC
+      const now = new Date();
+      const shouldOptimize = (
+        now.getUTCHours() === 3 &&
+        now.getUTCMinutes() === 0
+      );
+
+      if (shouldOptimize) {
+        const session = env.RELAY_DATABASE.withSession('first-unconstrained');
+
+        await session.prepare('PRAGMA optimize(0x02)').run();
+        console.log('Daily database optimization completed');
+      }
+
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
     }
