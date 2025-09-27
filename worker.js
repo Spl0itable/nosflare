@@ -2592,7 +2592,6 @@ var {
   allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
 var ARCHIVE_RETENTION_DAYS = 90;
-var ARCHIVE_BATCH_SIZE = 100;
 var GLOBAL_MAX_EVENTS = 5e3;
 var DEFAULT_TIME_WINDOW_DAYS = 7;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -3459,6 +3458,7 @@ __name(queryEvents, "queryEvents");
 async function archiveOldEvents(db, r2) {
   const cutoffTime = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
   console.log(`Archiving events older than ${new Date(cutoffTime * 1e3).toISOString()}`);
+  const ARCHIVE_BATCH_SIZE = 25;
   let manifest;
   try {
     const manifestObj = await r2.get("manifest.json");
@@ -3470,7 +3470,6 @@ async function archiveOldEvents(db, r2) {
           authors: new Set(data.indices?.authors || []),
           kinds: new Set(data.indices?.kinds || []),
           tags: {}
-          // Initialize empty, will populate below
         }
       };
       if (data.indices?.tags) {
@@ -3493,7 +3492,6 @@ async function archiveOldEvents(db, r2) {
       };
     }
   } catch (e) {
-    console.log("Creating new manifest...");
     manifest = {
       lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
       hoursWithEvents: [],
@@ -3507,194 +3505,219 @@ async function archiveOldEvents(db, r2) {
       }
     };
   }
-  let offset = 0;
-  let hasMore = true;
-  let totalArchived = 0;
-  while (hasMore) {
-    const session = db.withSession("first-unconstrained");
-    const oldEvents = await session.prepare(`
-      SELECT * FROM events 
-      WHERE created_at < ?
-      ORDER BY created_at
-      LIMIT ?
-      OFFSET ?
-    `).bind(cutoffTime, ARCHIVE_BATCH_SIZE, offset).all();
-    if (!oldEvents.results || oldEvents.results.length === 0) {
-      hasMore = false;
-      break;
+  const session = db.withSession("first-unconstrained");
+  const oldEvents = await session.prepare(`
+    SELECT * FROM events 
+    WHERE created_at < ?
+    ORDER BY created_at
+    LIMIT ?
+  `).bind(cutoffTime, ARCHIVE_BATCH_SIZE).all();
+  if (!oldEvents.results || oldEvents.results.length === 0) {
+    console.log("No events to archive");
+    return;
+  }
+  console.log(`Processing ${oldEvents.results.length} events for archiving`);
+  const eventIds = oldEvents.results.map((e) => e.id);
+  const placeholders = eventIds.map(() => "?").join(",");
+  const allTags = await session.prepare(`
+    SELECT event_id, tag_name, tag_value 
+    FROM tags 
+    WHERE event_id IN (${placeholders})
+  `).bind(...eventIds).all();
+  const tagsByEvent = /* @__PURE__ */ new Map();
+  for (const tag of allTags.results || []) {
+    const eventId = tag.event_id;
+    if (!tagsByEvent.has(eventId)) {
+      tagsByEvent.set(eventId, []);
     }
-    const eventsByHour = /* @__PURE__ */ new Map();
-    const eventsByAuthorHour = /* @__PURE__ */ new Map();
-    const eventsByKindHour = /* @__PURE__ */ new Map();
-    const eventsByTagHour = /* @__PURE__ */ new Map();
-    for (const event of oldEvents.results) {
-      const date = new Date(event.created_at * 1e3);
-      const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCHours()).padStart(2, "0")}`;
-      const tags = await session.prepare(
-        "SELECT tag_name, tag_value FROM tags WHERE event_id = ?"
-      ).bind(event.id).all();
-      const formattedTags = [];
-      const tagMap = {};
-      for (const tag of tags.results || []) {
-        if (!tagMap[tag.tag_name]) {
-          tagMap[tag.tag_name] = [];
-        }
-        tagMap[tag.tag_name].push(tag.tag_value);
+    tagsByEvent.get(eventId).push({
+      tag_name: tag.tag_name,
+      tag_value: tag.tag_value
+    });
+  }
+  const eventsToArchive = [];
+  const eventsByHour = /* @__PURE__ */ new Map();
+  const eventsByAuthorHour = /* @__PURE__ */ new Map();
+  const eventsByKindHour = /* @__PURE__ */ new Map();
+  const eventsByTagHour = /* @__PURE__ */ new Map();
+  for (const event of oldEvents.results) {
+    const eventId = event.id;
+    const eventTags = tagsByEvent.get(eventId) || [];
+    const formattedTags = [];
+    const tagMap = {};
+    for (const tag of eventTags) {
+      if (!tagMap[tag.tag_name]) {
+        tagMap[tag.tag_name] = [];
       }
-      for (const [name, values] of Object.entries(tagMap)) {
-        formattedTags.push([name, ...values]);
-      }
-      const nostrEvent = {
-        id: event.id,
-        pubkey: event.pubkey,
-        created_at: event.created_at,
-        kind: event.kind,
-        tags: formattedTags,
-        content: event.content,
-        sig: event.sig
-      };
-      if (!eventsByHour.has(hourKey)) {
-        eventsByHour.set(hourKey, []);
-      }
-      eventsByHour.get(hourKey).push(nostrEvent);
-      const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
-      if (!eventsByAuthorHour.has(authorHourKey)) {
-        eventsByAuthorHour.set(authorHourKey, []);
-      }
-      eventsByAuthorHour.get(authorHourKey).push(nostrEvent);
-      manifest.indices.authors.add(nostrEvent.pubkey);
-      const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
-      if (!eventsByKindHour.has(kindHourKey)) {
-        eventsByKindHour.set(kindHourKey, []);
-      }
-      eventsByKindHour.get(kindHourKey).push(nostrEvent);
-      manifest.indices.kinds.add(nostrEvent.kind);
-      for (const [tagName, ...tagValues] of formattedTags) {
-        for (const tagValue of tagValues) {
-          const tagKey = `${tagName}/${tagValue}/${hourKey}`;
-          if (!eventsByTagHour.has(tagKey)) {
-            eventsByTagHour.set(tagKey, []);
-          }
-          eventsByTagHour.get(tagKey).push(nostrEvent);
-          if (!manifest.indices.tags[tagName]) {
-            manifest.indices.tags[tagName] = /* @__PURE__ */ new Set();
-          }
-          manifest.indices.tags[tagName].add(tagValue);
-        }
-      }
-      totalArchived++;
+      tagMap[tag.tag_name].push(tag.tag_value);
     }
-    for (const [hourKey, events] of eventsByHour) {
-      const key = `events/${hourKey}.jsonl`;
-      let existingData = "";
-      try {
-        const existing = await r2.get(key);
-        if (existing) {
-          existingData = await existing.text() + "\n";
+    for (const [name, values] of Object.entries(tagMap)) {
+      formattedTags.push([name, ...values]);
+    }
+    const nostrEvent = {
+      id: eventId,
+      pubkey: event.pubkey,
+      created_at: event.created_at,
+      kind: event.kind,
+      tags: formattedTags,
+      content: event.content,
+      sig: event.sig
+    };
+    eventsToArchive.push(nostrEvent);
+    const date = new Date(event.created_at * 1e3);
+    const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCHours()).padStart(2, "0")}`;
+    if (!eventsByHour.has(hourKey)) {
+      eventsByHour.set(hourKey, []);
+    }
+    eventsByHour.get(hourKey).push(nostrEvent);
+    const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
+    if (!eventsByAuthorHour.has(authorHourKey)) {
+      eventsByAuthorHour.set(authorHourKey, []);
+    }
+    eventsByAuthorHour.get(authorHourKey).push(nostrEvent);
+    const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
+    if (!eventsByKindHour.has(kindHourKey)) {
+      eventsByKindHour.set(kindHourKey, []);
+    }
+    eventsByKindHour.get(kindHourKey).push(nostrEvent);
+    for (const [tagName, ...tagValues] of formattedTags) {
+      for (const tagValue of tagValues) {
+        const tagKey = `${tagName}/${tagValue}/${hourKey}`;
+        if (!eventsByTagHour.has(tagKey)) {
+          eventsByTagHour.set(tagKey, []);
         }
-      } catch (e) {
+        eventsByTagHour.get(tagKey).push(nostrEvent);
       }
-      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
-      await r2.put(key, existingData + jsonLines, {
+    }
+    manifest.indices.authors.add(nostrEvent.pubkey);
+    manifest.indices.kinds.add(nostrEvent.kind);
+    if (!manifest.hoursWithEvents.includes(hourKey)) {
+      manifest.hoursWithEvents.push(hourKey);
+    }
+    for (const [tagName, ...tagValues] of formattedTags) {
+      if (!manifest.indices.tags[tagName]) {
+        manifest.indices.tags[tagName] = /* @__PURE__ */ new Set();
+      }
+      for (const tagValue of tagValues) {
+        manifest.indices.tags[tagName].add(tagValue);
+      }
+    }
+  }
+  const filesToRead = /* @__PURE__ */ new Set();
+  for (const hourKey of eventsByHour.keys()) {
+    filesToRead.add(`events/${hourKey}.jsonl`);
+  }
+  for (const authorHourKey of eventsByAuthorHour.keys()) {
+    const parts = authorHourKey.split("/");
+    const pubkey = parts[0];
+    const hour = `${parts[1]}/${parts[2]}`;
+    filesToRead.add(`index/author/${pubkey}/${hour}.jsonl`);
+  }
+  for (const kindHourKey of eventsByKindHour.keys()) {
+    const parts = kindHourKey.split("/");
+    const kind = parts[0];
+    const hour = `${parts[1]}/${parts[2]}`;
+    filesToRead.add(`index/kind/${kind}/${hour}.jsonl`);
+  }
+  for (const tagKey of eventsByTagHour.keys()) {
+    const parts = tagKey.split("/");
+    const tagName = parts[0];
+    const tagValue = parts[1];
+    const hour = `${parts[2]}/${parts[3]}`;
+    filesToRead.add(`index/tag/${tagName}/${tagValue}/${hour}.jsonl`);
+  }
+  console.log(`Reading ${filesToRead.size} existing files...`);
+  const existingFiles = /* @__PURE__ */ new Map();
+  const readPromises = [];
+  for (const key of filesToRead) {
+    readPromises.push(
+      r2.get(key).then((obj) => {
+        if (obj) {
+          return obj.text().then((text) => {
+            existingFiles.set(key, text);
+          });
+        }
+      }).catch(() => {
+      })
+    );
+  }
+  await Promise.all(readPromises);
+  console.log(`Writing archive files...`);
+  const writePromises = [];
+  for (const [hourKey, events] of eventsByHour) {
+    const key = `events/${hourKey}.jsonl`;
+    const existingData = existingFiles.get(key);
+    const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+    const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
+    writePromises.push(
+      r2.put(key, newContent, {
         customMetadata: {
-          eventCount: String(events.length + (existingData ? existingData.split("\n").length - 1 : 0)),
+          eventCount: String(newContent.split("\n").length),
           minCreatedAt: String(Math.min(...events.map((e) => e.created_at))),
           maxCreatedAt: String(Math.max(...events.map((e) => e.created_at)))
         }
-      });
-      if (!manifest.hoursWithEvents.includes(hourKey)) {
-        manifest.hoursWithEvents.push(hourKey);
-      }
-    }
-    for (const [authorHourKey, events] of eventsByAuthorHour) {
-      const [pubkey, hour] = authorHourKey.split("/");
-      const key = `index/author/${pubkey}/${hour}.jsonl`;
-      let existingData = "";
-      try {
-        const existing = await r2.get(key);
-        if (existing) {
-          existingData = await existing.text() + "\n";
-        }
-      } catch (e) {
-      }
-      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
-      await r2.put(key, existingData + jsonLines);
-    }
-    for (const [kindHourKey, events] of eventsByKindHour) {
-      const [kind, hour] = kindHourKey.split("/");
-      const key = `index/kind/${kind}/${hour}.jsonl`;
-      let existingData = "";
-      try {
-        const existing = await r2.get(key);
-        if (existing) {
-          existingData = await existing.text() + "\n";
-        }
-      } catch (e) {
-      }
-      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
-      await r2.put(key, existingData + jsonLines);
-    }
-    for (const [tagKey, events] of eventsByTagHour) {
-      const parts = tagKey.split("/");
-      const tagName = parts[0];
-      const tagValue = parts[1];
-      const hour = `${parts[2]}/${parts[3]}`;
-      const key = `index/tag/${tagName}/${tagValue}/${hour}.jsonl`;
-      let existingData = "";
-      try {
-        const existing = await r2.get(key);
-        if (existing) {
-          existingData = await existing.text() + "\n";
-        }
-      } catch (e) {
-      }
-      const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
-      await r2.put(key, existingData + jsonLines);
-    }
-    for (const event of oldEvents.results) {
-      const eventId = event.id;
-      const firstTwo = eventId.substring(0, 2);
-      const key = `index/id/${firstTwo}/${eventId}.json`;
-      const tags = await session.prepare(
-        "SELECT tag_name, tag_value FROM tags WHERE event_id = ?"
-      ).bind(eventId).all();
-      const formattedTags = [];
-      const tagMap = {};
-      for (const tag of tags.results || []) {
-        if (!tagMap[tag.tag_name]) {
-          tagMap[tag.tag_name] = [];
-        }
-        tagMap[tag.tag_name].push(tag.tag_value);
-      }
-      for (const [name, values] of Object.entries(tagMap)) {
-        formattedTags.push([name, ...values]);
-      }
-      const nostrEvent = {
-        id: eventId,
-        pubkey: event.pubkey,
-        created_at: event.created_at,
-        kind: event.kind,
-        tags: formattedTags,
-        content: event.content,
-        sig: event.sig
-      };
-      await r2.put(key, JSON.stringify(nostrEvent));
-    }
-    const writeSession = db.withSession("first-primary");
-    const eventIds = oldEvents.results.map((e) => e.id);
-    for (let i = 0; i < eventIds.length; i += 100) {
-      const chunk = eventIds.slice(i, i + 100);
-      const placeholders = chunk.map(() => "?").join(",");
-      await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
-      await writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})`).bind(...chunk).run();
-      await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
-    }
-    offset += ARCHIVE_BATCH_SIZE;
+      })
+    );
+  }
+  for (const [authorHourKey, events] of eventsByAuthorHour) {
+    const parts = authorHourKey.split("/");
+    const pubkey = parts[0];
+    const hour = `${parts[1]}/${parts[2]}`;
+    const key = `index/author/${pubkey}/${hour}.jsonl`;
+    const existingData = existingFiles.get(key);
+    const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+    const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
+    writePromises.push(r2.put(key, newContent));
+  }
+  for (const [kindHourKey, events] of eventsByKindHour) {
+    const parts = kindHourKey.split("/");
+    const kind = parts[0];
+    const hour = `${parts[1]}/${parts[2]}`;
+    const key = `index/kind/${kind}/${hour}.jsonl`;
+    const existingData = existingFiles.get(key);
+    const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+    const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
+    writePromises.push(r2.put(key, newContent));
+  }
+  for (const [tagKey, events] of eventsByTagHour) {
+    const parts = tagKey.split("/");
+    const tagName = parts[0];
+    const tagValue = parts[1];
+    const hour = `${parts[2]}/${parts[3]}`;
+    const key = `index/tag/${tagName}/${tagValue}/${hour}.jsonl`;
+    const existingData = existingFiles.get(key);
+    const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
+    const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
+    writePromises.push(r2.put(key, newContent));
+  }
+  for (const event of eventsToArchive) {
+    const firstTwo = event.id.substring(0, 2);
+    const key = `index/id/${firstTwo}/${event.id}.json`;
+    writePromises.push(r2.put(key, JSON.stringify(event)));
+  }
+  await Promise.all(writePromises);
+  console.log(`Deleting events from D1...`);
+  const writeSession = db.withSession("first-primary");
+  const deleteStatements = [];
+  const DELETE_CHUNK_SIZE = 25;
+  for (let i = 0; i < eventIds.length; i += DELETE_CHUNK_SIZE) {
+    const chunk = eventIds.slice(i, i + DELETE_CHUNK_SIZE);
+    const placeholders2 = chunk.map(() => "?").join(",");
+    deleteStatements.push(
+      writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders2})`).bind(...chunk),
+      writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders2})`).bind(...chunk),
+      writeSession.prepare(`DELETE FROM content_hashes WHERE event_id IN (${placeholders2})`).bind(...chunk),
+      writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders2})`).bind(...chunk)
+    );
+  }
+  for (let i = 0; i < deleteStatements.length; i += 10) {
+    const batch = deleteStatements.slice(i, i + 10);
+    await writeSession.batch(batch);
   }
   manifest.hoursWithEvents.sort();
   manifest.firstHour = manifest.hoursWithEvents[0] || "";
   manifest.lastHour = manifest.hoursWithEvents[manifest.hoursWithEvents.length - 1] || "";
-  manifest.totalEvents += totalArchived;
+  manifest.totalEvents += eventsToArchive.length;
   manifest.lastUpdated = (/* @__PURE__ */ new Date()).toISOString();
   const serializableManifest = {
     ...manifest,
@@ -3707,7 +3730,10 @@ async function archiveOldEvents(db, r2) {
     }
   };
   await r2.put("manifest.json", JSON.stringify(serializableManifest, null, 2));
-  console.log(`Archive process completed. Archived ${totalArchived} events.`);
+  console.log(`Archive process completed. Archived ${eventsToArchive.length} events.`);
+  if (eventsToArchive.length === ARCHIVE_BATCH_SIZE) {
+    console.log("More events remain to be archived in next run.");
+  }
 }
 __name(archiveOldEvents, "archiveOldEvents");
 async function queryArchive(filter, hotDataCutoff, r2) {
