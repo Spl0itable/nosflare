@@ -3458,7 +3458,8 @@ __name(queryEvents, "queryEvents");
 async function archiveOldEvents(db, r2) {
   const cutoffTime = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
   console.log(`Archiving events older than ${new Date(cutoffTime * 1e3).toISOString()}`);
-  const ARCHIVE_BATCH_SIZE = 25;
+  const ARCHIVE_BATCH_SIZE = 10;
+  const MAX_R2_OPERATIONS = 100;
   let manifest;
   try {
     const manifestObj = await r2.get("manifest.json");
@@ -3540,6 +3541,7 @@ async function archiveOldEvents(db, r2) {
   const eventsByAuthorHour = /* @__PURE__ */ new Map();
   const eventsByKindHour = /* @__PURE__ */ new Map();
   const eventsByTagHour = /* @__PURE__ */ new Map();
+  let estimatedR2Ops = 2;
   for (const event of oldEvents.results) {
     const eventId = event.id;
     const eventTags = tagsByEvent.get(eventId) || [];
@@ -3568,27 +3570,37 @@ async function archiveOldEvents(db, r2) {
     const hourKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCHours()).padStart(2, "0")}`;
     if (!eventsByHour.has(hourKey)) {
       eventsByHour.set(hourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByHour.get(hourKey).push(nostrEvent);
     const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
     if (!eventsByAuthorHour.has(authorHourKey)) {
       eventsByAuthorHour.set(authorHourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByAuthorHour.get(authorHourKey).push(nostrEvent);
     const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
     if (!eventsByKindHour.has(kindHourKey)) {
       eventsByKindHour.set(kindHourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByKindHour.get(kindHourKey).push(nostrEvent);
+    const MAX_TAGS_TO_INDEX = 3;
+    let tagCount = 0;
     for (const [tagName, ...tagValues] of formattedTags) {
-      for (const tagValue of tagValues) {
+      if (tagCount >= MAX_TAGS_TO_INDEX) break;
+      const tagValue = tagValues[0];
+      if (tagValue) {
         const tagKey = `${tagName}/${tagValue}/${hourKey}`;
         if (!eventsByTagHour.has(tagKey)) {
           eventsByTagHour.set(tagKey, []);
+          estimatedR2Ops += 2;
         }
         eventsByTagHour.get(tagKey).push(nostrEvent);
+        tagCount++;
       }
     }
+    estimatedR2Ops += 1;
     manifest.indices.authors.add(nostrEvent.pubkey);
     manifest.indices.kinds.add(nostrEvent.kind);
     if (!manifest.hoursWithEvents.includes(hourKey)) {
@@ -3598,10 +3610,15 @@ async function archiveOldEvents(db, r2) {
       if (!manifest.indices.tags[tagName]) {
         manifest.indices.tags[tagName] = /* @__PURE__ */ new Set();
       }
-      for (const tagValue of tagValues) {
-        manifest.indices.tags[tagName].add(tagValue);
+      if (tagValues[0]) {
+        manifest.indices.tags[tagName].add(tagValues[0]);
       }
     }
+  }
+  console.log(`Estimated R2 operations: ${estimatedR2Ops}`);
+  if (estimatedR2Ops > MAX_R2_OPERATIONS) {
+    console.warn(`Too many R2 operations (${estimatedR2Ops}), aborting archive for this run`);
+    return;
   }
   const filesToRead = /* @__PURE__ */ new Set();
   for (const hourKey of eventsByHour.keys()) {
@@ -3628,10 +3645,12 @@ async function archiveOldEvents(db, r2) {
   }
   console.log(`Reading ${filesToRead.size} existing files...`);
   const existingFiles = /* @__PURE__ */ new Map();
-  const readPromises = [];
-  for (const key of filesToRead) {
-    readPromises.push(
-      r2.get(key).then((obj) => {
+  const READ_BATCH_SIZE = 10;
+  const fileArray = Array.from(filesToRead);
+  for (let i = 0; i < fileArray.length; i += READ_BATCH_SIZE) {
+    const batch = fileArray.slice(i, i + READ_BATCH_SIZE);
+    const readPromises = batch.map(
+      (key) => r2.get(key).then((obj) => {
         if (obj) {
           return obj.text().then((text) => {
             existingFiles.set(key, text);
@@ -3640,24 +3659,26 @@ async function archiveOldEvents(db, r2) {
       }).catch(() => {
       })
     );
+    await Promise.all(readPromises);
   }
-  await Promise.all(readPromises);
   console.log(`Writing archive files...`);
-  const writePromises = [];
+  const writeOperations = [];
   for (const [hourKey, events] of eventsByHour) {
     const key = `events/${hourKey}.jsonl`;
     const existingData = existingFiles.get(key);
     const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
     const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
-    writePromises.push(
-      r2.put(key, newContent, {
+    writeOperations.push({
+      key,
+      content: newContent,
+      metadata: {
         customMetadata: {
           eventCount: String(newContent.split("\n").length),
           minCreatedAt: String(Math.min(...events.map((e) => e.created_at))),
           maxCreatedAt: String(Math.max(...events.map((e) => e.created_at)))
         }
-      })
-    );
+      }
+    });
   }
   for (const [authorHourKey, events] of eventsByAuthorHour) {
     const parts = authorHourKey.split("/");
@@ -3667,7 +3688,7 @@ async function archiveOldEvents(db, r2) {
     const existingData = existingFiles.get(key);
     const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
     const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
   for (const [kindHourKey, events] of eventsByKindHour) {
     const parts = kindHourKey.split("/");
@@ -3677,7 +3698,7 @@ async function archiveOldEvents(db, r2) {
     const existingData = existingFiles.get(key);
     const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
     const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
   for (const [tagKey, events] of eventsByTagHour) {
     const parts = tagKey.split("/");
@@ -3688,26 +3709,30 @@ async function archiveOldEvents(db, r2) {
     const existingData = existingFiles.get(key);
     const jsonLines = events.map((e) => JSON.stringify(e)).join("\n");
     const newContent = existingData ? existingData + "\n" + jsonLines : jsonLines;
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
   for (const event of eventsToArchive) {
     const firstTwo = event.id.substring(0, 2);
     const key = `index/id/${firstTwo}/${event.id}.json`;
-    writePromises.push(r2.put(key, JSON.stringify(event)));
+    writeOperations.push({ key, content: JSON.stringify(event) });
   }
-  await Promise.all(writePromises);
+  const WRITE_BATCH_SIZE = 10;
+  for (let i = 0; i < writeOperations.length; i += WRITE_BATCH_SIZE) {
+    const batch = writeOperations.slice(i, i + WRITE_BATCH_SIZE);
+    const writePromises = batch.map(
+      (op) => op.metadata ? r2.put(op.key, op.content, op.metadata) : r2.put(op.key, op.content)
+    );
+    await Promise.all(writePromises);
+  }
   console.log(`Deleting events from D1...`);
   const writeSession = db.withSession("first-primary");
   const deleteStatements = [];
-  const DELETE_CHUNK_SIZE = 25;
-  for (let i = 0; i < eventIds.length; i += DELETE_CHUNK_SIZE) {
-    const chunk = eventIds.slice(i, i + DELETE_CHUNK_SIZE);
-    const placeholders2 = chunk.map(() => "?").join(",");
+  for (const eventId of eventIds) {
     deleteStatements.push(
-      writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders2})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders2})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM content_hashes WHERE event_id IN (${placeholders2})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders2})`).bind(...chunk)
+      writeSession.prepare(`DELETE FROM tags WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM content_hashes WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM events WHERE id = ?`).bind(eventId)
     );
   }
   for (let i = 0; i < deleteStatements.length; i += 10) {

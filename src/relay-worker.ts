@@ -1146,7 +1146,8 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
   console.log(`Archiving events older than ${new Date(cutoffTime * 1000).toISOString()}`);
 
-  const ARCHIVE_BATCH_SIZE = 25;
+  const ARCHIVE_BATCH_SIZE = 10; // Process only 10 events at a time
+  const MAX_R2_OPERATIONS = 100; // Hard limit on R2 operations
 
   // Load manifest once
   let manifest: ArchiveManifest;
@@ -1244,6 +1245,8 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
   const eventsByKindHour = new Map<string, NostrEvent[]>();
   const eventsByTagHour = new Map<string, NostrEvent[]>();
 
+  let estimatedR2Ops = 2;
+
   for (const event of oldEvents.results) {
     const eventId = event.id as string;
     const eventTags = tagsByEvent.get(eventId) || [];
@@ -1280,6 +1283,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     // Group by hour
     if (!eventsByHour.has(hourKey)) {
       eventsByHour.set(hourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByHour.get(hourKey)!.push(nostrEvent);
 
@@ -1287,6 +1291,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const authorHourKey = `${nostrEvent.pubkey}/${hourKey}`;
     if (!eventsByAuthorHour.has(authorHourKey)) {
       eventsByAuthorHour.set(authorHourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByAuthorHour.get(authorHourKey)!.push(nostrEvent);
 
@@ -1294,19 +1299,30 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const kindHourKey = `${nostrEvent.kind}/${hourKey}`;
     if (!eventsByKindHour.has(kindHourKey)) {
       eventsByKindHour.set(kindHourKey, []);
+      estimatedR2Ops += 2;
     }
     eventsByKindHour.get(kindHourKey)!.push(nostrEvent);
 
-    // Group by tag-hour
+    const MAX_TAGS_TO_INDEX = 3;
+    let tagCount = 0;
+
     for (const [tagName, ...tagValues] of formattedTags) {
-      for (const tagValue of tagValues) {
+      if (tagCount >= MAX_TAGS_TO_INDEX) break;
+
+      // Only index first value of each tag
+      const tagValue = tagValues[0];
+      if (tagValue) {
         const tagKey = `${tagName}/${tagValue}/${hourKey}`;
         if (!eventsByTagHour.has(tagKey)) {
           eventsByTagHour.set(tagKey, []);
+          estimatedR2Ops += 2;
         }
         eventsByTagHour.get(tagKey)!.push(nostrEvent);
+        tagCount++;
       }
     }
+
+    estimatedR2Ops += 1;
 
     // Update manifest indices
     manifest.indices.authors.add(nostrEvent.pubkey);
@@ -1319,13 +1335,21 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       if (!manifest.indices.tags[tagName]) {
         manifest.indices.tags[tagName] = new Set();
       }
-      for (const tagValue of tagValues) {
-        (manifest.indices.tags[tagName] as Set<string>).add(tagValue);
+      // Only index first value to reduce manifest size
+      if (tagValues[0]) {
+        (manifest.indices.tags[tagName] as Set<string>).add(tagValues[0]);
       }
     }
   }
 
-  // Batch read existing files that we need to update
+  console.log(`Estimated R2 operations: ${estimatedR2Ops}`);
+
+  // Check if we're about to exceed limits
+  if (estimatedR2Ops > MAX_R2_OPERATIONS) {
+    console.warn(`Too many R2 operations (${estimatedR2Ops}), aborting archive for this run`);
+    return;
+  }
+
   const filesToRead = new Set<string>();
 
   for (const hourKey of eventsByHour.keys()) {
@@ -1356,11 +1380,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
   console.log(`Reading ${filesToRead.size} existing files...`);
 
+  // Batch read existing files
   const existingFiles = new Map<string, string>();
-  const readPromises: Promise<void>[] = [];
+  const READ_BATCH_SIZE = 10;
+  const fileArray = Array.from(filesToRead);
 
-  for (const key of filesToRead) {
-    readPromises.push(
+  for (let i = 0; i < fileArray.length; i += READ_BATCH_SIZE) {
+    const batch = fileArray.slice(i, i + READ_BATCH_SIZE);
+    const readPromises = batch.map(key =>
       r2.get(key).then(obj => {
         if (obj) {
           return obj.text().then(text => {
@@ -1371,33 +1398,36 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
         // File doesn't exist
       })
     );
-  }
 
-  await Promise.all(readPromises);
+    await Promise.all(readPromises);
+  }
 
   console.log(`Writing archive files...`);
 
-  const writePromises: Promise<any>[] = [];
+  // Batch write all files
+  const writeOperations: Array<{ key: string, content: string, metadata?: any }> = [];
 
-  // Write hour files
+  // Prepare hour files
   for (const [hourKey, events] of eventsByHour) {
     const key = `events/${hourKey}.jsonl`;
     const existingData = existingFiles.get(key);
     const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
     const newContent = existingData ? existingData + '\n' + jsonLines : jsonLines;
 
-    writePromises.push(
-      r2.put(key, newContent, {
+    writeOperations.push({
+      key,
+      content: newContent,
+      metadata: {
         customMetadata: {
           eventCount: String(newContent.split('\n').length),
           minCreatedAt: String(Math.min(...events.map(e => e.created_at))),
           maxCreatedAt: String(Math.max(...events.map(e => e.created_at)))
         }
-      })
-    );
+      }
+    });
   }
 
-  // Write author index files
+  // Prepare author index files
   for (const [authorHourKey, events] of eventsByAuthorHour) {
     const parts = authorHourKey.split('/');
     const pubkey = parts[0];
@@ -1407,10 +1437,10 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
     const newContent = existingData ? existingData + '\n' + jsonLines : jsonLines;
 
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
 
-  // Write kind index files
+  // Prepare kind index files
   for (const [kindHourKey, events] of eventsByKindHour) {
     const parts = kindHourKey.split('/');
     const kind = parts[0];
@@ -1420,10 +1450,10 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
     const newContent = existingData ? existingData + '\n' + jsonLines : jsonLines;
 
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
 
-  // Write tag index files
+  // Prepare tag index files
   for (const [tagKey, events] of eventsByTagHour) {
     const parts = tagKey.split('/');
     const tagName = parts[0];
@@ -1434,39 +1464,45 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const jsonLines = events.map(e => JSON.stringify(e)).join('\n');
     const newContent = existingData ? existingData + '\n' + jsonLines : jsonLines;
 
-    writePromises.push(r2.put(key, newContent));
+    writeOperations.push({ key, content: newContent });
   }
 
-  // Write individual event files
+  // Prepare individual event files
   for (const event of eventsToArchive) {
     const firstTwo = event.id.substring(0, 2);
     const key = `index/id/${firstTwo}/${event.id}.json`;
-    writePromises.push(r2.put(key, JSON.stringify(event)));
+    writeOperations.push({ key, content: JSON.stringify(event) });
   }
 
-  // Execute all writes in parallel
-  await Promise.all(writePromises);
+  // Write in batches
+  const WRITE_BATCH_SIZE = 10;
+  for (let i = 0; i < writeOperations.length; i += WRITE_BATCH_SIZE) {
+    const batch = writeOperations.slice(i, i + WRITE_BATCH_SIZE);
+    const writePromises = batch.map(op =>
+      op.metadata ?
+        r2.put(op.key, op.content, op.metadata) :
+        r2.put(op.key, op.content)
+    );
+
+    await Promise.all(writePromises);
+  }
 
   console.log(`Deleting events from D1...`);
 
   // Delete from D1
   const writeSession = db.withSession('first-primary');
   const deleteStatements = [];
-  const DELETE_CHUNK_SIZE = 25;
 
-  for (let i = 0; i < eventIds.length; i += DELETE_CHUNK_SIZE) {
-    const chunk = eventIds.slice(i, i + DELETE_CHUNK_SIZE);
-    const placeholders = chunk.map(() => '?').join(',');
-
+  for (const eventId of eventIds) {
     deleteStatements.push(
-      writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM content_hashes WHERE event_id IN (${placeholders})`).bind(...chunk),
-      writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk)
+      writeSession.prepare(`DELETE FROM tags WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM content_hashes WHERE event_id = ?`).bind(eventId),
+      writeSession.prepare(`DELETE FROM events WHERE id = ?`).bind(eventId)
     );
   }
 
-  // Execute all deletes in batches
+  // Execute deletes in small batches
   for (let i = 0; i < deleteStatements.length; i += 10) {
     const batch = deleteStatements.slice(i, i + 10);
     await writeSession.batch(batch);
