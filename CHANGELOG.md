@@ -1,7 +1,3 @@
-## v7.4.12 - 2025-10-01
-
-Hotfix: removed caching in durable objects
-
 ## v7.4.11 - 2025-09-27
 
 Hotfix: lowered archive batch size and added daily database optimization
