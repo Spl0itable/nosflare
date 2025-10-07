@@ -26,6 +26,7 @@ const ARCHIVE_BATCH_SIZE = 100;
 const GLOBAL_MAX_EVENTS = 5000;
 const DEFAULT_TIME_WINDOW_DAYS = 7;
 const MAX_QUERY_COMPLEXITY = 1000;
+const QUERY_TIMEOUT = 10000; // 10 seconds max for queries
 
 // Archive index types
 interface ArchiveManifest {
@@ -40,6 +41,10 @@ interface ArchiveManifest {
     tags: Record<string, Set<string>>;
   };
 }
+
+// NIP-11 response cache
+let NIP11_CACHE: Response | null = null;
+let NIP11_CACHE_TIME = 0;
 
 // Database initialization
 async function initializeDatabase(db: D1Database): Promise<void> {
@@ -1916,114 +1921,136 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
   return results;
 }
 
-// Query events with archive support
+// Query events with archive support and timeout
 async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
-  // First get results from D1
-  const d1Result = await queryEvents(filters, bookmark, env);
+  const queryPromise = (async () => {
+    // First get results from D1
+    const d1Result = await queryEvents(filters, bookmark, env);
 
-  // Check if we need to query archive
-  const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
+    // Check if we need to query archive
+    const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
 
-  // Determine if we need archive access
-  const needsArchive = filters.some(filter => {
-    // Always check archive for direct ID lookups (no time constraints)
-    if (filter.ids && filter.ids.length > 0) {
-      return true;
+    // Determine if we need archive access
+    const needsArchive = filters.some(filter => {
+      // Always check archive for direct ID lookups (no time constraints)
+      if (filter.ids && filter.ids.length > 0) {
+        return true;
+      }
+
+      // Check archive if the filter explicitly requests data older than 90 days
+      if (!filter.since && !filter.until) {
+        return false;
+      }
+
+      const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+      const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+
+      return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
+    });
+
+    if (!needsArchive || !env.EVENT_ARCHIVE) {
+      return d1Result;
     }
 
-    // Check archive if the filter explicitly requests data older than 90 days
-    if (!filter.since && !filter.until) {
-      return false;
-    }
+    console.log('Query requires archive access - checking for missing events or old data');
 
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+    // Query archive for each filter that needs it
+    const archiveEvents: NostrEvent[] = [];
+    for (const filter of filters) {
+      // Check if this specific filter needs archive
+      const hasDirectIds = filter.ids && filter.ids.length > 0;
+      const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+      const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
 
-    return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
-  });
+      if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+        // For direct ID lookups, check which IDs are missing from D1 results
+        if (hasDirectIds) {
+          const foundIds = new Set(d1Result.events.map(e => e.id));
+          // @ts-ignore
+          const missingIds = filter.ids.filter(id => !foundIds.has(id));
 
-  if (!needsArchive || !env.EVENT_ARCHIVE) {
-    return d1Result;
-  }
+          if (missingIds.length > 0) {
+            console.log(`Checking archive for ${missingIds.length} missing event IDs`);
+            const archiveFilter = { ...filter, ids: missingIds };
 
-  console.log('Query requires archive access - checking for missing events or old data');
+            // Don't apply time constraints for direct ID lookups in archive
+            delete archiveFilter.since;
+            delete archiveFilter.until;
 
-  // Query archive for each filter that needs it
-  const archiveEvents: NostrEvent[] = [];
-  for (const filter of filters) {
-    // Check if this specific filter needs archive
-    const hasDirectIds = filter.ids && filter.ids.length > 0;
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+            const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+            archiveEvents.push(...archived);
+          }
+        } else {
+          // For time-based queries, adjust the filter for archive query to avoid overlap
+          const archiveFilter = { ...filter };
 
-    if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
-      // For direct ID lookups, check which IDs are missing from D1 results
-      if (hasDirectIds) {
-        const foundIds = new Set(d1Result.events.map(e => e.id));
-        // @ts-ignore
-        const missingIds = filter.ids.filter(id => !foundIds.has(id));
-
-        if (missingIds.length > 0) {
-          console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-          const archiveFilter = { ...filter, ids: missingIds };
-
-          // Don't apply time constraints for direct ID lookups in archive
-          delete archiveFilter.since;
-          delete archiveFilter.until;
+          // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
+          if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+            archiveFilter.until = hotDataCutoff;
+          }
 
           const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
           archiveEvents.push(...archived);
         }
-      } else {
-        // For time-based queries, adjust the filter for archive query to avoid overlap
-        const archiveFilter = { ...filter };
-
-        // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
-        if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
-          archiveFilter.until = hotDataCutoff;
-        }
-
-        const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-        archiveEvents.push(...archived);
       }
     }
-  }
 
-  // Merge results
-  const allEvents = new Map<string, NostrEvent>();
+    // Merge results
+    const allEvents = new Map<string, NostrEvent>();
 
-  // Add D1 events
-  for (const event of d1Result.events) {
-    allEvents.set(event.id, event);
-  }
-
-  // Add archive events
-  for (const event of archiveEvents) {
-    allEvents.set(event.id, event);
-  }
-
-  // Sort by created_at descending and apply overall limit
-  const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
-    if (b.created_at !== a.created_at) {
-      return b.created_at - a.created_at;
+    // Add D1 events
+    for (const event of d1Result.events) {
+      allEvents.set(event.id, event);
     }
-    return a.id.localeCompare(b.id);
-  });
 
-  // Apply the most restrictive limit from filters
-  const limit = Math.min(...filters.map(f => f.limit || 10000));
-  const limitedEvents = sortedEvents.slice(0, limit);
+    // Add archive events
+    for (const event of archiveEvents) {
+      allEvents.set(event.id, event);
+    }
 
-  console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
+    // Sort by created_at descending and apply overall limit
+    const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
+      if (b.created_at !== a.created_at) {
+        return b.created_at - a.created_at;
+      }
+      return a.id.localeCompare(b.id);
+    });
 
-  return {
-    events: limitedEvents,
-    bookmark: d1Result.bookmark
-  };
+    // Apply the most restrictive limit from filters
+    const limit = Math.min(...filters.map(f => f.limit || 10000));
+    const limitedEvents = sortedEvents.slice(0, limit);
+
+    console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
+
+    return {
+      events: limitedEvents,
+      bookmark: d1Result.bookmark
+    };
+  })();
+
+  try {
+    return await Promise.race([
+      queryPromise,
+      new Promise<QueryResult>((_, reject) =>
+        setTimeout(() => reject(new Error('Query timeout')), QUERY_TIMEOUT)
+      )
+    ]);
+  } catch (error) {
+    console.error('Query timeout or error:', error);
+    // Return empty result on timeout
+    return { events: [], bookmark: null };
+  }
 }
 
 // HTTP endpoints
 function handleRelayInfoRequest(request: Request): Response {
+  const now = Date.now();
+
+  // Return cached response if available and fresh
+  if (NIP11_CACHE && (now - NIP11_CACHE_TIME) < 3600000) {
+    return NIP11_CACHE.clone();
+  }
+
   const responseInfo = { ...relayInfo };
 
   if (PAY_TO_RELAY_ENABLED) {
@@ -2034,15 +2061,22 @@ function handleRelayInfoRequest(request: Request): Response {
     };
   }
 
-  return new Response(JSON.stringify(responseInfo), {
+  const response = new Response(JSON.stringify(responseInfo), {
     status: 200,
     headers: {
       "Content-Type": "application/nostr+json",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type, Accept",
       "Access-Control-Allow-Methods": "GET",
+      "Cache-Control": "public, max-age=3600"
     }
   });
+
+  // Cache the response
+  NIP11_CACHE = response.clone();
+  NIP11_CACHE_TIME = now;
+
+  return response;
 }
 
 function serveLandingPage(): Response {
@@ -2697,21 +2731,37 @@ export default {
       // Main endpoints
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          // Get Cloudflare location info
-          const cf = (request as any).cf;
+          // Add timeout wrapper
+          const timeoutPromise = new Promise<Response>((_, reject) => {
+            setTimeout(() => reject(new Error('Connection timeout')), 5000); // 5 second timeout
+          });
 
-          // Get optimal DO based on user location
-          const { stub, doName } = await getOptimalDO(cf, env, url);
+          try {
+            // Get Cloudflare location info
+            const cf = (request as any).cf;
 
-          // Add location info to the request
-          const newUrl = new URL(request.url);
-          newUrl.searchParams.set('region', cf?.region || 'unknown');
-          newUrl.searchParams.set('colo', cf?.colo || 'unknown');
-          newUrl.searchParams.set('continent', cf?.continent || 'unknown');
-          newUrl.searchParams.set('country', cf?.country || 'unknown');
-          newUrl.searchParams.set('doName', doName);
+            // Get optimal DO based on user location
+            const { stub, doName } = await getOptimalDO(cf, env, url);
 
-          return stub.fetch(new Request(newUrl, request));
+            // Add location info to the request
+            const newUrl = new URL(request.url);
+            newUrl.searchParams.set('region', cf?.region || 'unknown');
+            newUrl.searchParams.set('colo', cf?.colo || 'unknown');
+            newUrl.searchParams.set('continent', cf?.continent || 'unknown');
+            newUrl.searchParams.set('country', cf?.country || 'unknown');
+            newUrl.searchParams.set('doName', doName);
+
+            // Race between timeout and actual connection
+            const response = await Promise.race([
+              stub.fetch(new Request(newUrl, request)),
+              timeoutPromise
+            ]);
+
+            return response;
+          } catch (error) {
+            console.error('WebSocket connection failed:', error);
+            return new Response('Connection timeout', { status: 408 });
+          }
         } else if (request.headers.get("Accept") === "application/nostr+json") {
           return handleRelayInfoRequest(request);
         } else {
