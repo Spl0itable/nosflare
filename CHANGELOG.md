@@ -1,7 +1,3 @@
-## v7.4.14 - 2025-10-07
-
-Hotfix: improved websocket connection and other improvements
-
 ## v7.4.13 - 2025-10-02
 
 Hotfix: where durable objects weren't using hibernation API
