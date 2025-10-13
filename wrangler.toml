@@ -1,6 +1,6 @@
 # Change name if you feel like it
 name = "nosflare"
-compatibility_date = "2025-01-04"
+compatibility_date = "2025-07-04"
 main = "worker.js"
 
 # Durable Objects binding
