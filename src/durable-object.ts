@@ -17,6 +17,7 @@ interface SessionAttachment {
   bookmark: string;
   host: string;
   doName: string;
+  connectedAt: number;
 }
 
 export class RelayWebSocket implements DurableObject {
@@ -27,6 +28,9 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map();
+
+  // Connection duration limit (24 hours in milliseconds)
+  private static readonly MAX_CONNECTION_DURATION = 24 * 60 * 60 * 1000;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -114,6 +118,7 @@ export class RelayWebSocket implements DurableObject {
     // Create session data
     const sessionId = crypto.randomUUID();
     const host = request.headers.get('host') || url.host;
+    const connectedAt = Date.now();
 
     // Create full session in memory
     const session: WebSocketSession = {
@@ -134,7 +139,8 @@ export class RelayWebSocket implements DurableObject {
       sessionId,
       bookmark: session.bookmark,
       host,
-      doName: this.doName
+      doName: this.doName,
+      connectedAt
     };
     server.serializeAttachment(attachment);
 
@@ -155,6 +161,19 @@ export class RelayWebSocket implements DurableObject {
     if (!attachment) {
       console.error('No session attachment found');
       ws.close(1011, 'Session not found');
+      return;
+    }
+
+    // Check connection duration limit
+    const sessionAge = Date.now() - attachment.connectedAt;
+    if (sessionAge > RelayWebSocket.MAX_CONNECTION_DURATION) {
+      console.log(`Session ${attachment.sessionId} expired (age: ${Math.round(sessionAge / 1000 / 60)} minutes)`);
+      this.sendError(ws, 'Session expired after 24 hours. Please reconnect.');
+      ws.close(1008, 'Session expired');
+      
+      // Clean up
+      this.sessions.delete(attachment.sessionId);
+      await this.deleteSubscriptions(attachment.sessionId);
       return;
     }
 
@@ -210,7 +229,8 @@ export class RelayWebSocket implements DurableObject {
           sessionId: session.id,
           bookmark: session.bookmark,
           host: session.host,
-          doName: this.doName
+          doName: this.doName,
+          connectedAt: attachment.connectedAt // Keep original connection time
         };
         ws.serializeAttachment(updatedAttachment);
       }
@@ -228,7 +248,10 @@ export class RelayWebSocket implements DurableObject {
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     const attachment = ws.deserializeAttachment() as SessionAttachment | null;
     if (attachment) {
-      console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
+      const sessionAge = Date.now() - attachment.connectedAt;
+      const sessionMinutes = Math.round(sessionAge / 1000 / 60);
+      
+      console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName} (duration: ${sessionMinutes} minutes, code: ${code}, clean: ${wasClean})`);
       
       // Remove from memory
       this.sessions.delete(attachment.sessionId);
@@ -564,6 +587,13 @@ export class RelayWebSocket implements DurableObject {
 
       // Skip if already processed in the sessions loop
       if (this.sessions.has(attachment.sessionId)) continue;
+
+      // Check if session has expired
+      const sessionAge = Date.now() - attachment.connectedAt;
+      if (sessionAge > RelayWebSocket.MAX_CONNECTION_DURATION) {
+        // Don't broadcast to expired sessions, they'll be closed on next message
+        continue;
+      }
 
       // Wake up hibernated session
       let session = this.sessions.get(attachment.sessionId);
