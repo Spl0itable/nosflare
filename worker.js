@@ -39,6 +39,7 @@ __export(config_exports, {
   PUBKEY_RATE_LIMIT: () => PUBKEY_RATE_LIMIT,
   RELAY_ACCESS_PRICE_SATS: () => RELAY_ACCESS_PRICE_SATS,
   REQ_RATE_LIMIT: () => REQ_RATE_LIMIT,
+  UNPAID_EVENT_RATE_LIMIT: () => UNPAID_EVENT_RATE_LIMIT,
   allowedEventKinds: () => allowedEventKinds,
   allowedNip05Domains: () => allowedNip05Domains,
   allowedPubkeys: () => allowedPubkeys,
@@ -71,7 +72,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.14",
+  version: "7.5.14",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -287,8 +288,9 @@ var allowedTags = /* @__PURE__ */ new Set([
   // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
-var PUBKEY_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
-var REQ_RATE_LIMIT = { rate: 500 / 6e4, capacity: 500 };
+var PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
+var REQ_RATE_LIMIT = { rate: 60 / 6e4, capacity: 60 };
+var UNPAID_EVENT_RATE_LIMIT = { rate: 1 / 6e4, capacity: 3 };
 var excludedRateLimitKinds = /* @__PURE__ */ new Set([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
@@ -2433,6 +2435,28 @@ var schnorr = /* @__PURE__ */ (() => ({
 }))();
 
 // src/relay-worker.ts
+var ALLOWED_ENDPOINTS = [
+  "relay-WNAM-primary",
+  "relay-ENAM-primary",
+  "relay-WEUR-primary",
+  "relay-EEUR-primary",
+  "relay-APAC-primary",
+  "relay-OC-primary",
+  "relay-SAM-primary",
+  "relay-AFR-primary",
+  "relay-ME-primary"
+];
+var ENDPOINT_HINTS = {
+  "relay-WNAM-primary": "wnam",
+  "relay-ENAM-primary": "enam",
+  "relay-WEUR-primary": "weur",
+  "relay-EEUR-primary": "eeur",
+  "relay-APAC-primary": "apac",
+  "relay-OC-primary": "oc",
+  "relay-SAM-primary": "enam",
+  "relay-AFR-primary": "weur",
+  "relay-ME-primary": "eeur"
+};
 var {
   relayInfo: relayInfo2,
   PAY_TO_RELAY_ENABLED: PAY_TO_RELAY_ENABLED2,
@@ -4375,6 +4399,32 @@ async function handleCheckPayment(request, env) {
     });
   }
   const paid = await hasPaidForRelay(pubkey, env);
+  if (paid) {
+    console.log(`Payment confirmed for ${pubkey}, invalidating cache across all DOs`);
+    const invalidationPromises = ALLOWED_ENDPOINTS.map(async (doName) => {
+      try {
+        const id = env.RELAY_WEBSOCKET.idFromName(doName);
+        const locationHint = ENDPOINT_HINTS[doName] || "auto";
+        const stub = env.RELAY_WEBSOCKET.get(id, { locationHint });
+        const invalidateUrl = new URL("https://internal/invalidate-payment-cache");
+        invalidateUrl.searchParams.set("pubkey", pubkey);
+        invalidateUrl.searchParams.set("doName", doName);
+        const response = await stub.fetch(new Request(invalidateUrl.toString(), {
+          method: "POST"
+        }));
+        if (!response.ok) {
+          console.error(`Failed to invalidate cache in ${doName}:`, await response.text());
+        } else {
+          console.log(`Cache invalidated in ${doName} for ${pubkey}`);
+        }
+      } catch (error) {
+        console.error(`Error invalidating cache in ${doName}:`, error);
+      }
+    });
+    Promise.all(invalidationPromises).catch((err) => {
+      console.error("Error during cache invalidation:", err);
+    });
+  }
   return new Response(JSON.stringify({ paid }), {
     status: 200,
     headers: {
@@ -4812,6 +4862,13 @@ var relay_worker_default = {
 var _RelayWebSocket = class _RelayWebSocket {
   constructor(state, env) {
     this.processedEvents = /* @__PURE__ */ new Map();
+    // Payment status cache
+    this.paidPubkeysCache = /* @__PURE__ */ new Map();
+    this.cacheExpiry = /* @__PURE__ */ new Map();
+    // Known non-payers for fast-fail
+    this.deniedPubkeys = /* @__PURE__ */ new Set();
+    // Invalid signature cache
+    this.invalidSignatures = /* @__PURE__ */ new Set();
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -4819,6 +4876,40 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
+    this.paidPubkeysCache = /* @__PURE__ */ new Map();
+    this.cacheExpiry = /* @__PURE__ */ new Map();
+    this.deniedPubkeys = /* @__PURE__ */ new Set();
+    this.invalidSignatures = /* @__PURE__ */ new Set();
+    this.state.storage.setAlarm(Date.now() + 3e5).catch(() => {
+      console.log("Initial alarm already set or failed");
+    });
+  }
+  // Alarm handler for periodic cleanup
+  async alarm() {
+    console.log(`DO ${this.doName}: Running periodic cleanup alarm`);
+    const fiveMinutesAgo = Date.now() - 3e5;
+    let cleanedEvents = 0;
+    for (const [eventId, timestamp] of this.processedEvents) {
+      if (timestamp < fiveMinutesAgo) {
+        this.processedEvents.delete(eventId);
+        cleanedEvents++;
+      }
+    }
+    let cleanedCache = 0;
+    const now = Date.now();
+    for (const [pubkey, expiry] of this.cacheExpiry) {
+      if (expiry <= now) {
+        this.paidPubkeysCache.delete(pubkey);
+        this.cacheExpiry.delete(pubkey);
+        cleanedCache++;
+      }
+    }
+    if (this.invalidSignatures.size > 1e3) {
+      this.invalidSignatures.clear();
+      console.log(`DO ${this.doName}: Cleared invalid signatures cache (was over 1000 entries)`);
+    }
+    console.log(`DO ${this.doName}: Cleaned ${cleanedEvents} old processed events, ${cleanedCache} expired cache entries`);
+    await this.state.storage.setAlarm(Date.now() + 3e5);
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4835,6 +4926,28 @@ var _RelayWebSocket = class _RelayWebSocket {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
   }
+  // Cached payment status check
+  async hasPaidForRelayCached(pubkey) {
+    const now = Date.now();
+    const expiry = this.cacheExpiry.get(pubkey);
+    if (expiry && expiry > now && this.paidPubkeysCache.has(pubkey)) {
+      return this.paidPubkeysCache.get(pubkey);
+    }
+    const hasPaid = await hasPaidForRelay(pubkey, this.env);
+    this.paidPubkeysCache.set(pubkey, hasPaid);
+    this.cacheExpiry.set(pubkey, now + _RelayWebSocket.PAYMENT_CACHE_DURATION);
+    if (hasPaid) {
+      this.deniedPubkeys.delete(pubkey);
+    }
+    return hasPaid;
+  }
+  // Invalidate payment cache for a specific pubkey (called from relay-worker after payment)
+  invalidatePaymentCache(pubkey) {
+    this.paidPubkeysCache.delete(pubkey);
+    this.cacheExpiry.delete(pubkey);
+    this.deniedPubkeys.delete(pubkey);
+    console.log(`DO ${this.doName}: Payment cache invalidated for ${pubkey}`);
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
@@ -4843,6 +4956,19 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     if (url.pathname === "/do-broadcast") {
       return await this.handleDOBroadcast(request);
+    }
+    if (url.pathname === "/invalidate-payment-cache") {
+      const pubkey = url.searchParams.get("pubkey");
+      if (pubkey) {
+        this.invalidatePaymentCache(pubkey);
+        return new Response(JSON.stringify({ success: true, message: "Cache invalidated" }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ success: false, message: "Missing pubkey" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
     }
     const upgradeHeader = request.headers.get("Upgrade");
     if (!upgradeHeader || upgradeHeader !== "websocket") {
@@ -4862,6 +4988,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       subscriptions: /* @__PURE__ */ new Map(),
       pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
       reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+      unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
       bookmark: "first-unconstrained",
       host
     };
@@ -4911,6 +5038,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         subscriptions,
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+        unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
         host: attachment.host
       };
@@ -4975,12 +5103,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.processedEvents.set(event.id, Date.now());
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
       await this.broadcastToLocalSessions(event);
-      const fiveMinutesAgo = Date.now() - 3e5;
-      for (const [eventId, timestamp] of this.processedEvents) {
-        if (timestamp < fiveMinutesAgo) {
-          this.processedEvents.delete(eventId);
-        }
-      }
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error("Error handling DO broadcast:", error);
@@ -5025,6 +5147,15 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, event.id || "", false, "invalid: missing required fields");
         return;
       }
+      if (PAY_TO_RELAY_ENABLED && this.deniedPubkeys.has(event.pubkey)) {
+        if (!session.unpaidEventRateLimiter.removeToken()) {
+          console.log(`Unpaid rate limit exceeded for pubkey ${event.pubkey}, closing connection`);
+          session.webSocket.close(1008, "Rate limit exceeded for unpaid pubkey");
+          return;
+        }
+        this.sendOK(session.webSocket, event.id, false, `blocked: payment required. Visit https://${session.host} to pay for relay access.`);
+        return;
+      }
       if (!excludedRateLimitKinds.has(event.kind)) {
         if (!session.pubkeyRateLimiter.removeToken()) {
           console.log(`Rate limit exceeded for pubkey ${event.pubkey}`);
@@ -5032,15 +5163,21 @@ var _RelayWebSocket = class _RelayWebSocket {
           return;
         }
       }
+      if (this.invalidSignatures.has(event.id)) {
+        this.sendOK(session.webSocket, event.id, false, "invalid: signature verification failed");
+        return;
+      }
       const isValidSignature = await verifyEventSignature(event);
       if (!isValidSignature) {
         console.error(`Signature verification failed for event ${event.id}`);
+        this.invalidSignatures.add(event.id);
         this.sendOK(session.webSocket, event.id, false, "invalid: signature verification failed");
         return;
       }
       if (PAY_TO_RELAY_ENABLED) {
-        const hasPaid = await hasPaidForRelay(event.pubkey, this.env);
+        const hasPaid = await this.hasPaidForRelayCached(event.pubkey);
         if (!hasPaid) {
+          this.deniedPubkeys.add(event.pubkey);
           const protocol = "https:";
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
@@ -5207,6 +5344,7 @@ var _RelayWebSocket = class _RelayWebSocket {
           subscriptions,
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+          unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
           host: attachment.host
         };
@@ -5341,6 +5479,8 @@ var _RelayWebSocket = class _RelayWebSocket {
 __name(_RelayWebSocket, "RelayWebSocket");
 // Connection duration limit (24 hours in milliseconds)
 _RelayWebSocket.MAX_CONNECTION_DURATION = 24 * 60 * 60 * 1e3;
+// Payment cache duration (5 minutes in milliseconds)
+_RelayWebSocket.PAYMENT_CACHE_DURATION = 5 * 60 * 1e3;
 // Define allowed endpoints
 _RelayWebSocket.ALLOWED_ENDPOINTS = [
   "relay-WNAM-primary",
