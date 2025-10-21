@@ -19,7 +19,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.14",
+  version: "7.5.14",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -149,8 +149,9 @@ export const allowedTags = new Set<string>([
 ]);
 
 // Rate limit thresholds
-export const PUBKEY_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 50 EVENT messages per min
-export const REQ_RATE_LIMIT = { rate: 500 / 60000, capacity: 500 }; // 500 REQ messages per min
+export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min
+export const REQ_RATE_LIMIT = { rate: 60 / 60000, capacity: 60 }; // 60 REQ messages per min
+export const UNPAID_EVENT_RATE_LIMIT = { rate: 1 / 60000, capacity: 3 }; // 3 attempts, then 1/min
 export const excludedRateLimitKinds = new Set<number>([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
