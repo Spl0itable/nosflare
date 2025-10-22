@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.14",
+  version: "7.4.15",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -287,8 +287,8 @@ var allowedTags = /* @__PURE__ */ new Set([
   // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
-var PUBKEY_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
-var REQ_RATE_LIMIT = { rate: 500 / 6e4, capacity: 500 };
+var PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
+var REQ_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
 var excludedRateLimitKinds = /* @__PURE__ */ new Set([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3

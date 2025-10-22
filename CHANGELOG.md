@@ -1,3 +1,7 @@
+## v7.4.15 - 2025-10-22
+
+Hotfix: lowered REQ and EVEMT rate limit per min
+
 ## v7.4.14 - 2025-10-15
 
 Tweak: added stale session expiry
