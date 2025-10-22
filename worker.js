@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.16",
+  version: "7.4.17",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2447,6 +2447,11 @@ var {
   allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
 var ARCHIVE_RETENTION_DAYS = 90;
+var manifestCache = {
+  data: null,
+  timestamp: 0
+};
+var MANIFEST_CACHE_TTL = 3e5;
 var GLOBAL_MAX_EVENTS = 5e3;
 var DEFAULT_TIME_WINDOW_DAYS = 7;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -3610,7 +3615,11 @@ async function archiveOldEvents(db, r2) {
     }
   };
   await r2.put("manifest.json", JSON.stringify(serializableManifest, null, 2));
-  console.log(`Archive process completed. Archived ${eventsToArchive.length} events.`);
+  manifestCache = {
+    data: null,
+    timestamp: 0
+  };
+  console.log(`Archive process completed. Archived ${eventsToArchive.length} events. Manifest cache invalidated.`);
   if (eventsToArchive.length === ARCHIVE_BATCH_SIZE) {
     console.log("More events remain to be archived in next run.");
   }
@@ -3620,21 +3629,42 @@ async function queryArchive(filter, hotDataCutoff, r2) {
   const results = [];
   const processedEventIds = /* @__PURE__ */ new Set();
   let manifest = null;
-  try {
-    const manifestObj = await r2.get("manifest.json");
-    if (manifestObj) {
-      const data = JSON.parse(await manifestObj.text());
-      manifest = {
-        ...data,
-        indices: {
-          authors: new Set(data.indices?.authors || []),
-          kinds: new Set(data.indices?.kinds || []),
-          tags: data.indices?.tags || {}
-        }
-      };
+  const now = Date.now();
+  if (manifestCache.data && now - manifestCache.timestamp < MANIFEST_CACHE_TTL) {
+    manifest = manifestCache.data;
+    console.log("Using cached archive manifest");
+  } else {
+    try {
+      const manifestObj = await r2.get("manifest.json");
+      if (manifestObj) {
+        const data = JSON.parse(await manifestObj.text());
+        manifest = {
+          ...data,
+          indices: {
+            authors: new Set(data.indices?.authors || []),
+            kinds: new Set(data.indices?.kinds || []),
+            tags: data.indices?.tags || {}
+          }
+        };
+        manifestCache = {
+          data: manifest,
+          timestamp: now
+        };
+        console.log("Loaded and cached archive manifest from R2");
+      } else {
+        console.log("No archive manifest found - archive may be empty");
+        manifestCache = {
+          data: null,
+          timestamp: now
+        };
+      }
+    } catch (e) {
+      console.warn("Failed to load archive manifest:", e);
+      if (manifestCache.data) {
+        console.log("Using stale cached manifest due to R2 error");
+        manifest = manifestCache.data;
+      }
     }
-  } catch (e) {
-    console.warn("Failed to load archive manifest");
   }
   if (filter.ids && filter.ids.length > 0) {
     console.log(`Archive: Direct ID lookup for ${filter.ids.length} events`);
