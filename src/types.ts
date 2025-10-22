@@ -112,7 +112,7 @@ export interface Nip05Response {
 }
 
 // WebSocket message types for Nostr protocol
-export type NostrMessage = 
+export type NostrMessage =
   | ["EVENT", string, NostrEvent]
   | ["EOSE", string]
   | ["OK", string, boolean, string]
@@ -155,6 +155,8 @@ export interface DurableObject {
   webSocketMessage?(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void>;
   webSocketClose?(ws: WebSocket, code: number, reason: string, wasClean: boolean): void | Promise<void>;
   webSocketError?(ws: WebSocket, error: any): void | Promise<void>;
+  // Alarm handler
+  alarm?(): void | Promise<void>;
 }
 
 // Durable Object stub with location hint support
