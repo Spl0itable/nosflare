@@ -1,3 +1,10 @@
+## v7.5.14 - 2025-10-21
+
+Tweak: payment status caching with 5-minute expiration
+Tweak: denied pubkeys tracking for fast-fail
+Tweak: invalid signature caching
+Tweak: unpaid event rate limiting
+
 ## v7.4.14 - 2025-10-15
 
 Tweak: added stale session expiry
