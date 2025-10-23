@@ -1,7 +1,3 @@
-## v7.4.13 - 2025-10-02
-
-Hotfix: where durable objects weren't using hibernation API
-
 ## v7.4.12 - 2025-10-01
 
 Hotfix: removed caching in durable objects

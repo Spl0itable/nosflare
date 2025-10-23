@@ -11,7 +11,7 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEventsWithArchive } from './relay-worker';
 
-// Session attachment data
+// Session attachment data structure
 interface SessionAttachment {
   sessionId: string;
   bookmark: string;
@@ -26,19 +26,19 @@ export class RelayWebSocket implements DurableObject {
   private region: string;
   private doId: string;
   private doName: string;
-  private processedEvents: Map<string, number> = new Map();
+  private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
-    'relay-WNAM-primary',
-    'relay-ENAM-primary',
-    'relay-WEUR-primary',
-    'relay-EEUR-primary',
-    'relay-APAC-primary',
-    'relay-OC-primary',
-    'relay-SAM-primary',
-    'relay-AFR-primary',
-    'relay-ME-primary'
+    'relay-WNAM-primary',  // Western North America
+    'relay-ENAM-primary',  // Eastern North America
+    'relay-WEUR-primary',  // Western Europe
+    'relay-EEUR-primary',  // Eastern Europe
+    'relay-APAC-primary',  // Asia-Pacific
+    'relay-OC-primary',    // Oceania
+    'relay-SAM-primary',   // South America (redirects to enam)
+    'relay-AFR-primary',   // Africa (redirects to weur)
+    'relay-ME-primary'     // Middle East (redirects to eeur)
   ];
 
   // Map endpoints to their proper location hints
@@ -49,9 +49,9 @@ export class RelayWebSocket implements DurableObject {
     'relay-EEUR-primary': 'eeur',
     'relay-APAC-primary': 'apac',
     'relay-OC-primary': 'oc',
-    'relay-SAM-primary': 'enam',
-    'relay-AFR-primary': 'weur',
-    'relay-ME-primary': 'eeur'
+    'relay-SAM-primary': 'enam',  // SAM redirects to ENAM
+    'relay-AFR-primary': 'weur',   // AFR redirects to WEUR
+    'relay-ME-primary': 'eeur'     // ME redirects to EEUR
   };
 
   constructor(state: DurableObjectState, env: Env) {
@@ -115,24 +115,10 @@ export class RelayWebSocket implements DurableObject {
     const sessionId = crypto.randomUUID();
     const host = request.headers.get('host') || url.host;
 
-    // Create full session in memory
-    const session: WebSocketSession = {
-      id: sessionId,
-      webSocket: server,
-      subscriptions: new Map(),
-      pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
-      reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-      bookmark: 'first-unconstrained',
-      host
-    };
-
-    // Store session in memory
-    this.sessions.set(sessionId, session);
-
-    // Attach minimal metadata to WebSocket for restoration if needed
+    // Serialize and attach minimal session data to the WebSocket
     const attachment: SessionAttachment = {
       sessionId,
-      bookmark: session.bookmark,
+      bookmark: 'first-unconstrained',
       host,
       doName: this.doName
     };
@@ -158,18 +144,13 @@ export class RelayWebSocket implements DurableObject {
       return;
     }
 
-    // Try to get existing session from memory first
+    // Get or recreate session
     let session = this.sessions.get(attachment.sessionId);
-    
-    // Only restore from storage if session doesn't exist in memory (DO was evicted)
     if (!session) {
-      console.log(`Session ${attachment.sessionId} not in memory, restoring from storage`);
-      
-      // Restore DO name from attachment if needed
+      // Restore DO name from attachment
       if (attachment.doName && this.doName === 'unknown') {
         this.doName = attachment.doName;
       }
-      
       // Load subscriptions from storage
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
@@ -183,12 +164,7 @@ export class RelayWebSocket implements DurableObject {
         bookmark: attachment.bookmark,
         host: attachment.host
       };
-      
-      // Store restored session back in memory
       this.sessions.set(attachment.sessionId, session);
-    } else {
-      // Session exists in memory, just update the WebSocket reference in case it changed
-      session.webSocket = ws;
     }
 
     try {
@@ -204,16 +180,14 @@ export class RelayWebSocket implements DurableObject {
 
       await this.handleMessage(session, parsedMessage);
 
-      // Only update attachment if bookmark changed
-      if (session.bookmark !== attachment.bookmark) {
-        const updatedAttachment: SessionAttachment = {
-          sessionId: session.id,
-          bookmark: session.bookmark,
-          host: session.host,
-          doName: this.doName
-        };
-        ws.serializeAttachment(updatedAttachment);
-      }
+      // Update attachment with latest session state
+      const updatedAttachment: SessionAttachment = {
+        sessionId: session.id,
+        bookmark: session.bookmark,
+        host: session.host,
+        doName: this.doName
+      };
+      ws.serializeAttachment(updatedAttachment);
 
     } catch (error) {
       console.error('Error handling message:', error);
@@ -229,8 +203,6 @@ export class RelayWebSocket implements DurableObject {
     const attachment = ws.deserializeAttachment() as SessionAttachment | null;
     if (attachment) {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
-      
-      // Remove from memory
       this.sessions.delete(attachment.sessionId);
 
       // Clean up stored subscriptions
@@ -265,16 +237,19 @@ export class RelayWebSocket implements DurableObject {
 
       // Clean up old processed events periodically
       const fiveMinutesAgo = Date.now() - 300000;
+      let cleaned = 0;
       for (const [eventId, timestamp] of this.processedEvents) {
         if (timestamp < fiveMinutesAgo) {
           this.processedEvents.delete(eventId);
+          cleaned++;
         }
       }
 
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error('Error handling DO broadcast:', error);
-      return new Response(JSON.stringify({ success: false, error: (error as Error).message }), {
+      // @ts-ignore
+      return new Response(JSON.stringify({ success: false, error: error.message }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -482,10 +457,10 @@ export class RelayWebSocket implements DurableObject {
       }
     }
 
-    // Store subscription in memory
+    // Store subscription
     session.subscriptions.set(subscriptionId, filters);
 
-    // Persist to storage for recovery after DO eviction
+    // Save to storage
     await this.saveSubscriptions(session.id, session.subscriptions);
 
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
@@ -542,34 +517,20 @@ export class RelayWebSocket implements DurableObject {
   private async broadcastToLocalSessions(event: NostrEvent): Promise<void> {
     let broadcastCount = 0;
 
-    // Iterate through in-memory sessions first (active connections)
-    for (const [sessionId, session] of this.sessions) {
-      for (const [subscriptionId, filters] of session.subscriptions) {
-        if (this.matchesFilters(event, filters)) {
-          try {
-            this.sendEvent(session.webSocket, subscriptionId, event);
-            broadcastCount++;
-          } catch (error) {
-            console.error(`Error broadcasting to subscription ${subscriptionId}:`, error);
-          }
-        }
-      }
-    }
-
-    // Also check hibernated WebSockets (might not be in sessions Map)
+    // Get all active WebSockets (including hibernated ones)
     const activeWebSockets = this.state.getWebSockets();
+
     for (const ws of activeWebSockets) {
       const attachment = ws.deserializeAttachment() as SessionAttachment | null;
       if (!attachment) continue;
 
-      // Skip if already processed in the sessions loop
-      if (this.sessions.has(attachment.sessionId)) continue;
-
-      // Wake up hibernated session
+      // Get or recreate session
       let session = this.sessions.get(attachment.sessionId);
       if (!session) {
+        // Load subscriptions from storage
         const subscriptions = await this.loadSubscriptions(attachment.sessionId);
-        
+
+        // Recreate minimal session for broadcast
         session = {
           id: attachment.sessionId,
           webSocket: ws,
@@ -579,7 +540,6 @@ export class RelayWebSocket implements DurableObject {
           bookmark: attachment.bookmark,
           host: attachment.host
         };
-        
         this.sessions.set(attachment.sessionId, session);
       }
 
@@ -589,7 +549,7 @@ export class RelayWebSocket implements DurableObject {
             this.sendEvent(ws, subscriptionId, event);
             broadcastCount++;
           } catch (error) {
-            console.error(`Error broadcasting to hibernated subscription ${subscriptionId}:`, error);
+            console.error(`Error broadcasting to subscription ${subscriptionId}:`, error);
           }
         }
       }
