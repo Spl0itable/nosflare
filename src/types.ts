@@ -70,6 +70,7 @@ export interface WebSocketSession {
   subscriptions: Map<string, NostrFilter[]>;
   pubkeyRateLimiter: RateLimiter;
   reqRateLimiter: RateLimiter;
+  unpaidEventRateLimiter: RateLimiter;
   bookmark: string;
   host: string;
 }
@@ -112,7 +113,7 @@ export interface Nip05Response {
 }
 
 // WebSocket message types for Nostr protocol
-export type NostrMessage = 
+export type NostrMessage =
   | ["EVENT", string, NostrEvent]
   | ["EOSE", string]
   | ["OK", string, boolean, string]
