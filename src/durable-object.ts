@@ -2,7 +2,6 @@ import { NostrEvent, NostrFilter, RateLimiter, WebSocketSession, Env, DOBroadcas
 import {
   PUBKEY_RATE_LIMIT,
   REQ_RATE_LIMIT,
-  UNPAID_EVENT_RATE_LIMIT,
   PAY_TO_RELAY_ENABLED,
   isPubkeyAllowed,
   isEventKindAllowed,
@@ -29,22 +28,9 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map();
-  
-  // Payment status cache
-  private paidPubkeysCache: Map<string, boolean> = new Map();
-  private cacheExpiry: Map<string, number> = new Map();
-  
-  // Known non-payers for fast-fail
-  private deniedPubkeys: Set<string> = new Set();
-  
-  // Invalid signature cache
-  private invalidSignatures: Set<string> = new Set();
 
   // Connection duration limit (24 hours in milliseconds)
   private static readonly MAX_CONNECTION_DURATION = 24 * 60 * 60 * 1000;
-  
-  // Payment cache duration (5 minutes in milliseconds)
-  private static readonly PAYMENT_CACHE_DURATION = 5 * 60 * 1000;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -80,54 +66,6 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
-    this.paidPubkeysCache = new Map();
-    this.cacheExpiry = new Map();
-    this.deniedPubkeys = new Set();
-    this.invalidSignatures = new Set();
-    
-    // Set initial cleanup alarm
-    this.state.storage.setAlarm(Date.now() + 300000).catch(() => {
-      console.log('Initial alarm already set or failed');
-    });
-  }
-
-  // Alarm handler for periodic cleanup
-  async alarm(): Promise<void> {
-    console.log(`DO ${this.doName}: Running periodic cleanup alarm`);
-    
-    // Clean up old processed events
-    const fiveMinutesAgo = Date.now() - 300000;
-    let cleanedEvents = 0;
-    
-    for (const [eventId, timestamp] of this.processedEvents) {
-      if (timestamp < fiveMinutesAgo) {
-        this.processedEvents.delete(eventId);
-        cleanedEvents++;
-      }
-    }
-    
-    // Clean up expired payment cache entries
-    let cleanedCache = 0;
-    const now = Date.now();
-    
-    for (const [pubkey, expiry] of this.cacheExpiry) {
-      if (expiry <= now) {
-        this.paidPubkeysCache.delete(pubkey);
-        this.cacheExpiry.delete(pubkey);
-        cleanedCache++;
-      }
-    }
-    
-    // Clean up invalid signatures cache if it gets too large
-    if (this.invalidSignatures.size > 1000) {
-      this.invalidSignatures.clear();
-      console.log(`DO ${this.doName}: Cleared invalid signatures cache (was over 1000 entries)`);
-    }
-    
-    console.log(`DO ${this.doName}: Cleaned ${cleanedEvents} old processed events, ${cleanedCache} expired cache entries`);
-    
-    // Schedule next cleanup
-    await this.state.storage.setAlarm(Date.now() + 300000); // 5 minutes
   }
 
   // Storage helper methods for subscriptions
@@ -148,39 +86,6 @@ export class RelayWebSocket implements DurableObject {
     await this.state.storage.delete(key);
   }
 
-  // Cached payment status check
-  private async hasPaidForRelayCached(pubkey: string): Promise<boolean> {
-    const now = Date.now();
-    const expiry = this.cacheExpiry.get(pubkey);
-    
-    // Check cache first
-    if (expiry && expiry > now && this.paidPubkeysCache.has(pubkey)) {
-      return this.paidPubkeysCache.get(pubkey)!;
-    }
-    
-    // Cache miss - query D1
-    const hasPaid = await hasPaidForRelay(pubkey, this.env);
-    
-    // Cache result
-    this.paidPubkeysCache.set(pubkey, hasPaid);
-    this.cacheExpiry.set(pubkey, now + RelayWebSocket.PAYMENT_CACHE_DURATION);
-    
-    // If they paid, remove from denied set
-    if (hasPaid) {
-      this.deniedPubkeys.delete(pubkey);
-    }
-    
-    return hasPaid;
-  }
-  
-  // Invalidate payment cache for a specific pubkey (called from relay-worker after payment)
-  private invalidatePaymentCache(pubkey: string): void {
-    this.paidPubkeysCache.delete(pubkey);
-    this.cacheExpiry.delete(pubkey);
-    this.deniedPubkeys.delete(pubkey);
-    console.log(`DO ${this.doName}: Payment cache invalidated for ${pubkey}`);
-  }
-
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -193,21 +98,6 @@ export class RelayWebSocket implements DurableObject {
     // DO-to-DO broadcast endpoint
     if (url.pathname === '/do-broadcast') {
       return await this.handleDOBroadcast(request);
-    }
-    
-    // Payment notification endpoint (for cache invalidation)
-    if (url.pathname === '/invalidate-payment-cache') {
-      const pubkey = url.searchParams.get('pubkey');
-      if (pubkey) {
-        this.invalidatePaymentCache(pubkey);
-        return new Response(JSON.stringify({ success: true, message: 'Cache invalidated' }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-      return new Response(JSON.stringify({ success: false, message: 'Missing pubkey' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
     }
 
     // Handle WebSocket upgrade
@@ -237,7 +127,6 @@ export class RelayWebSocket implements DurableObject {
       subscriptions: new Map(),
       pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
       reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-      unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
       bookmark: 'first-unconstrained',
       host
     };
@@ -310,7 +199,6 @@ export class RelayWebSocket implements DurableObject {
         subscriptions,
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-        unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
         host: attachment.host
       };
@@ -398,6 +286,14 @@ export class RelayWebSocket implements DurableObject {
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
 
+      // Clean up old processed events periodically
+      const fiveMinutesAgo = Date.now() - 300000;
+      for (const [eventId, timestamp] of this.processedEvents) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedEvents.delete(eventId);
+        }
+      }
+
       return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error('Error handling DO broadcast:', error);
@@ -452,19 +348,6 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Fast-path rejection for known non-payers (skip expensive signature verification)
-      if (PAY_TO_RELAY_ENABLED && this.deniedPubkeys.has(event.pubkey)) {
-        // Use stricter rate limit for repeat offenders
-        if (!session.unpaidEventRateLimiter.removeToken()) {
-          console.log(`Unpaid rate limit exceeded for pubkey ${event.pubkey}, closing connection`);
-          session.webSocket.close(1008, 'Rate limit exceeded for unpaid pubkey');
-          return;
-        }
-        
-        this.sendOK(session.webSocket, event.id, false, `blocked: payment required. Visit https://${session.host} to pay for relay access.`);
-        return;
-      }
-
       // Rate limiting (skip for excluded kinds)
       if (!excludedRateLimitKinds.has(event.kind)) {
         if (!session.pubkeyRateLimiter.removeToken()) {
@@ -474,31 +357,18 @@ export class RelayWebSocket implements DurableObject {
         }
       }
 
-      // Check if we've already verified this signature as invalid
-      if (this.invalidSignatures.has(event.id)) {
-        this.sendOK(session.webSocket, event.id, false, 'invalid: signature verification failed');
-        return;
-      }
-
       // Verify signature
       const isValidSignature = await verifyEventSignature(event);
       if (!isValidSignature) {
         console.error(`Signature verification failed for event ${event.id}`);
-        
-        // Cache this invalid signature
-        this.invalidSignatures.add(event.id);
-        
         this.sendOK(session.webSocket, event.id, false, 'invalid: signature verification failed');
         return;
       }
 
-      // Check if pay to relay is enabled (with caching)
+      // Check if pay to relay is enabled
       if (PAY_TO_RELAY_ENABLED) {
-        const hasPaid = await this.hasPaidForRelayCached(event.pubkey);
+        const hasPaid = await hasPaidForRelay(event.pubkey, this.env);
         if (!hasPaid) {
-          // Add to denied set for fast-fail on future attempts
-          this.deniedPubkeys.add(event.pubkey);
-          
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
@@ -736,7 +606,6 @@ export class RelayWebSocket implements DurableObject {
           subscriptions,
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-          unpaidEventRateLimiter: new RateLimiter(UNPAID_EVENT_RATE_LIMIT.rate, UNPAID_EVENT_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
           host: attachment.host
         };

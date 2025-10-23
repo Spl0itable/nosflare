@@ -3,32 +3,6 @@ import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response 
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
-// Define allowed endpoints
-const ALLOWED_ENDPOINTS = [
-  'relay-WNAM-primary',
-  'relay-ENAM-primary',
-  'relay-WEUR-primary',
-  'relay-EEUR-primary',
-  'relay-APAC-primary',
-  'relay-OC-primary',
-  'relay-SAM-primary',
-  'relay-AFR-primary',
-  'relay-ME-primary'
-];
-
-// Map endpoints to their proper location hints
-const ENDPOINT_HINTS: Record<string, string> = {
-  'relay-WNAM-primary': 'wnam',
-  'relay-ENAM-primary': 'enam',
-  'relay-WEUR-primary': 'weur',
-  'relay-EEUR-primary': 'eeur',
-  'relay-APAC-primary': 'apac',
-  'relay-OC-primary': 'oc',
-  'relay-SAM-primary': 'enam',
-  'relay-AFR-primary': 'weur',
-  'relay-ME-primary': 'eeur'
-};
-
 // Import config values
 const {
   relayInfo,
@@ -2477,39 +2451,6 @@ async function handleCheckPayment(request: Request, env: Env): Promise<Response>
   }
 
   const paid = await hasPaidForRelay(pubkey, env);
-
-  // If they have paid, invalidate cache across all DOs
-  if (paid) {
-    console.log(`Payment confirmed for ${pubkey}, invalidating cache across all DOs`);
-
-    const invalidationPromises = ALLOWED_ENDPOINTS.map(async (doName) => {
-      try {
-        const id = env.RELAY_WEBSOCKET.idFromName(doName);
-        const locationHint = ENDPOINT_HINTS[doName] || 'auto';
-        const stub = env.RELAY_WEBSOCKET.get(id, { locationHint });
-
-        const invalidateUrl = new URL('https://internal/invalidate-payment-cache');
-        invalidateUrl.searchParams.set('pubkey', pubkey);
-        invalidateUrl.searchParams.set('doName', doName);
-
-        const response = await stub.fetch(new Request(invalidateUrl.toString(), {
-          method: 'POST'
-        }));
-
-        if (!response.ok) {
-          console.error(`Failed to invalidate cache in ${doName}:`, await response.text());
-        } else {
-          console.log(`Cache invalidated in ${doName} for ${pubkey}`);
-        }
-      } catch (error) {
-        console.error(`Error invalidating cache in ${doName}:`, error);
-      }
-    });
-
-    Promise.all(invalidationPromises).catch(err => {
-      console.error('Error during cache invalidation:', err);
-    });
-  }
 
   return new Response(JSON.stringify({ paid }), {
     status: 200,
