@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.11",
+  version: "7.4.10",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4936,17 +4936,9 @@ var relay_worker_default = {
   },
   // Scheduled handler for archiving and maintenance
   async scheduled(event, env, ctx) {
-    console.log("Running scheduled maintenance...");
     try {
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log("Archive process completed successfully");
-      const now = /* @__PURE__ */ new Date();
-      const shouldOptimize = now.getUTCHours() === 3 && now.getUTCMinutes() === 0;
-      if (shouldOptimize) {
-        const session = env.RELAY_DATABASE.withSession("first-unconstrained");
-        await session.prepare("PRAGMA optimize(0x02)").run();
-        console.log("Daily database optimization completed");
-      }
     } catch (error) {
       console.error("Scheduled maintenance failed:", error);
     }
