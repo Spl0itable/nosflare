@@ -35,4 +35,4 @@ new_sqlite_classes = ["RelayWebSocket"]
 
 # Add scheduled worker for archiving
 [triggers]
-crons = ["0 */1 * * *"]  # Run every 1 hour
+crons = ["0 */6 * * *"]  # Run every 6 hours
