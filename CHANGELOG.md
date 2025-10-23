@@ -1,3 +1,7 @@
+## v7.4.11 - 2025-10-23
+
+Hotfix: lowered the archived event batch size
+
 ## v7.4.10 - 2025-10-23
 
 Hotfix: lowered the REQ and EVENT messages rate limit amount

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.10",
+  version: "7.4.11",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2447,7 +2447,7 @@ var {
   allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
 var ARCHIVE_RETENTION_DAYS = 90;
-var ARCHIVE_BATCH_SIZE = 1e3;
+var ARCHIVE_BATCH_SIZE = 10;
 var GLOBAL_MAX_EVENTS = 5e3;
 var DEFAULT_TIME_WINDOW_DAYS = 7;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -3324,9 +3324,15 @@ async function archiveOldEvents(db, r2) {
         indices: {
           authors: new Set(data.indices?.authors || []),
           kinds: new Set(data.indices?.kinds || []),
-          tags: data.indices?.tags || {}
+          tags: {}
+          // Initialize empty, will populate below
         }
       };
+      if (data.indices?.tags) {
+        for (const [tagName, tagValues] of Object.entries(data.indices.tags)) {
+          manifest.indices.tags[tagName] = new Set(tagValues);
+        }
+      }
     } else {
       manifest = {
         lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
@@ -3342,6 +3348,7 @@ async function archiveOldEvents(db, r2) {
       };
     }
   } catch (e) {
+    console.log("Creating new manifest...");
     manifest = {
       lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
       hoursWithEvents: [],

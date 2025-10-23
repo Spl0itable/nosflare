@@ -20,7 +20,7 @@ const {
 
 // Archive configuration constants
 const ARCHIVE_RETENTION_DAYS = 90;
-const ARCHIVE_BATCH_SIZE = 1000;
+const ARCHIVE_BATCH_SIZE = 10;
 
 // Query optimization constants
 const GLOBAL_MAX_EVENTS = 5000;
@@ -1152,14 +1152,22 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const manifestObj = await r2.get('manifest.json');
     if (manifestObj) {
       const data = JSON.parse(await manifestObj.text());
+      // Convert arrays back to Sets when loading
       manifest = {
         ...data,
         indices: {
           authors: new Set(data.indices?.authors || []),
           kinds: new Set(data.indices?.kinds || []),
-          tags: data.indices?.tags || {}
+          tags: {} // Initialize empty, will populate below
         }
       };
+
+      // Convert tag arrays back to Sets
+      if (data.indices?.tags) {
+        for (const [tagName, tagValues] of Object.entries(data.indices.tags)) {
+          manifest.indices.tags[tagName] = new Set(tagValues as string[]);
+        }
+      }
     } else {
       manifest = {
         lastUpdated: new Date().toISOString(),
@@ -1175,6 +1183,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       };
     }
   } catch (e) {
+    console.log('Creating new manifest...');
     manifest = {
       lastUpdated: new Date().toISOString(),
       hoursWithEvents: [],
@@ -1271,7 +1280,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       eventsByKindHour.get(kindHourKey)!.push(nostrEvent);
       manifest.indices.kinds.add(nostrEvent.kind);
 
-      // Secondary indices by tags
+      // Secondary indices by tags - FIXED SECTION
       for (const [tagName, ...tagValues] of formattedTags) {
         for (const tagValue of tagValues) {
           const tagKey = `${tagName}/${tagValue}/${hourKey}`;
@@ -1280,11 +1289,12 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
           }
           eventsByTagHour.get(tagKey)!.push(nostrEvent);
 
-          // Update manifest
+          // Update manifest - ensure it's a Set
           if (!manifest.indices.tags[tagName]) {
             manifest.indices.tags[tagName] = new Set();
           }
-          manifest.indices.tags[tagName].add(tagValue);
+          // Now it's safe to use .add() because we know it's a Set
+          (manifest.indices.tags[tagName] as Set<string>).add(tagValue);
         }
       }
 
@@ -1445,7 +1455,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       authors: Array.from(manifest.indices.authors),
       kinds: Array.from(manifest.indices.kinds),
       tags: Object.fromEntries(
-        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v)])
+        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v as Set<string>)])
       )
     }
   };
