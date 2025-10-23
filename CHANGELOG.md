@@ -1,7 +1,3 @@
-## v7.4.17 - 2025-10-23
-
-Hotfix: archived events manifest caching
-
 ## v7.4.16 - 2025-10-23
 
 Hotfix: memory optimizations
