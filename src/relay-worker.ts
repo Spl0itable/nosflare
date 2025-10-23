@@ -1152,22 +1152,14 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
     const manifestObj = await r2.get('manifest.json');
     if (manifestObj) {
       const data = JSON.parse(await manifestObj.text());
-      // Convert arrays back to Sets when loading
       manifest = {
         ...data,
         indices: {
           authors: new Set(data.indices?.authors || []),
           kinds: new Set(data.indices?.kinds || []),
-          tags: {} // Initialize empty, will populate below
+          tags: data.indices?.tags || {}
         }
       };
-
-      // Convert tag arrays back to Sets
-      if (data.indices?.tags) {
-        for (const [tagName, tagValues] of Object.entries(data.indices.tags)) {
-          manifest.indices.tags[tagName] = new Set(tagValues as string[]);
-        }
-      }
     } else {
       manifest = {
         lastUpdated: new Date().toISOString(),
@@ -1183,7 +1175,6 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       };
     }
   } catch (e) {
-    console.log('Creating new manifest...');
     manifest = {
       lastUpdated: new Date().toISOString(),
       hoursWithEvents: [],
@@ -1293,7 +1284,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
           if (!manifest.indices.tags[tagName]) {
             manifest.indices.tags[tagName] = new Set();
           }
-          (manifest.indices.tags[tagName] as Set<string>).add(tagValue);
+          manifest.indices.tags[tagName].add(tagValue);
         }
       }
 
@@ -1454,7 +1445,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       authors: Array.from(manifest.indices.authors),
       kinds: Array.from(manifest.indices.kinds),
       tags: Object.fromEntries(
-        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v as Set<string>)])
+        Object.entries(manifest.indices.tags).map(([k, v]) => [k, Array.from(v)])
       )
     }
   };
