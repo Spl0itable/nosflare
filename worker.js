@@ -4151,7 +4151,7 @@ function serveLandingPage() {
         
         <div class="links">
             <a href="https://github.com/Spl0itable/nosflare" class="link" target="_blank">GitHub</a>
-            <a href="https://nostr.info" class="link" target="_blank">Learn about Nostr</a>
+            <a href="https://nostr.com" class="link" target="_blank">Learn about Nostr</a>
         </div>
     </div>
     
