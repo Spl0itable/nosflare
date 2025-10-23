@@ -62,14 +62,6 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
-
-    // Set up periodic cleanup alarm
-    this.state.storage.getAlarm().then(scheduledTime => {
-      if (scheduledTime === null) {
-        // No alarm set, schedule first cleanup in 5 minutes
-        this.state.storage.setAlarm(Date.now() + 300000);
-      }
-    });
   }
 
   // Storage helper methods for subscriptions
@@ -88,48 +80,6 @@ export class RelayWebSocket implements DurableObject {
   private async deleteSubscriptions(sessionId: string): Promise<void> {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
-  }
-
-  // Alarm handler for cleanup
-  async alarm(): Promise<void> {
-    await this.cleanupStaleConnections();
-    
-    // Clean up old processed events (older than 5 minutes)
-    const fiveMinutesAgo = Date.now() - 300000;
-    for (const [eventId, timestamp] of this.processedEvents) {
-      if (timestamp < fiveMinutesAgo) {
-        this.processedEvents.delete(eventId);
-      }
-    }
-
-    // Schedule next cleanup in 5 minutes
-    await this.state.storage.setAlarm(Date.now() + 300000);
-  }
-
-  // Cleanup stale connections
-  private async cleanupStaleConnections(): Promise<void> {
-    let cleanedCount = 0;
-
-    for (const [sessionId, session] of this.sessions) {
-      try {
-        // Check if WebSocket is still alive
-        if (session.webSocket.readyState !== WebSocket.OPEN && 
-            session.webSocket.readyState !== WebSocket.CONNECTING) {
-          this.sessions.delete(sessionId);
-          await this.deleteSubscriptions(sessionId);
-          cleanedCount++;
-        }
-      } catch (error) {
-        // WebSocket is dead, clean it up
-        this.sessions.delete(sessionId);
-        await this.deleteSubscriptions(sessionId);
-        cleanedCount++;
-      }
-    }
-
-    if (cleanedCount > 0) {
-      console.log(`Cleaned up ${cleanedCount} stale sessions on DO ${this.doName}`);
-    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -152,31 +102,20 @@ export class RelayWebSocket implements DurableObject {
       return new Response('Expected Upgrade: websocket', { status: 426 });
     }
 
-    const webSocketPair = new WebSocketPair();
-    const [client, server] = Object.values(webSocketPair);
-
     // Extract region info and DO name
     this.region = url.searchParams.get('region') || this.region || 'unknown';
     const colo = url.searchParams.get('colo') || 'default';
-    const host = request.headers.get('host') || url.host;
 
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
 
+    const webSocketPair = new WebSocketPair();
+    const [client, server] = Object.values(webSocketPair);
+
+    // Create session data
     const sessionId = crypto.randomUUID();
-    
-    // Accept WebSocket immediately
-    this.state.acceptWebSocket(server);
+    const host = request.headers.get('host') || url.host;
 
-    // Attach minimal metadata
-    const attachment: SessionAttachment = {
-      sessionId,
-      bookmark: 'first-unconstrained',
-      host,
-      doName: this.doName
-    };
-    server.serializeAttachment(attachment);
-
-    // Create session asynchronously (don't await)
+    // Create full session in memory
     const session: WebSocketSession = {
       id: sessionId,
       webSocket: server,
@@ -187,11 +126,23 @@ export class RelayWebSocket implements DurableObject {
       host
     };
 
+    // Store session in memory
     this.sessions.set(sessionId, session);
+
+    // Attach minimal metadata to WebSocket for restoration if needed
+    const attachment: SessionAttachment = {
+      sessionId,
+      bookmark: session.bookmark,
+      host,
+      doName: this.doName
+    };
+    server.serializeAttachment(attachment);
+
+    // Use hibernatable WebSocket accept
+    this.state.acceptWebSocket(server);
 
     console.log(`New WebSocket session: ${sessionId} on DO ${this.doName}`);
 
-    // Return immediately - session is ready
     return new Response(null, {
       status: 101,
       webSocket: client,
@@ -292,7 +243,6 @@ export class RelayWebSocket implements DurableObject {
     if (attachment) {
       console.error(`WebSocket error for session ${attachment.sessionId}:`, error);
       this.sessions.delete(attachment.sessionId);
-      await this.deleteSubscriptions(attachment.sessionId);
     }
   }
 
@@ -303,9 +253,7 @@ export class RelayWebSocket implements DurableObject {
 
       // Prevent duplicate processing
       if (this.processedEvents.has(event.id)) {
-        return new Response(JSON.stringify({ success: true, duplicate: true }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return new Response(JSON.stringify({ success: true, duplicate: true }));
       }
 
       this.processedEvents.set(event.id, Date.now());
@@ -315,9 +263,15 @@ export class RelayWebSocket implements DurableObject {
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
 
-      return new Response(JSON.stringify({ success: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
+      // Clean up old processed events periodically
+      const fiveMinutesAgo = Date.now() - 300000;
+      for (const [eventId, timestamp] of this.processedEvents) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedEvents.delete(eventId);
+        }
+      }
+
+      return new Response(JSON.stringify({ success: true }));
     } catch (error) {
       console.error('Error handling DO broadcast:', error);
       return new Response(JSON.stringify({ success: false, error: (error as Error).message }), {
@@ -440,11 +394,9 @@ export class RelayWebSocket implements DurableObject {
         // Mark as processed
         this.processedEvents.set(event.id, Date.now());
 
-        // Broadcast to all (local + remote) - fire and forget
+        // Broadcast to all (local + remote)
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
-        this.broadcastEvent(event).catch(err => 
-          console.error(`Broadcast error for event ${event.id}:`, err)
-        );
+        await this.broadcastEvent(event);
       } else {
         this.sendOK(session.webSocket, event.id, false, result.message);
       }
@@ -580,13 +532,11 @@ export class RelayWebSocket implements DurableObject {
   }
 
   private async broadcastEvent(event: NostrEvent): Promise<void> {
-    // Broadcast to local sessions first
+    // Broadcast to local sessions
     await this.broadcastToLocalSessions(event);
 
-    // Broadcast to other DOs (fire and forget with aggressive timeout)
-    this.broadcastToOtherDOs(event).catch(err =>
-      console.error(`Error broadcasting to other DOs:`, err)
-    );
+    // Broadcast to other DOs
+    await this.broadcastToOtherDOs(event);
   }
 
   private async broadcastToLocalSessions(event: NostrEvent): Promise<void> {
@@ -651,27 +601,27 @@ export class RelayWebSocket implements DurableObject {
   }
 
   private async broadcastToOtherDOs(event: NostrEvent): Promise<void> {
-    const broadcasts: Promise<void>[] = [];
+    const broadcasts: Promise<Response>[] = [];
 
     // Broadcast to all allowed endpoints except ourselves
     for (const endpoint of RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
 
-      // Fire and forget - don't await individual broadcasts
-      broadcasts.push(
-        this.sendToSpecificDO(endpoint, event)
-          .catch(err => console.error(`Broadcast to ${endpoint} failed:`, err))
-          .then(() => {}) // Convert Response to void
-      );
+      broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
 
-    // Set very aggressive timeout for broadcasts (1 second max)
-    await Promise.race([
-      Promise.all(broadcasts),
-      new Promise<void>(resolve => setTimeout(resolve, 1000))
-    ]);
+    // Execute broadcasts in parallel with timeout
+    const results = await Promise.allSettled(
+      broadcasts.map(p => Promise.race([
+        p,
+        new Promise<Response>((_, reject) =>
+          setTimeout(() => reject(new Error('Broadcast timeout')), 3000)
+        )
+      ]))
+    );
 
-    console.log(`Event ${event.id} broadcast initiated from DO ${this.doName} to other DOs`);
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
 
   private async sendToSpecificDO(doName: string, event: NostrEvent): Promise<Response> {
@@ -691,9 +641,6 @@ export class RelayWebSocket implements DurableObject {
 
       return await stub.fetch(new Request(url.toString(), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify({
           event,
           sourceDoId: this.doId
