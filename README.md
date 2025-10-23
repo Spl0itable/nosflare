@@ -51,7 +51,7 @@ npm install --save-dev @cloudflare/workers-types @types/node
 Either fork this repo or clone it to your machine (but forking is recommended so you can deploy from your own git repo), then either open the project in your favorite text editor or `cd` into its directory, and open `src/config.ts` in a text editor. Edit the contents of `relayInfo` and enable any optional settings as desired by uncommenting them to customize the relay name, icon, limitations, etc.
  
 *Optional:*
-- In the `src/config.ts` file: Edit the "Pay to relay" settings if you would like to charge people for access to the relay via payment in Bitcoin through a Nostr zap. This feature is enabled by default. You will want to set `PAY_TO_RELAY_ENABLED` to `false` state if you would like to disable it. Edit `relayNpub` with your own npub and enter the desired price in SATS in `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
+- In the `src/config.ts` file: Edit the "Pay to relay" settings if you would like to charge people for access to the relay via payment in Bitcoin through a Nostr zap. This feature is enabled by default. You will want to set `PAY_TO_RELAY_ENABLED` to `false` value if you would like to disable it. Edit `relayNpub` with your own npub and enter the desired price in SATS in `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
 
 You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
 
@@ -133,7 +133,7 @@ Nosflare is serverless and operates on Cloudflare's usage-based pricing model - 
 **R2 Bucket (Archive Storage - After 90 days):**
 - First 10 GB included free
 - Additional storage: $0.015/GB per month
-- Write operations: $4.50 per million (archive runs every 6 hours)
+- Write operations: $4.50 per million (archive runs every 30 minutes)
 - Read operations: $0.36 per million (only for archived event queries)
 - **No egress fees** when accessed through Workers
 
@@ -170,7 +170,7 @@ Nosflare uses an intelligent hybrid storage system that combines D1 database for
 
 - **Hot Storage (D1)**: Recent 90 days of events for fast queries
 - **Archive Storage (R2)**: Events older than 90 days, still fully queryable
-- **Automatic Migration**: Cron job runs every 6 hours to archive old events
+- **Automatic Migration**: Cron job runs every 30 minutes to archive old events
 - **Seamless Queries**: Clients can query both hot and archived data transparently
 - **Unlimited Capacity**: R2 has no storage limits, enabling infinite event retention
 
