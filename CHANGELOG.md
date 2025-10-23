@@ -1,3 +1,7 @@
+## v7.4.10 - 2025-10-23
+
+Hotfix: lowered the REQ and EVENT messages rate limit amount
+
 ## v7.4.9 - 2025-09-27
 
 Hotfix: removed excessive ANALYZE functionality, replaced with PRAGMA optimize
