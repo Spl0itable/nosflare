@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.13",
+  version: "7.4.14",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2595,6 +2595,9 @@ var ARCHIVE_RETENTION_DAYS = 90;
 var GLOBAL_MAX_EVENTS = 5e3;
 var DEFAULT_TIME_WINDOW_DAYS = 7;
 var MAX_QUERY_COMPLEXITY = 1e3;
+var QUERY_TIMEOUT = 1e4;
+var NIP11_CACHE = null;
+var NIP11_CACHE_TIME = 0;
 async function initializeDatabase(db) {
   try {
     const session2 = db.withSession("first-unconstrained");
@@ -4035,73 +4038,90 @@ async function queryArchive(filter, hotDataCutoff, r2) {
 }
 __name(queryArchive, "queryArchive");
 async function queryEventsWithArchive(filters, bookmark, env) {
-  const d1Result = await queryEvents(filters, bookmark, env);
-  const hotDataCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
-  const needsArchive = filters.some((filter) => {
-    if (filter.ids && filter.ids.length > 0) {
-      return true;
+  const queryPromise = (async () => {
+    const d1Result = await queryEvents(filters, bookmark, env);
+    const hotDataCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
+    const needsArchive = filters.some((filter) => {
+      if (filter.ids && filter.ids.length > 0) {
+        return true;
+      }
+      if (!filter.since && !filter.until) {
+        return false;
+      }
+      const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+      const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+      return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
+    });
+    if (!needsArchive || !env.EVENT_ARCHIVE) {
+      return d1Result;
     }
-    if (!filter.since && !filter.until) {
-      return false;
-    }
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
-  });
-  if (!needsArchive || !env.EVENT_ARCHIVE) {
-    return d1Result;
-  }
-  console.log("Query requires archive access - checking for missing events or old data");
-  const archiveEvents = [];
-  for (const filter of filters) {
-    const hasDirectIds = filter.ids && filter.ids.length > 0;
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
-      if (hasDirectIds) {
-        const foundIds = new Set(d1Result.events.map((e) => e.id));
-        const missingIds = filter.ids.filter((id) => !foundIds.has(id));
-        if (missingIds.length > 0) {
-          console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-          const archiveFilter = { ...filter, ids: missingIds };
-          delete archiveFilter.since;
-          delete archiveFilter.until;
+    console.log("Query requires archive access - checking for missing events or old data");
+    const archiveEvents = [];
+    for (const filter of filters) {
+      const hasDirectIds = filter.ids && filter.ids.length > 0;
+      const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+      const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+      if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+        if (hasDirectIds) {
+          const foundIds = new Set(d1Result.events.map((e) => e.id));
+          const missingIds = filter.ids.filter((id) => !foundIds.has(id));
+          if (missingIds.length > 0) {
+            console.log(`Checking archive for ${missingIds.length} missing event IDs`);
+            const archiveFilter = { ...filter, ids: missingIds };
+            delete archiveFilter.since;
+            delete archiveFilter.until;
+            const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+            archiveEvents.push(...archived);
+          }
+        } else {
+          const archiveFilter = { ...filter };
+          if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+            archiveFilter.until = hotDataCutoff;
+          }
           const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
           archiveEvents.push(...archived);
         }
-      } else {
-        const archiveFilter = { ...filter };
-        if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
-          archiveFilter.until = hotDataCutoff;
-        }
-        const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-        archiveEvents.push(...archived);
       }
     }
-  }
-  const allEvents = /* @__PURE__ */ new Map();
-  for (const event of d1Result.events) {
-    allEvents.set(event.id, event);
-  }
-  for (const event of archiveEvents) {
-    allEvents.set(event.id, event);
-  }
-  const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
-    if (b.created_at !== a.created_at) {
-      return b.created_at - a.created_at;
+    const allEvents = /* @__PURE__ */ new Map();
+    for (const event of d1Result.events) {
+      allEvents.set(event.id, event);
     }
-    return a.id.localeCompare(b.id);
-  });
-  const limit = Math.min(...filters.map((f) => f.limit || 1e4));
-  const limitedEvents = sortedEvents.slice(0, limit);
-  console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
-  return {
-    events: limitedEvents,
-    bookmark: d1Result.bookmark
-  };
+    for (const event of archiveEvents) {
+      allEvents.set(event.id, event);
+    }
+    const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
+      if (b.created_at !== a.created_at) {
+        return b.created_at - a.created_at;
+      }
+      return a.id.localeCompare(b.id);
+    });
+    const limit = Math.min(...filters.map((f) => f.limit || 1e4));
+    const limitedEvents = sortedEvents.slice(0, limit);
+    console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
+    return {
+      events: limitedEvents,
+      bookmark: d1Result.bookmark
+    };
+  })();
+  try {
+    return await Promise.race([
+      queryPromise,
+      new Promise(
+        (_, reject) => setTimeout(() => reject(new Error("Query timeout")), QUERY_TIMEOUT)
+      )
+    ]);
+  } catch (error) {
+    console.error("Query timeout or error:", error);
+    return { events: [], bookmark: null };
+  }
 }
 __name(queryEventsWithArchive, "queryEventsWithArchive");
 function handleRelayInfoRequest(request) {
+  const now = Date.now();
+  if (NIP11_CACHE && now - NIP11_CACHE_TIME < 36e5) {
+    return NIP11_CACHE.clone();
+  }
   const responseInfo = { ...relayInfo2 };
   if (PAY_TO_RELAY_ENABLED2) {
     const url = new URL(request.url);
@@ -4110,15 +4130,19 @@ function handleRelayInfoRequest(request) {
       admission: [{ amount: RELAY_ACCESS_PRICE_SATS2 * 1e3, unit: "msats" }]
     };
   }
-  return new Response(JSON.stringify(responseInfo), {
+  const response = new Response(JSON.stringify(responseInfo), {
     status: 200,
     headers: {
       "Content-Type": "application/nostr+json",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type, Accept",
-      "Access-Control-Allow-Methods": "GET"
+      "Access-Control-Allow-Methods": "GET",
+      "Cache-Control": "public, max-age=3600"
     }
   });
+  NIP11_CACHE = response.clone();
+  NIP11_CACHE_TIME = now;
+  return response;
 }
 __name(handleRelayInfoRequest, "handleRelayInfoRequest");
 function serveLandingPage() {
@@ -4905,15 +4929,27 @@ var relay_worker_default = {
       }
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          const cf = request.cf;
-          const { stub, doName } = await getOptimalDO(cf, env, url);
-          const newUrl = new URL(request.url);
-          newUrl.searchParams.set("region", cf?.region || "unknown");
-          newUrl.searchParams.set("colo", cf?.colo || "unknown");
-          newUrl.searchParams.set("continent", cf?.continent || "unknown");
-          newUrl.searchParams.set("country", cf?.country || "unknown");
-          newUrl.searchParams.set("doName", doName);
-          return stub.fetch(new Request(newUrl, request));
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error("Connection timeout")), 5e3);
+          });
+          try {
+            const cf = request.cf;
+            const { stub, doName } = await getOptimalDO(cf, env, url);
+            const newUrl = new URL(request.url);
+            newUrl.searchParams.set("region", cf?.region || "unknown");
+            newUrl.searchParams.set("colo", cf?.colo || "unknown");
+            newUrl.searchParams.set("continent", cf?.continent || "unknown");
+            newUrl.searchParams.set("country", cf?.country || "unknown");
+            newUrl.searchParams.set("doName", doName);
+            const response = await Promise.race([
+              stub.fetch(new Request(newUrl, request)),
+              timeoutPromise
+            ]);
+            return response;
+          } catch (error) {
+            console.error("WebSocket connection failed:", error);
+            return new Response("Connection timeout", { status: 408 });
+          }
         } else if (request.headers.get("Accept") === "application/nostr+json") {
           return handleRelayInfoRequest(request);
         } else {
@@ -4964,6 +5000,11 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
+    this.state.storage.getAlarm().then((scheduledTime) => {
+      if (scheduledTime === null) {
+        this.state.storage.setAlarm(Date.now() + 3e5);
+      }
+    });
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4980,6 +5021,37 @@ var _RelayWebSocket = class _RelayWebSocket {
     const key = `subs:${sessionId}`;
     await this.state.storage.delete(key);
   }
+  // Alarm handler for cleanup
+  async alarm() {
+    await this.cleanupStaleConnections();
+    const fiveMinutesAgo = Date.now() - 3e5;
+    for (const [eventId, timestamp] of this.processedEvents) {
+      if (timestamp < fiveMinutesAgo) {
+        this.processedEvents.delete(eventId);
+      }
+    }
+    await this.state.storage.setAlarm(Date.now() + 3e5);
+  }
+  // Cleanup stale connections
+  async cleanupStaleConnections() {
+    let cleanedCount = 0;
+    for (const [sessionId, session] of this.sessions) {
+      try {
+        if (session.webSocket.readyState !== WebSocket.OPEN && session.webSocket.readyState !== WebSocket.CONNECTING) {
+          this.sessions.delete(sessionId);
+          await this.deleteSubscriptions(sessionId);
+          cleanedCount++;
+        }
+      } catch (error) {
+        this.sessions.delete(sessionId);
+        await this.deleteSubscriptions(sessionId);
+        cleanedCount++;
+      }
+    }
+    if (cleanedCount > 0) {
+      console.log(`Cleaned up ${cleanedCount} stale sessions on DO ${this.doName}`);
+    }
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
@@ -4993,13 +5065,21 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
-    this.region = url.searchParams.get("region") || this.region || "unknown";
-    const colo = url.searchParams.get("colo") || "default";
-    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
-    const sessionId = crypto.randomUUID();
+    this.region = url.searchParams.get("region") || this.region || "unknown";
+    const colo = url.searchParams.get("colo") || "default";
     const host = request.headers.get("host") || url.host;
+    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
+    const sessionId = crypto.randomUUID();
+    this.state.acceptWebSocket(server);
+    const attachment = {
+      sessionId,
+      bookmark: "first-unconstrained",
+      host,
+      doName: this.doName
+    };
+    server.serializeAttachment(attachment);
     const session = {
       id: sessionId,
       webSocket: server,
@@ -5010,14 +5090,6 @@ var _RelayWebSocket = class _RelayWebSocket {
       host
     };
     this.sessions.set(sessionId, session);
-    const attachment = {
-      sessionId,
-      bookmark: session.bookmark,
-      host,
-      doName: this.doName
-    };
-    server.serializeAttachment(attachment);
-    this.state.acceptWebSocket(server);
     console.log(`New WebSocket session: ${sessionId} on DO ${this.doName}`);
     return new Response(null, {
       status: 101,
@@ -5093,6 +5165,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (attachment) {
       console.error(`WebSocket error for session ${attachment.sessionId}:`, error);
       this.sessions.delete(attachment.sessionId);
+      await this.deleteSubscriptions(attachment.sessionId);
     }
   }
   async handleDOBroadcast(request) {
@@ -5100,18 +5173,16 @@ var _RelayWebSocket = class _RelayWebSocket {
       const data = await request.json();
       const { event, sourceDoId } = data;
       if (this.processedEvents.has(event.id)) {
-        return new Response(JSON.stringify({ success: true, duplicate: true }));
+        return new Response(JSON.stringify({ success: true, duplicate: true }), {
+          headers: { "Content-Type": "application/json" }
+        });
       }
       this.processedEvents.set(event.id, Date.now());
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
       await this.broadcastToLocalSessions(event);
-      const fiveMinutesAgo = Date.now() - 3e5;
-      for (const [eventId, timestamp] of this.processedEvents) {
-        if (timestamp < fiveMinutesAgo) {
-          this.processedEvents.delete(eventId);
-        }
-      }
-      return new Response(JSON.stringify({ success: true }));
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" }
+      });
     } catch (error) {
       console.error("Error handling DO broadcast:", error);
       return new Response(JSON.stringify({ success: false, error: error.message }), {
@@ -5205,7 +5276,9 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, event.id, true, result.message);
         this.processedEvents.set(event.id, Date.now());
         console.log(`DO ${this.doName} broadcasting event ${event.id}`);
-        await this.broadcastEvent(event);
+        this.broadcastEvent(event).catch(
+          (err) => console.error(`Broadcast error for event ${event.id}:`, err)
+        );
       } else {
         this.sendOK(session.webSocket, event.id, false, result.message);
       }
@@ -5303,7 +5376,9 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastEvent(event) {
     await this.broadcastToLocalSessions(event);
-    await this.broadcastToOtherDOs(event);
+    this.broadcastToOtherDOs(event).catch(
+      (err) => console.error(`Error broadcasting to other DOs:`, err)
+    );
   }
   async broadcastToLocalSessions(event) {
     let broadcastCount = 0;
@@ -5357,18 +5432,17 @@ var _RelayWebSocket = class _RelayWebSocket {
     const broadcasts = [];
     for (const endpoint of _RelayWebSocket.ALLOWED_ENDPOINTS) {
       if (endpoint === this.doName) continue;
-      broadcasts.push(this.sendToSpecificDO(endpoint, event));
+      broadcasts.push(
+        this.sendToSpecificDO(endpoint, event).catch((err) => console.error(`Broadcast to ${endpoint} failed:`, err)).then(() => {
+        })
+        // Convert Response to void
+      );
     }
-    const results = await Promise.allSettled(
-      broadcasts.map((p) => Promise.race([
-        p,
-        new Promise(
-          (_, reject) => setTimeout(() => reject(new Error("Broadcast timeout")), 3e3)
-        )
-      ]))
-    );
-    const successful = results.filter((r) => r.status === "fulfilled").length;
-    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
+    await Promise.race([
+      Promise.all(broadcasts),
+      new Promise((resolve) => setTimeout(resolve, 1e3))
+    ]);
+    console.log(`Event ${event.id} broadcast initiated from DO ${this.doName} to other DOs`);
   }
   async sendToSpecificDO(doName, event) {
     try {
@@ -5382,6 +5456,9 @@ var _RelayWebSocket = class _RelayWebSocket {
       url.searchParams.set("doName", doName);
       return await stub.fetch(new Request(url.toString(), {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify({
           event,
           sourceDoId: this.doId
