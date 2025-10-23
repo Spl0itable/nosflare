@@ -32,47 +32,6 @@ export class RelayWebSocket implements DurableObject {
   // Connection duration limit (24 hours in milliseconds)
   private static readonly MAX_CONNECTION_DURATION = 24 * 60 * 60 * 1000;
 
-  // Alarm handler
-  async alarm(): Promise<void> {
-    console.log(`Alarm triggered for DO ${this.doName}`);
-
-    // Clean up expired sessions
-    const now = Date.now();
-    const expiredSessions: string[] = [];
-
-    // Check all active WebSockets
-    const activeWebSockets = this.state.getWebSockets();
-    for (const ws of activeWebSockets) {
-      const attachment = ws.deserializeAttachment() as SessionAttachment | null;
-      if (attachment) {
-        const sessionAge = now - attachment.connectedAt;
-        if (sessionAge > RelayWebSocket.MAX_CONNECTION_DURATION) {
-          expiredSessions.push(attachment.sessionId);
-          ws.close(1008, 'Session expired after 24 hours');
-        }
-      }
-    }
-
-    // Clean up expired sessions from memory and storage
-    for (const sessionId of expiredSessions) {
-      this.sessions.delete(sessionId);
-      await this.deleteSubscriptions(sessionId);
-    }
-
-    // Clean up old processed events (older than 5 minutes)
-    const fiveMinutesAgo = now - 300000;
-    for (const [eventId, timestamp] of this.processedEvents) {
-      if (timestamp < fiveMinutesAgo) {
-        this.processedEvents.delete(eventId);
-      }
-    }
-
-    console.log(`Alarm cleanup: removed ${expiredSessions.length} expired sessions, cleaned processed events cache`);
-
-    // Schedule next alarm (run every hour)
-    await this.state.storage.setAlarm(Date.now() + 3600000);
-  }
-
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
     'relay-WNAM-primary',
@@ -107,15 +66,6 @@ export class RelayWebSocket implements DurableObject {
     this.region = 'unknown';
     this.doName = 'unknown';
     this.processedEvents = new Map();
-
-    // Set up alarm for periodic cleanup if not already set
-    this.state.blockConcurrencyWhile(async () => {
-      const alarmTime = await this.state.storage.getAlarm();
-      if (alarmTime === null) {
-        // Schedule first alarm (run in 1 hour)
-        await this.state.storage.setAlarm(Date.now() + 3600000);
-      }
-    });
   }
 
   // Storage helper methods for subscriptions
@@ -160,8 +110,7 @@ export class RelayWebSocket implements DurableObject {
     this.region = url.searchParams.get('region') || this.region || 'unknown';
     const colo = url.searchParams.get('colo') || 'default';
 
-    const activeWebSockets = this.state.getWebSockets();
-    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo}, total WS: ${activeWebSockets.length})`);
+    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
 
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
@@ -221,7 +170,7 @@ export class RelayWebSocket implements DurableObject {
       console.log(`Session ${attachment.sessionId} expired (age: ${Math.round(sessionAge / 1000 / 60)} minutes)`);
       this.sendError(ws, 'Session expired after 24 hours. Please reconnect.');
       ws.close(1008, 'Session expired');
-
+      
       // Clean up
       this.sessions.delete(attachment.sessionId);
       await this.deleteSubscriptions(attachment.sessionId);
@@ -230,16 +179,16 @@ export class RelayWebSocket implements DurableObject {
 
     // Try to get existing session from memory first
     let session = this.sessions.get(attachment.sessionId);
-
+    
     // Only restore from storage if session doesn't exist in memory (DO was evicted)
     if (!session) {
       console.log(`Session ${attachment.sessionId} not in memory, restoring from storage`);
-
+      
       // Restore DO name from attachment if needed
       if (attachment.doName && this.doName === 'unknown') {
         this.doName = attachment.doName;
       }
-
+      
       // Load subscriptions from storage
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
@@ -253,7 +202,7 @@ export class RelayWebSocket implements DurableObject {
         bookmark: attachment.bookmark,
         host: attachment.host
       };
-
+      
       // Store restored session back in memory
       this.sessions.set(attachment.sessionId, session);
     } else {
@@ -301,9 +250,9 @@ export class RelayWebSocket implements DurableObject {
     if (attachment) {
       const sessionAge = Date.now() - attachment.connectedAt;
       const sessionMinutes = Math.round(sessionAge / 1000 / 60);
-
+      
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName} (duration: ${sessionMinutes} minutes, code: ${code}, clean: ${wasClean})`);
-
+      
       // Remove from memory
       this.sessions.delete(attachment.sessionId);
 
@@ -337,16 +286,11 @@ export class RelayWebSocket implements DurableObject {
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
 
-      // Limit cache size to prevent memory issues
-      if (this.processedEvents.size > 10000) {
-        const sortedEntries = Array.from(this.processedEvents.entries())
-          .sort((a, b) => b[1] - a[1]);
-
-        this.processedEvents.clear();
-
-        // Keep only the most recent 5,000 entries
-        for (let i = 0; i < Math.min(5000, sortedEntries.length); i++) {
-          this.processedEvents.set(sortedEntries[i][0], sortedEntries[i][1]);
+      // Clean up old processed events periodically
+      const fiveMinutesAgo = Date.now() - 300000;
+      for (const [eventId, timestamp] of this.processedEvents) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedEvents.delete(eventId);
         }
       }
 
@@ -620,10 +564,8 @@ export class RelayWebSocket implements DurableObject {
 
   private async broadcastToLocalSessions(event: NostrEvent): Promise<void> {
     let broadcastCount = 0;
-    const activeWebSockets = this.state.getWebSockets();
-    const now = Date.now();
 
-    // Process in-memory sessions first
+    // Iterate through in-memory sessions first (active connections)
     for (const [sessionId, session] of this.sessions) {
       for (const [subscriptionId, filters] of session.subscriptions) {
         if (this.matchesFilters(event, filters)) {
@@ -637,35 +579,47 @@ export class RelayWebSocket implements DurableObject {
       }
     }
 
-    // Process hibernated WebSockets (only if not already processed)
-    const hibernatedCount = activeWebSockets.length - this.sessions.size;
-    if (hibernatedCount > 0) {
-      console.log(`Processing ${hibernatedCount} hibernated sessions`);
+    // Also check hibernated WebSockets (might not be in sessions Map)
+    const activeWebSockets = this.state.getWebSockets();
+    for (const ws of activeWebSockets) {
+      const attachment = ws.deserializeAttachment() as SessionAttachment | null;
+      if (!attachment) continue;
 
-      for (const ws of activeWebSockets) {
-        const attachment = ws.deserializeAttachment() as SessionAttachment | null;
-        if (!attachment || this.sessions.has(attachment.sessionId)) continue;
+      // Skip if already processed in the sessions loop
+      if (this.sessions.has(attachment.sessionId)) continue;
 
-        // Check if session has expired
-        const sessionAge = now - attachment.connectedAt;
-        if (sessionAge > RelayWebSocket.MAX_CONNECTION_DURATION) {
-          continue; // Skip expired sessions
-        }
+      // Check if session has expired
+      const sessionAge = Date.now() - attachment.connectedAt;
+      if (sessionAge > RelayWebSocket.MAX_CONNECTION_DURATION) {
+        // Don't broadcast to expired sessions, they'll be closed on next message
+        continue;
+      }
 
-        // Only load subscriptions if we don't have them in memory
+      // Wake up hibernated session
+      let session = this.sessions.get(attachment.sessionId);
+      if (!session) {
         const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+        
+        session = {
+          id: attachment.sessionId,
+          webSocket: ws,
+          subscriptions,
+          pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+          reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+          bookmark: attachment.bookmark,
+          host: attachment.host
+        };
+        
+        this.sessions.set(attachment.sessionId, session);
+      }
 
-        // If no subscriptions, skip
-        if (subscriptions.size === 0) continue;
-
-        for (const [subscriptionId, filters] of subscriptions) {
-          if (this.matchesFilters(event, filters)) {
-            try {
-              this.sendEvent(ws, subscriptionId, event);
-              broadcastCount++;
-            } catch (error) {
-              console.error(`Error broadcasting to hibernated subscription ${subscriptionId}:`, error);
-            }
+      for (const [subscriptionId, filters] of session.subscriptions) {
+        if (this.matchesFilters(event, filters)) {
+          try {
+            this.sendEvent(ws, subscriptionId, event);
+            broadcastCount++;
+          } catch (error) {
+            console.error(`Error broadcasting to hibernated subscription ${subscriptionId}:`, error);
           }
         }
       }
@@ -686,27 +640,18 @@ export class RelayWebSocket implements DurableObject {
       broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
 
-    // Execute broadcasts in parallel with timeout and limit concurrency
-    const BATCH_SIZE = 3;
-    const results: PromiseSettledResult<Response>[] = [];
-
-    for (let i = 0; i < broadcasts.length; i += BATCH_SIZE) {
-      const batch = broadcasts.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.allSettled(
-        batch.map(p => Promise.race([
-          p,
-          new Promise<Response>((_, reject) =>
-            setTimeout(() => reject(new Error('Broadcast timeout')), 2000)
-          )
-        ]))
-      );
-      results.push(...batchResults);
-    }
+    // Execute broadcasts in parallel with timeout
+    const results = await Promise.allSettled(
+      broadcasts.map(p => Promise.race([
+        p,
+        new Promise<Response>((_, reject) =>
+          setTimeout(() => reject(new Error('Broadcast timeout')), 3000)
+        )
+      ]))
+    );
 
     const successful = results.filter(r => r.status === 'fulfilled').length;
-    if (successful > 0) {
-      console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
-    }
+    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
 
   private async sendToSpecificDO(doName: string, event: NostrEvent): Promise<Response> {

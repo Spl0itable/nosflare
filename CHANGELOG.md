@@ -1,7 +1,3 @@
-## v7.4.16 - 2025-10-23
-
-Hotfix: memory optimizations
-
 ## v7.4.15 - 2025-10-22
 
 Hotfix: lowered REQ and EVEMT rate limit per min

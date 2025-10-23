@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.16",
+  version: "7.4.15",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4819,41 +4819,6 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = "unknown";
     this.doName = "unknown";
     this.processedEvents = /* @__PURE__ */ new Map();
-    this.state.blockConcurrencyWhile(async () => {
-      const alarmTime = await this.state.storage.getAlarm();
-      if (alarmTime === null) {
-        await this.state.storage.setAlarm(Date.now() + 36e5);
-      }
-    });
-  }
-  // Alarm handler
-  async alarm() {
-    console.log(`Alarm triggered for DO ${this.doName}`);
-    const now = Date.now();
-    const expiredSessions = [];
-    const activeWebSockets = this.state.getWebSockets();
-    for (const ws of activeWebSockets) {
-      const attachment = ws.deserializeAttachment();
-      if (attachment) {
-        const sessionAge = now - attachment.connectedAt;
-        if (sessionAge > _RelayWebSocket.MAX_CONNECTION_DURATION) {
-          expiredSessions.push(attachment.sessionId);
-          ws.close(1008, "Session expired after 24 hours");
-        }
-      }
-    }
-    for (const sessionId of expiredSessions) {
-      this.sessions.delete(sessionId);
-      await this.deleteSubscriptions(sessionId);
-    }
-    const fiveMinutesAgo = now - 3e5;
-    for (const [eventId, timestamp] of this.processedEvents) {
-      if (timestamp < fiveMinutesAgo) {
-        this.processedEvents.delete(eventId);
-      }
-    }
-    console.log(`Alarm cleanup: removed ${expiredSessions.length} expired sessions, cleaned processed events cache`);
-    await this.state.storage.setAlarm(Date.now() + 36e5);
   }
   // Storage helper methods for subscriptions
   async saveSubscriptions(sessionId, subscriptions) {
@@ -4885,8 +4850,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     this.region = url.searchParams.get("region") || this.region || "unknown";
     const colo = url.searchParams.get("colo") || "default";
-    const activeWebSockets = this.state.getWebSockets();
-    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo}, total WS: ${activeWebSockets.length})`);
+    console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     const sessionId = crypto.randomUUID();
@@ -5011,11 +4975,10 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.processedEvents.set(event.id, Date.now());
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
       await this.broadcastToLocalSessions(event);
-      if (this.processedEvents.size > 1e4) {
-        const sortedEntries = Array.from(this.processedEvents.entries()).sort((a, b) => b[1] - a[1]);
-        this.processedEvents.clear();
-        for (let i = 0; i < Math.min(5e3, sortedEntries.length); i++) {
-          this.processedEvents.set(sortedEntries[i][0], sortedEntries[i][1]);
+      const fiveMinutesAgo = Date.now() - 3e5;
+      for (const [eventId, timestamp] of this.processedEvents) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedEvents.delete(eventId);
         }
       }
       return new Response(JSON.stringify({ success: true }));
@@ -5214,8 +5177,6 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastToLocalSessions(event) {
     let broadcastCount = 0;
-    const activeWebSockets = this.state.getWebSockets();
-    const now = Date.now();
     for (const [sessionId, session] of this.sessions) {
       for (const [subscriptionId, filters] of session.subscriptions) {
         if (this.matchesFilters(event, filters)) {
@@ -5228,26 +5189,36 @@ var _RelayWebSocket = class _RelayWebSocket {
         }
       }
     }
-    const hibernatedCount = activeWebSockets.length - this.sessions.size;
-    if (hibernatedCount > 0) {
-      console.log(`Processing ${hibernatedCount} hibernated sessions`);
-      for (const ws of activeWebSockets) {
-        const attachment = ws.deserializeAttachment();
-        if (!attachment || this.sessions.has(attachment.sessionId)) continue;
-        const sessionAge = now - attachment.connectedAt;
-        if (sessionAge > _RelayWebSocket.MAX_CONNECTION_DURATION) {
-          continue;
-        }
+    const activeWebSockets = this.state.getWebSockets();
+    for (const ws of activeWebSockets) {
+      const attachment = ws.deserializeAttachment();
+      if (!attachment) continue;
+      if (this.sessions.has(attachment.sessionId)) continue;
+      const sessionAge = Date.now() - attachment.connectedAt;
+      if (sessionAge > _RelayWebSocket.MAX_CONNECTION_DURATION) {
+        continue;
+      }
+      let session = this.sessions.get(attachment.sessionId);
+      if (!session) {
         const subscriptions = await this.loadSubscriptions(attachment.sessionId);
-        if (subscriptions.size === 0) continue;
-        for (const [subscriptionId, filters] of subscriptions) {
-          if (this.matchesFilters(event, filters)) {
-            try {
-              this.sendEvent(ws, subscriptionId, event);
-              broadcastCount++;
-            } catch (error) {
-              console.error(`Error broadcasting to hibernated subscription ${subscriptionId}:`, error);
-            }
+        session = {
+          id: attachment.sessionId,
+          webSocket: ws,
+          subscriptions,
+          pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+          reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+          bookmark: attachment.bookmark,
+          host: attachment.host
+        };
+        this.sessions.set(attachment.sessionId, session);
+      }
+      for (const [subscriptionId, filters] of session.subscriptions) {
+        if (this.matchesFilters(event, filters)) {
+          try {
+            this.sendEvent(ws, subscriptionId, event);
+            broadcastCount++;
+          } catch (error) {
+            console.error(`Error broadcasting to hibernated subscription ${subscriptionId}:`, error);
           }
         }
       }
@@ -5262,24 +5233,16 @@ var _RelayWebSocket = class _RelayWebSocket {
       if (endpoint === this.doName) continue;
       broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
-    const BATCH_SIZE = 3;
-    const results = [];
-    for (let i = 0; i < broadcasts.length; i += BATCH_SIZE) {
-      const batch = broadcasts.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.allSettled(
-        batch.map((p) => Promise.race([
-          p,
-          new Promise(
-            (_, reject) => setTimeout(() => reject(new Error("Broadcast timeout")), 2e3)
-          )
-        ]))
-      );
-      results.push(...batchResults);
-    }
+    const results = await Promise.allSettled(
+      broadcasts.map((p) => Promise.race([
+        p,
+        new Promise(
+          (_, reject) => setTimeout(() => reject(new Error("Broadcast timeout")), 3e3)
+        )
+      ]))
+    );
     const successful = results.filter((r) => r.status === "fulfilled").length;
-    if (successful > 0) {
-      console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
-    }
+    console.log(`Event ${event.id} broadcast from DO ${this.doName} to ${successful}/${broadcasts.length} remote DOs`);
   }
   async sendToSpecificDO(doName, event) {
     try {
