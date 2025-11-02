@@ -185,7 +185,7 @@ The archive system uses smart indexing with hourly partitions and secondary indi
 
 ## Migration
 
-If you had previously deployed a Nosflare-powered relay that was ONLY based on an R2 bucket, there is a migration tool that can easily migrate all event data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucke with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
+If you had previously deployed a Nosflare-powered relay that was ONLY based on an R2 bucket, there is a migration tool that can easily migrate all event data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucket with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
 
 ![Migrate from R2 bucket to D1 database](images/migration.png)
 
