@@ -357,38 +357,67 @@ async function migrateEventsBatch(env, state) {
       ).bind(event.id).first();
 
       if (!existing) {
-        // Insert event and tags
-        const statements = [];
-
-        statements.push(
-          env.D1_DB.prepare(
-            `INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).bind(
-            event.id,
-            event.pubkey,
-            event.created_at,
-            event.kind,
-            JSON.stringify(event.tags),
-            event.content,
-            event.sig
-          )
-        );
+        // Insert event
+        await env.D1_DB.prepare(
+          `INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          event.id,
+          event.pubkey,
+          event.created_at,
+          event.kind,
+          JSON.stringify(event.tags),
+          event.content,
+          event.sig
+        ).run();
 
         // Insert tags
+        const tagInserts = [];
+        let tagP = null, tagE = null, tagA = null;
+
         for (const tag of event.tags) {
           const [tagName, tagValue] = tag;
           if (tagName && tagValue) {
-            statements.push(
-              env.D1_DB.prepare(
-                `INSERT INTO tags (event_id, tag_name, tag_value)
-                 VALUES (?, ?, ?)`
-              ).bind(event.id, tagName, tagValue)
-            );
+            tagInserts.push([event.id, tagName, tagValue]);
+            
+            // Capture common tags for cache
+            if (tagName === 'p' && !tagP) tagP = tagValue;
+            if (tagName === 'e' && !tagE) tagE = tagValue;
+            if (tagName === 'a' && !tagA) tagA = tagValue;
           }
         }
 
-        await env.D1_DB.batch(statements);
+        // Insert tags in chunks
+        for (let i = 0; i < tagInserts.length; i += 50) {
+          const chunk = tagInserts.slice(i, i + 50);
+          const batch = chunk.map(t =>
+            env.D1_DB.prepare(
+              `INSERT INTO tags (event_id, tag_name, tag_value)
+               VALUES (?, ?, ?)`
+            ).bind(t[0], t[1], t[2])
+          );
+          await env.D1_DB.batch(batch);
+        }
+
+        // Update event tags cache
+        if (tagP || tagE || tagA) {
+          await env.D1_DB.prepare(`
+            INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+              tag_p = excluded.tag_p,
+              tag_e = excluded.tag_e,
+              tag_a = excluded.tag_a
+          `).bind(
+            event.id,
+            event.pubkey,
+            event.kind,
+            event.created_at,
+            tagP,
+            tagE,
+            tagA
+          ).run();
+        }
       }
 
       state.migrated++;
@@ -637,7 +666,6 @@ async function getMigrationStatus(env) {
   }
 }
 
-// Initialize D1 database schema
 async function initializeDatabase(db) {
   const statements = [
     `CREATE TABLE IF NOT EXISTS system_config (
@@ -654,15 +682,18 @@ async function initializeDatabase(db) {
       tags TEXT NOT NULL,
       content TEXT NOT NULL,
       sig TEXT NOT NULL,
-      deleted INTEGER DEFAULT 0,
       created_timestamp INTEGER DEFAULT (strftime('%s', 'now'))
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
     `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
     `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind ON events(pubkey, kind)`,
-    `CREATE INDEX IF NOT EXISTS idx_events_deleted ON events(deleted)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
 
     `CREATE TABLE IF NOT EXISTS tags (
       event_id TEXT NOT NULL,
@@ -670,9 +701,27 @@ async function initializeDatabase(db) {
       tag_value TEXT NOT NULL,
       FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
     )`,
-
     `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
+    `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
     `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
+
+    `CREATE TABLE IF NOT EXISTS event_tags_cache (
+      event_id TEXT NOT NULL,
+      pubkey TEXT NOT NULL,
+      kind INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      tag_p TEXT,
+      tag_e TEXT,
+      tag_a TEXT,
+      PRIMARY KEY (event_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p)`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p_e ON event_tags_cache(tag_p, tag_e) WHERE tag_p IS NOT NULL AND tag_e IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_created_at ON event_tags_cache(kind, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_pubkey_kind_created_at ON event_tags_cache(pubkey, kind, created_at DESC)`,
 
     `CREATE TABLE IF NOT EXISTS paid_pubkeys (
       pubkey TEXT PRIMARY KEY,
@@ -688,7 +737,6 @@ async function initializeDatabase(db) {
       created_at INTEGER NOT NULL,
       FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
     )`,
-
     `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`
   ];
 
