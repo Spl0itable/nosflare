@@ -1,3 +1,7 @@
+## v7.4.12 - 2025-11-02
+
+Hotfix: increased unbound queries to last 90 days
+
 ## v7.4.11 - 2025-10-23
 
 Hotfix: lowered the archived event batch size

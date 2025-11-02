@@ -24,7 +24,7 @@ const ARCHIVE_BATCH_SIZE = 10;
 
 // Query optimization constants
 const GLOBAL_MAX_EVENTS = 5000;
-const DEFAULT_TIME_WINDOW_DAYS = 7;
+const DEFAULT_TIME_WINDOW_DAYS = 90;
 const MAX_QUERY_COMPLEXITY = 1000;
 
 // Archive index types
@@ -1060,7 +1060,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
 
       // For filters with no time bounds and broad criteria, add default time window
       if (!filter.since && !filter.until) {
-        // Default to last 7 days for unbounded queries
+        // Default to last 90 days for unbounded queries
         const sevenDaysAgo = Math.floor(Date.now() / 1000) - (DEFAULT_TIME_WINDOW_DAYS * 24 * 60 * 60);
         filter.since = sevenDaysAgo;
         console.log(`Added default ${DEFAULT_TIME_WINDOW_DAYS}-day time bound to unbounded query`);
