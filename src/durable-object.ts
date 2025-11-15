@@ -355,7 +355,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Check if this shard is overloaded and redirect if needed
     const connectionCount = this.state.getWebSockets().length;
-    const REDIRECT_THRESHOLD = 6400; // 80% of 8000 max connections per shard
+    const REDIRECT_THRESHOLD = 28000; // 87.5% of 32000 max connections per shard
 
     if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
       // This shard is overloaded - redirect to next available shard
