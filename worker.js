@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.4.12",
+  version: "7.5.12",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -425,9 +425,6 @@ function randomBytes(bytesLength = 32) {
   if (crypto2 && typeof crypto2.getRandomValues === "function") {
     return crypto2.getRandomValues(new Uint8Array(bytesLength));
   }
-  if (crypto2 && typeof crypto2.randomBytes === "function") {
-    return crypto2.randomBytes(bytesLength);
-  }
   throw new Error("crypto.getRandomValues must be defined");
 }
 __name(randomBytes, "randomBytes");
@@ -689,78 +686,9 @@ __name(_SHA256, "SHA256");
 var SHA256 = _SHA256;
 var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
 
-// ../../../node_modules/@noble/hashes/esm/hmac.js
-var _HMAC = class _HMAC extends Hash {
-  constructor(hash2, _key) {
-    super();
-    this.finished = false;
-    this.destroyed = false;
-    hash(hash2);
-    const key = toBytes(_key);
-    this.iHash = hash2.create();
-    if (typeof this.iHash.update !== "function")
-      throw new Error("Expected instance of class which extends utils.Hash");
-    this.blockLen = this.iHash.blockLen;
-    this.outputLen = this.iHash.outputLen;
-    const blockLen = this.blockLen;
-    const pad = new Uint8Array(blockLen);
-    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54;
-    this.iHash.update(pad);
-    this.oHash = hash2.create();
-    for (let i = 0; i < pad.length; i++)
-      pad[i] ^= 54 ^ 92;
-    this.oHash.update(pad);
-    pad.fill(0);
-  }
-  update(buf) {
-    exists(this);
-    this.iHash.update(buf);
-    return this;
-  }
-  digestInto(out) {
-    exists(this);
-    bytes(out, this.outputLen);
-    this.finished = true;
-    this.iHash.digestInto(out);
-    this.oHash.update(out);
-    this.oHash.digestInto(out);
-    this.destroy();
-  }
-  digest() {
-    const out = new Uint8Array(this.oHash.outputLen);
-    this.digestInto(out);
-    return out;
-  }
-  _cloneInto(to) {
-    to || (to = Object.create(Object.getPrototypeOf(this), {}));
-    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
-    to = to;
-    to.finished = finished;
-    to.destroyed = destroyed;
-    to.blockLen = blockLen;
-    to.outputLen = outputLen;
-    to.oHash = oHash._cloneInto(to.oHash);
-    to.iHash = iHash._cloneInto(to.iHash);
-    return to;
-  }
-  destroy() {
-    this.destroyed = true;
-    this.oHash.destroy();
-    this.iHash.destroy();
-  }
-};
-__name(_HMAC, "HMAC");
-var HMAC = _HMAC;
-var hmac = /* @__PURE__ */ __name((hash2, key, message) => new HMAC(hash2, key).update(message).digest(), "hmac");
-hmac.create = (hash2, key) => new HMAC(hash2, key);
-
 // ../../../node_modules/@noble/curves/esm/abstract/utils.js
 var utils_exports = {};
 __export(utils_exports, {
-  aInRange: () => aInRange,
-  abool: () => abool,
   abytes: () => abytes,
   bitGet: () => bitGet,
   bitLen: () => bitLen,
@@ -775,10 +703,7 @@ __export(utils_exports, {
   equalBytes: () => equalBytes,
   hexToBytes: () => hexToBytes,
   hexToNumber: () => hexToNumber,
-  inRange: () => inRange,
   isBytes: () => isBytes2,
-  memoized: () => memoized,
-  notImplemented: () => notImplemented,
   numberToBytesBE: () => numberToBytesBE,
   numberToBytesLE: () => numberToBytesLE,
   numberToHexUnpadded: () => numberToHexUnpadded,
@@ -786,9 +711,9 @@ __export(utils_exports, {
   utf8ToBytes: () => utf8ToBytes2,
   validateObject: () => validateObject
 });
-var _0n = /* @__PURE__ */ BigInt(0);
-var _1n = /* @__PURE__ */ BigInt(1);
-var _2n = /* @__PURE__ */ BigInt(2);
+var _0n = BigInt(0);
+var _1n = BigInt(1);
+var _2n = BigInt(2);
 function isBytes2(a) {
   return a instanceof Uint8Array || a != null && typeof a === "object" && a.constructor.name === "Uint8Array";
 }
@@ -798,11 +723,6 @@ function abytes(item) {
     throw new Error("Uint8Array expected");
 }
 __name(abytes, "abytes");
-function abool(title, value) {
-  if (typeof value !== "boolean")
-    throw new Error(`${title} must be valid boolean, got "${value}".`);
-}
-__name(abool, "abool");
 var hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 function bytesToHex(bytes2) {
   abytes(bytes2);
@@ -813,8 +733,8 @@ function bytesToHex(bytes2) {
   return hex;
 }
 __name(bytesToHex, "bytesToHex");
-function numberToHexUnpadded(num2) {
-  const hex = num2.toString(16);
+function numberToHexUnpadded(num) {
+  const hex = num.toString(16);
   return hex.length & 1 ? `0${hex}` : hex;
 }
 __name(numberToHexUnpadded, "numberToHexUnpadded");
@@ -926,16 +846,6 @@ function utf8ToBytes2(str) {
   return new Uint8Array(new TextEncoder().encode(str));
 }
 __name(utf8ToBytes2, "utf8ToBytes");
-var isPosBig = /* @__PURE__ */ __name((n) => typeof n === "bigint" && _0n <= n, "isPosBig");
-function inRange(n, min, max) {
-  return isPosBig(n) && isPosBig(min) && isPosBig(max) && min <= n && n < max;
-}
-__name(inRange, "inRange");
-function aInRange(title, n, min, max) {
-  if (!inRange(n, min, max))
-    throw new Error(`expected valid ${title}: ${min} <= n < ${max}, got ${typeof n} ${n}`);
-}
-__name(aInRange, "aInRange");
 function bitLen(n) {
   let len;
   for (len = 0; n > _0n; n >>= _1n, len += 1)
@@ -1033,21 +943,6 @@ function validateObject(object, validators, optValidators = {}) {
   return object;
 }
 __name(validateObject, "validateObject");
-var notImplemented = /* @__PURE__ */ __name(() => {
-  throw new Error("not implemented");
-}, "notImplemented");
-function memoized(fn) {
-  const map = /* @__PURE__ */ new WeakMap();
-  return (arg, ...args) => {
-    const val = map.get(arg);
-    if (val !== void 0)
-      return val;
-    const computed = fn(arg, ...args);
-    map.set(arg, computed);
-    return computed;
-  };
-}
-__name(memoized, "memoized");
 
 // ../../../node_modules/@noble/curves/esm/abstract/modular.js
 var _0n2 = BigInt(0);
@@ -1064,7 +959,7 @@ function mod(a, b) {
   return result >= _0n2 ? result : b + result;
 }
 __name(mod, "mod");
-function pow(num2, power, modulo) {
+function pow(num, power, modulo) {
   if (modulo <= _0n2 || power < _0n2)
     throw new Error("Expected power/modulo > 0");
   if (modulo === _1n2)
@@ -1072,8 +967,8 @@ function pow(num2, power, modulo) {
   let res = _1n2;
   while (power > _0n2) {
     if (power & _1n2)
-      res = res * num2 % modulo;
-    num2 = num2 * num2 % modulo;
+      res = res * num % modulo;
+    num = num * num % modulo;
     power >>= _1n2;
   }
   return res;
@@ -1141,9 +1036,9 @@ function tonelliShanks(P) {
           break;
         t2 = Fp2.sqr(t2);
       }
-      const ge = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
-      g = Fp2.sqr(ge);
-      x = Fp2.mul(x, ge);
+      const ge2 = Fp2.pow(g, _1n2 << BigInt(r - m - 1));
+      g = Fp2.sqr(ge2);
+      x = Fp2.mul(x, ge2);
       b = Fp2.mul(b, g);
       r = m;
     }
@@ -1212,15 +1107,15 @@ function validateField(field) {
   return validateObject(field, opts);
 }
 __name(validateField, "validateField");
-function FpPow(f, num2, power) {
+function FpPow(f, num, power) {
   if (power < _0n2)
     throw new Error("Expected power > 0");
   if (power === _0n2)
     return f.ONE;
   if (power === _1n2)
-    return num2;
+    return num;
   let p = f.ONE;
-  let d = num2;
+  let d = num;
   while (power > _0n2) {
     if (power & _1n2)
       p = f.mul(p, d);
@@ -1232,18 +1127,18 @@ function FpPow(f, num2, power) {
 __name(FpPow, "FpPow");
 function FpInvertBatch(f, nums) {
   const tmp = new Array(nums.length);
-  const lastMultiplied = nums.reduce((acc, num2, i) => {
-    if (f.is0(num2))
+  const lastMultiplied = nums.reduce((acc, num, i) => {
+    if (f.is0(num))
       return acc;
     tmp[i] = acc;
-    return f.mul(acc, num2);
+    return f.mul(acc, num);
   }, f.ONE);
   const inverted = f.inv(lastMultiplied);
-  nums.reduceRight((acc, num2, i) => {
-    if (f.is0(num2))
+  nums.reduceRight((acc, num, i) => {
+    if (f.is0(num))
       return acc;
     tmp[i] = f.mul(acc, tmp[i]);
-    return f.mul(acc, num2);
+    return f.mul(acc, num);
   }, inverted);
   return tmp;
 }
@@ -1268,34 +1163,34 @@ function Field(ORDER, bitLen2, isLE2 = false, redef = {}) {
     MASK: bitMask(BITS),
     ZERO: _0n2,
     ONE: _1n2,
-    create: /* @__PURE__ */ __name((num2) => mod(num2, ORDER), "create"),
-    isValid: /* @__PURE__ */ __name((num2) => {
-      if (typeof num2 !== "bigint")
-        throw new Error(`Invalid field element: expected bigint, got ${typeof num2}`);
-      return _0n2 <= num2 && num2 < ORDER;
+    create: /* @__PURE__ */ __name((num) => mod(num, ORDER), "create"),
+    isValid: /* @__PURE__ */ __name((num) => {
+      if (typeof num !== "bigint")
+        throw new Error(`Invalid field element: expected bigint, got ${typeof num}`);
+      return _0n2 <= num && num < ORDER;
     }, "isValid"),
-    is0: /* @__PURE__ */ __name((num2) => num2 === _0n2, "is0"),
-    isOdd: /* @__PURE__ */ __name((num2) => (num2 & _1n2) === _1n2, "isOdd"),
-    neg: /* @__PURE__ */ __name((num2) => mod(-num2, ORDER), "neg"),
+    is0: /* @__PURE__ */ __name((num) => num === _0n2, "is0"),
+    isOdd: /* @__PURE__ */ __name((num) => (num & _1n2) === _1n2, "isOdd"),
+    neg: /* @__PURE__ */ __name((num) => mod(-num, ORDER), "neg"),
     eql: /* @__PURE__ */ __name((lhs, rhs) => lhs === rhs, "eql"),
-    sqr: /* @__PURE__ */ __name((num2) => mod(num2 * num2, ORDER), "sqr"),
+    sqr: /* @__PURE__ */ __name((num) => mod(num * num, ORDER), "sqr"),
     add: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs + rhs, ORDER), "add"),
     sub: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs - rhs, ORDER), "sub"),
     mul: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs * rhs, ORDER), "mul"),
-    pow: /* @__PURE__ */ __name((num2, power) => FpPow(f, num2, power), "pow"),
+    pow: /* @__PURE__ */ __name((num, power) => FpPow(f, num, power), "pow"),
     div: /* @__PURE__ */ __name((lhs, rhs) => mod(lhs * invert(rhs, ORDER), ORDER), "div"),
     // Same as above, but doesn't normalize
-    sqrN: /* @__PURE__ */ __name((num2) => num2 * num2, "sqrN"),
+    sqrN: /* @__PURE__ */ __name((num) => num * num, "sqrN"),
     addN: /* @__PURE__ */ __name((lhs, rhs) => lhs + rhs, "addN"),
     subN: /* @__PURE__ */ __name((lhs, rhs) => lhs - rhs, "subN"),
     mulN: /* @__PURE__ */ __name((lhs, rhs) => lhs * rhs, "mulN"),
-    inv: /* @__PURE__ */ __name((num2) => invert(num2, ORDER), "inv"),
+    inv: /* @__PURE__ */ __name((num) => invert(num, ORDER), "inv"),
     sqrt: redef.sqrt || ((n) => sqrtP(f, n)),
     invertBatch: /* @__PURE__ */ __name((lst) => FpInvertBatch(f, lst), "invertBatch"),
     // TODO: do we really need constant cmov?
     // We don't have const-time bigints anyway, so probably will be not very useful
     cmov: /* @__PURE__ */ __name((a, b, c) => c ? b : a, "cmov"),
-    toBytes: /* @__PURE__ */ __name((num2) => isLE2 ? numberToBytesLE(num2, BYTES) : numberToBytesBE(num2, BYTES), "toBytes"),
+    toBytes: /* @__PURE__ */ __name((num) => isLE2 ? numberToBytesLE(num, BYTES) : numberToBytesBE(num, BYTES), "toBytes"),
     fromBytes: /* @__PURE__ */ __name((bytes2) => {
       if (bytes2.length !== BYTES)
         throw new Error(`Fp.fromBytes: expected ${BYTES}, got ${bytes2.length}`);
@@ -1323,8 +1218,8 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   const minLen = getMinHashLength(fieldOrder);
   if (len < 16 || len < minLen || len > 1024)
     throw new Error(`expected ${minLen}-1024 bytes of input, got ${len}`);
-  const num2 = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
-  const reduced = mod(num2, fieldOrder - _1n2) + _1n2;
+  const num = isLE2 ? bytesToNumberBE(key) : bytesToNumberLE(key);
+  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
 __name(mapHashToField, "mapHashToField");
@@ -1332,19 +1227,12 @@ __name(mapHashToField, "mapHashToField");
 // ../../../node_modules/@noble/curves/esm/abstract/curve.js
 var _0n3 = BigInt(0);
 var _1n3 = BigInt(1);
-var pointPrecomputes = /* @__PURE__ */ new WeakMap();
-var pointWindowSizes = /* @__PURE__ */ new WeakMap();
 function wNAF(c, bits) {
   const constTimeNegate = /* @__PURE__ */ __name((condition, item) => {
     const neg = item.negate();
     return condition ? neg : item;
   }, "constTimeNegate");
-  const validateW = /* @__PURE__ */ __name((W) => {
-    if (!Number.isSafeInteger(W) || W <= 0 || W > bits)
-      throw new Error(`Wrong window size=${W}, should be [1..${bits}]`);
-  }, "validateW");
   const opts = /* @__PURE__ */ __name((W) => {
-    validateW(W);
     const windows = Math.ceil(bits / W) + 1;
     const windowSize = 2 ** (W - 1);
     return { windows, windowSize };
@@ -1423,64 +1311,20 @@ function wNAF(c, bits) {
       }
       return { p, f };
     },
-    wNAFCached(P, n, transform) {
-      const W = pointWindowSizes.get(P) || 1;
-      let comp = pointPrecomputes.get(P);
+    wNAFCached(P, precomputesMap, n, transform) {
+      const W = P._WINDOW_SIZE || 1;
+      let comp = precomputesMap.get(P);
       if (!comp) {
         comp = this.precomputeWindow(P, W);
-        if (W !== 1)
-          pointPrecomputes.set(P, transform(comp));
+        if (W !== 1) {
+          precomputesMap.set(P, transform(comp));
+        }
       }
       return this.wNAF(W, comp, n);
-    },
-    // We calculate precomputes for elliptic curve point multiplication
-    // using windowed method. This specifies window size and
-    // stores precomputed values. Usually only base point would be precomputed.
-    setWindowSize(P, W) {
-      validateW(W);
-      pointWindowSizes.set(P, W);
-      pointPrecomputes.delete(P);
     }
   };
 }
 __name(wNAF, "wNAF");
-function pippenger(c, field, points, scalars) {
-  if (!Array.isArray(points) || !Array.isArray(scalars) || scalars.length !== points.length)
-    throw new Error("arrays of points and scalars must have equal length");
-  scalars.forEach((s, i) => {
-    if (!field.isValid(s))
-      throw new Error(`wrong scalar at index ${i}`);
-  });
-  points.forEach((p, i) => {
-    if (!(p instanceof c))
-      throw new Error(`wrong point at index ${i}`);
-  });
-  const wbits = bitLen(BigInt(points.length));
-  const windowSize = wbits > 12 ? wbits - 3 : wbits > 4 ? wbits - 2 : wbits ? 2 : 1;
-  const MASK = (1 << windowSize) - 1;
-  const buckets = new Array(MASK + 1).fill(c.ZERO);
-  const lastBits = Math.floor((field.BITS - 1) / windowSize) * windowSize;
-  let sum = c.ZERO;
-  for (let i = lastBits; i >= 0; i -= windowSize) {
-    buckets.fill(c.ZERO);
-    for (let j = 0; j < scalars.length; j++) {
-      const scalar = scalars[j];
-      const wbits2 = Number(scalar >> BigInt(i) & BigInt(MASK));
-      buckets[wbits2] = buckets[wbits2].add(points[j]);
-    }
-    let resI = c.ZERO;
-    for (let j = buckets.length - 1, sumI = c.ZERO; j > 0; j--) {
-      sumI = sumI.add(buckets[j]);
-      resI = resI.add(sumI);
-    }
-    sum = sum.add(resI);
-    if (i !== 0)
-      for (let j = 0; j < windowSize; j++)
-        sum = sum.double();
-  }
-  return sum;
-}
-__name(pippenger, "pippenger");
 function validateBasic(curve) {
   validateField(curve.Fp);
   validateObject(curve, {
@@ -1501,13 +1345,6 @@ function validateBasic(curve) {
 __name(validateBasic, "validateBasic");
 
 // ../../../node_modules/@noble/curves/esm/abstract/weierstrass.js
-function validateSigVerOpts(opts) {
-  if (opts.lowS !== void 0)
-    abool("lowS", opts.lowS);
-  if (opts.prehash !== void 0)
-    abool("prehash", opts.prehash);
-}
-__name(validateSigVerOpts, "validateSigVerOpts");
 function validatePointOpts(curve) {
   const opts = validateBasic(curve);
   validateObject(opts, {
@@ -1543,99 +1380,48 @@ var DER = {
       super(m);
     }
   }, __name(_a, "DERErr"), _a),
-  // Basic building block is TLV (Tag-Length-Value)
-  _tlv: {
-    encode: /* @__PURE__ */ __name((tag, data) => {
-      const { Err: E } = DER;
-      if (tag < 0 || tag > 256)
-        throw new E("tlv.encode: wrong tag");
-      if (data.length & 1)
-        throw new E("tlv.encode: unpadded data");
-      const dataLen = data.length / 2;
-      const len = numberToHexUnpadded(dataLen);
-      if (len.length / 2 & 128)
-        throw new E("tlv.encode: long form length too big");
-      const lenLen = dataLen > 127 ? numberToHexUnpadded(len.length / 2 | 128) : "";
-      return `${numberToHexUnpadded(tag)}${lenLen}${len}${data}`;
-    }, "encode"),
-    // v - value, l - left bytes (unparsed)
-    decode(tag, data) {
-      const { Err: E } = DER;
-      let pos = 0;
-      if (tag < 0 || tag > 256)
-        throw new E("tlv.encode: wrong tag");
-      if (data.length < 2 || data[pos++] !== tag)
-        throw new E("tlv.decode: wrong tlv");
-      const first = data[pos++];
-      const isLong = !!(first & 128);
-      let length = 0;
-      if (!isLong)
-        length = first;
-      else {
-        const lenLen = first & 127;
-        if (!lenLen)
-          throw new E("tlv.decode(long): indefinite length not supported");
-        if (lenLen > 4)
-          throw new E("tlv.decode(long): byte length is too big");
-        const lengthBytes = data.subarray(pos, pos + lenLen);
-        if (lengthBytes.length !== lenLen)
-          throw new E("tlv.decode: length bytes not complete");
-        if (lengthBytes[0] === 0)
-          throw new E("tlv.decode(long): zero leftmost byte");
-        for (const b of lengthBytes)
-          length = length << 8 | b;
-        pos += lenLen;
-        if (length < 128)
-          throw new E("tlv.decode(long): not minimal encoding");
-      }
-      const v = data.subarray(pos, pos + length);
-      if (v.length !== length)
-        throw new E("tlv.decode: wrong value length");
-      return { v, l: data.subarray(pos + length) };
-    }
-  },
-  // https://crypto.stackexchange.com/a/57734 Leftmost bit of first byte is 'negative' flag,
-  // since we always use positive integers here. It must always be empty:
-  // - add zero byte if exists
-  // - if next byte doesn't have a flag, leading zero is not allowed (minimal encoding)
-  _int: {
-    encode(num2) {
-      const { Err: E } = DER;
-      if (num2 < _0n4)
-        throw new E("integer: negative integers are not allowed");
-      let hex = numberToHexUnpadded(num2);
-      if (Number.parseInt(hex[0], 16) & 8)
-        hex = "00" + hex;
-      if (hex.length & 1)
-        throw new E("unexpected assertion");
-      return hex;
-    },
-    decode(data) {
-      const { Err: E } = DER;
-      if (data[0] & 128)
-        throw new E("Invalid signature integer: negative");
-      if (data[0] === 0 && !(data[1] & 128))
-        throw new E("Invalid signature integer: unnecessary leading zero");
-      return b2n(data);
-    }
+  _parseInt(data) {
+    const { Err: E } = DER;
+    if (data.length < 2 || data[0] !== 2)
+      throw new E("Invalid signature integer tag");
+    const len = data[1];
+    const res = data.subarray(2, len + 2);
+    if (!len || res.length !== len)
+      throw new E("Invalid signature integer: wrong length");
+    if (res[0] & 128)
+      throw new E("Invalid signature integer: negative");
+    if (res[0] === 0 && !(res[1] & 128))
+      throw new E("Invalid signature integer: unnecessary leading zero");
+    return { d: b2n(res), l: data.subarray(len + 2) };
   },
   toSig(hex) {
-    const { Err: E, _int: int, _tlv: tlv } = DER;
+    const { Err: E } = DER;
     const data = typeof hex === "string" ? h2b(hex) : hex;
     abytes(data);
-    const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
-    if (seqLeftBytes.length)
+    let l = data.length;
+    if (l < 2 || data[0] != 48)
+      throw new E("Invalid signature tag");
+    if (data[1] !== l - 2)
+      throw new E("Invalid signature: incorrect length");
+    const { d: r, l: sBytes } = DER._parseInt(data.subarray(2));
+    const { d: s, l: rBytesLeft } = DER._parseInt(sBytes);
+    if (rBytesLeft.length)
       throw new E("Invalid signature: left bytes after parsing");
-    const { v: rBytes, l: rLeftBytes } = tlv.decode(2, seqBytes);
-    const { v: sBytes, l: sLeftBytes } = tlv.decode(2, rLeftBytes);
-    if (sLeftBytes.length)
-      throw new E("Invalid signature: left bytes after parsing");
-    return { r: int.decode(rBytes), s: int.decode(sBytes) };
+    return { r, s };
   },
   hexFromSig(sig) {
-    const { _tlv: tlv, _int: int } = DER;
-    const seq = `${tlv.encode(2, int.encode(sig.r))}${tlv.encode(2, int.encode(sig.s))}`;
-    return tlv.encode(48, seq);
+    const slice = /* @__PURE__ */ __name((s2) => Number.parseInt(s2[0], 16) & 8 ? "00" + s2 : s2, "slice");
+    const h = /* @__PURE__ */ __name((num) => {
+      const hex = num.toString(16);
+      return hex.length & 1 ? `0${hex}` : hex;
+    }, "h");
+    const s = slice(h(sig.s));
+    const r = slice(h(sig.r));
+    const shl = s.length / 2;
+    const rhl = r.length / 2;
+    const sl = h(shl);
+    const rl = h(rhl);
+    return `30${h(rhl + shl + 4)}02${rl}${r}02${sl}${s}`;
   }
 };
 var _0n4 = BigInt(0);
@@ -1646,7 +1432,6 @@ var _4n2 = BigInt(4);
 function weierstrassPoints(opts) {
   const CURVE = validatePointOpts(opts);
   const { Fp: Fp2 } = CURVE;
-  const Fn = Field(CURVE.n, CURVE.nBitLength);
   const toBytes2 = CURVE.toBytes || ((_c, point, _isCompressed) => {
     const a = point.toAffine();
     return concatBytes2(Uint8Array.from([4]), Fp2.toBytes(a.x), Fp2.toBytes(a.y));
@@ -1666,12 +1451,17 @@ function weierstrassPoints(opts) {
   __name(weierstrassEquation, "weierstrassEquation");
   if (!Fp2.eql(Fp2.sqr(CURVE.Gy), weierstrassEquation(CURVE.Gx)))
     throw new Error("bad generator point: equation left != right");
-  function isWithinCurveOrder(num2) {
-    return inRange(num2, _1n4, CURVE.n);
+  function isWithinCurveOrder(num) {
+    return typeof num === "bigint" && _0n4 < num && num < CURVE.n;
   }
   __name(isWithinCurveOrder, "isWithinCurveOrder");
+  function assertGE(num) {
+    if (!isWithinCurveOrder(num))
+      throw new Error("Expected valid bigint: 0 < bigint < curve.n");
+  }
+  __name(assertGE, "assertGE");
   function normPrivateKeyToScalar(key) {
-    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n: N } = CURVE;
+    const { allowedPrivateKeyLengths: lengths, nByteLength, wrapPrivateKey, n } = CURVE;
     if (lengths && typeof key !== "bigint") {
       if (isBytes2(key))
         key = bytesToHex(key);
@@ -1679,56 +1469,24 @@ function weierstrassPoints(opts) {
         throw new Error("Invalid key");
       key = key.padStart(nByteLength * 2, "0");
     }
-    let num2;
+    let num;
     try {
-      num2 = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
+      num = typeof key === "bigint" ? key : bytesToNumberBE(ensureBytes("private key", key, nByteLength));
     } catch (error) {
       throw new Error(`private key must be ${nByteLength} bytes, hex or bigint, not ${typeof key}`);
     }
     if (wrapPrivateKey)
-      num2 = mod(num2, N);
-    aInRange("private key", num2, _1n4, N);
-    return num2;
+      num = mod(num, n);
+    assertGE(num);
+    return num;
   }
   __name(normPrivateKeyToScalar, "normPrivateKeyToScalar");
+  const pointPrecomputes = /* @__PURE__ */ new Map();
   function assertPrjPoint(other) {
     if (!(other instanceof Point2))
       throw new Error("ProjectivePoint expected");
   }
   __name(assertPrjPoint, "assertPrjPoint");
-  const toAffineMemo = memoized((p, iz) => {
-    const { px: x, py: y, pz: z } = p;
-    if (Fp2.eql(z, Fp2.ONE))
-      return { x, y };
-    const is0 = p.is0();
-    if (iz == null)
-      iz = is0 ? Fp2.ONE : Fp2.inv(z);
-    const ax = Fp2.mul(x, iz);
-    const ay = Fp2.mul(y, iz);
-    const zz = Fp2.mul(z, iz);
-    if (is0)
-      return { x: Fp2.ZERO, y: Fp2.ZERO };
-    if (!Fp2.eql(zz, Fp2.ONE))
-      throw new Error("invZ was invalid");
-    return { x: ax, y: ay };
-  });
-  const assertValidMemo = memoized((p) => {
-    if (p.is0()) {
-      if (CURVE.allowInfinityPoint && !Fp2.is0(p.py))
-        return;
-      throw new Error("bad point: ZERO");
-    }
-    const { x, y } = p.toAffine();
-    if (!Fp2.isValid(x) || !Fp2.isValid(y))
-      throw new Error("bad point: x or y not FE");
-    const left = Fp2.sqr(y);
-    const right = weierstrassEquation(x);
-    if (!Fp2.eql(left, right))
-      throw new Error("bad point: equation left != right");
-    if (!p.isTorsionFree())
-      throw new Error("bad point: not in prime-order subgroup");
-    return true;
-  });
   const _Point = class _Point {
     constructor(px, py, pz) {
       this.px = px;
@@ -1740,7 +1498,6 @@ function weierstrassPoints(opts) {
         throw new Error("y required");
       if (pz == null || !Fp2.isValid(pz))
         throw new Error("z required");
-      Object.freeze(this);
     }
     // Does not validate if the point is on-curve.
     // Use fromHex instead, or call assertValidity() later.
@@ -1784,17 +1541,27 @@ function weierstrassPoints(opts) {
     static fromPrivateKey(privateKey) {
       return _Point.BASE.multiply(normPrivateKeyToScalar(privateKey));
     }
-    // Multiscalar Multiplication
-    static msm(points, scalars) {
-      return pippenger(_Point, Fn, points, scalars);
-    }
     // "Private method", don't use it directly
     _setWindowSize(windowSize) {
-      wnaf.setWindowSize(this, windowSize);
+      this._WINDOW_SIZE = windowSize;
+      pointPrecomputes.delete(this);
     }
     // A point on curve is valid if it conforms to equation.
     assertValidity() {
-      assertValidMemo(this);
+      if (this.is0()) {
+        if (CURVE.allowInfinityPoint && !Fp2.is0(this.py))
+          return;
+        throw new Error("bad point: ZERO");
+      }
+      const { x, y } = this.toAffine();
+      if (!Fp2.isValid(x) || !Fp2.isValid(y))
+        throw new Error("bad point: x or y not FE");
+      const left = Fp2.sqr(y);
+      const right = weierstrassEquation(x);
+      if (!Fp2.eql(left, right))
+        throw new Error("bad point: equation left != right");
+      if (!this.isTorsionFree())
+        throw new Error("bad point: not in prime-order subgroup");
     }
     hasEvenY() {
       const { y } = this.toAffine();
@@ -1921,24 +1688,27 @@ function weierstrassPoints(opts) {
       return this.equals(_Point.ZERO);
     }
     wNAF(n) {
-      return wnaf.wNAFCached(this, n, _Point.normalizeZ);
+      return wnaf.wNAFCached(this, pointPrecomputes, n, (comp) => {
+        const toInv = Fp2.invertBatch(comp.map((p) => p.pz));
+        return comp.map((p, i) => p.toAffine(toInv[i])).map(_Point.fromAffine);
+      });
     }
     /**
      * Non-constant-time multiplication. Uses double-and-add algorithm.
      * It's faster, but should only be used when you don't care about
      * an exposed private key e.g. sig verification, which works over *public* keys.
      */
-    multiplyUnsafe(sc) {
-      aInRange("scalar", sc, _0n4, CURVE.n);
+    multiplyUnsafe(n) {
       const I = _Point.ZERO;
-      if (sc === _0n4)
+      if (n === _0n4)
         return I;
-      if (sc === _1n4)
+      assertGE(n);
+      if (n === _1n4)
         return this;
       const { endo } = CURVE;
       if (!endo)
-        return wnaf.unsafeLadder(this, sc);
-      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(sc);
+        return wnaf.unsafeLadder(this, n);
+      let { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
       let k1p = I;
       let k2p = I;
       let d = this;
@@ -1968,11 +1738,12 @@ function weierstrassPoints(opts) {
      * @returns New point
      */
     multiply(scalar) {
-      const { endo, n: N } = CURVE;
-      aInRange("scalar", scalar, _1n4, N);
+      assertGE(scalar);
+      let n = scalar;
       let point, fake;
+      const { endo } = CURVE;
       if (endo) {
-        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(scalar);
+        const { k1neg, k1, k2neg, k2 } = endo.splitScalar(n);
         let { p: k1p, f: f1p } = this.wNAF(k1);
         let { p: k2p, f: f2p } = this.wNAF(k2);
         k1p = wnaf.constTimeNegate(k1neg, k1p);
@@ -1981,7 +1752,7 @@ function weierstrassPoints(opts) {
         point = k1p.add(k2p);
         fake = f1p.add(f2p);
       } else {
-        const { p, f } = this.wNAF(scalar);
+        const { p, f } = this.wNAF(n);
         point = p;
         fake = f;
       }
@@ -2003,7 +1774,18 @@ function weierstrassPoints(opts) {
     // Can accept precomputed Z^-1 - for example, from invertBatch.
     // (x, y, z) ∋ (x=x/z, y=y/z)
     toAffine(iz) {
-      return toAffineMemo(this, iz);
+      const { px: x, py: y, pz: z } = this;
+      const is0 = this.is0();
+      if (iz == null)
+        iz = is0 ? Fp2.ONE : Fp2.inv(z);
+      const ax = Fp2.mul(x, iz);
+      const ay = Fp2.mul(y, iz);
+      const zz = Fp2.mul(z, iz);
+      if (is0)
+        return { x: Fp2.ZERO, y: Fp2.ZERO };
+      if (!Fp2.eql(zz, Fp2.ONE))
+        throw new Error("invZ was invalid");
+      return { x: ax, y: ay };
     }
     isTorsionFree() {
       const { h: cofactor, isTorsionFree } = CURVE;
@@ -2022,12 +1804,10 @@ function weierstrassPoints(opts) {
       return this.multiplyUnsafe(CURVE.h);
     }
     toRawBytes(isCompressed = true) {
-      abool("isCompressed", isCompressed);
       this.assertValidity();
       return toBytes2(_Point, this, isCompressed);
     }
     toHex(isCompressed = true) {
-      abool("isCompressed", isCompressed);
       return bytesToHex(this.toRawBytes(isCompressed));
     }
   };
@@ -2065,6 +1845,10 @@ function weierstrass(curveDef) {
   const { Fp: Fp2, n: CURVE_ORDER } = CURVE;
   const compressedLen = Fp2.BYTES + 1;
   const uncompressedLen = 2 * Fp2.BYTES + 1;
+  function isValidFieldElement(num) {
+    return _0n4 < num && num < Fp2.ORDER;
+  }
+  __name(isValidFieldElement, "isValidFieldElement");
   function modN2(a) {
     return mod(a, CURVE_ORDER);
   }
@@ -2079,7 +1863,6 @@ function weierstrass(curveDef) {
       const a = point.toAffine();
       const x = Fp2.toBytes(a.x);
       const cat = concatBytes2;
-      abool("isCompressed", isCompressed);
       if (isCompressed) {
         return cat(Uint8Array.from([point.hasEvenY() ? 2 : 3]), x);
       } else {
@@ -2092,7 +1875,7 @@ function weierstrass(curveDef) {
       const tail = bytes2.subarray(1);
       if (len === compressedLen && (head === 2 || head === 3)) {
         const x = bytesToNumberBE(tail);
-        if (!inRange(x, _1n4, Fp2.ORDER))
+        if (!isValidFieldElement(x))
           throw new Error("Point is not on curve");
         const y2 = weierstrassEquation(x);
         let y;
@@ -2116,7 +1899,7 @@ function weierstrass(curveDef) {
       }
     }
   });
-  const numToNByteStr = /* @__PURE__ */ __name((num2) => bytesToHex(numberToBytesBE(num2, CURVE.nByteLength)), "numToNByteStr");
+  const numToNByteStr = /* @__PURE__ */ __name((num) => bytesToHex(numberToBytesBE(num, CURVE.nByteLength)), "numToNByteStr");
   function isBiggerThanHalfOrder(number2) {
     const HALF = CURVE_ORDER >> _1n4;
     return number2 > HALF;
@@ -2147,8 +1930,10 @@ function weierstrass(curveDef) {
       return new _Signature(r, s);
     }
     assertValidity() {
-      aInRange("r", this.r, _1n4, CURVE_ORDER);
-      aInRange("s", this.s, _1n4, CURVE_ORDER);
+      if (!isWithinCurveOrder(this.r))
+        throw new Error("r must be 0 < r < CURVE.n");
+      if (!isWithinCurveOrder(this.s))
+        throw new Error("s must be 0 < s < CURVE.n");
     }
     addRecoveryBit(recovery) {
       return new _Signature(this.r, this.s, recovery);
@@ -2255,17 +2040,20 @@ function weierstrass(curveDef) {
   }
   __name(getSharedSecret, "getSharedSecret");
   const bits2int = CURVE.bits2int || function(bytes2) {
-    const num2 = bytesToNumberBE(bytes2);
+    const num = bytesToNumberBE(bytes2);
     const delta = bytes2.length * 8 - CURVE.nBitLength;
-    return delta > 0 ? num2 >> BigInt(delta) : num2;
+    return delta > 0 ? num >> BigInt(delta) : num;
   };
   const bits2int_modN = CURVE.bits2int_modN || function(bytes2) {
     return modN2(bits2int(bytes2));
   };
   const ORDER_MASK = bitMask(CURVE.nBitLength);
-  function int2octets(num2) {
-    aInRange(`num < 2^${CURVE.nBitLength}`, num2, _0n4, ORDER_MASK);
-    return numberToBytesBE(num2, CURVE.nByteLength);
+  function int2octets(num) {
+    if (typeof num !== "bigint")
+      throw new Error("bigint expected");
+    if (!(_0n4 <= num && num < ORDER_MASK))
+      throw new Error(`bigint expected < 2^${CURVE.nBitLength}`);
+    return numberToBytesBE(num, CURVE.nByteLength);
   }
   __name(int2octets, "int2octets");
   function prepSig(msgHash, privateKey, opts = defaultSigOpts) {
@@ -2276,7 +2064,6 @@ function weierstrass(curveDef) {
     if (lowS == null)
       lowS = true;
     msgHash = ensureBytes("msgHash", msgHash);
-    validateSigVerOpts(opts);
     if (prehash)
       msgHash = ensureBytes("prehashed msgHash", hash2(msgHash));
     const h1int = bits2int_modN(msgHash);
@@ -2328,7 +2115,6 @@ function weierstrass(curveDef) {
     publicKey = ensureBytes("publicKey", publicKey);
     if ("strict" in opts)
       throw new Error("options.strict was renamed to lowS");
-    validateSigVerOpts(opts);
     const { lowS, prehash } = opts;
     let _sig = void 0;
     let P;
@@ -2381,6 +2167,73 @@ function weierstrass(curveDef) {
   };
 }
 __name(weierstrass, "weierstrass");
+
+// ../../../node_modules/@noble/hashes/esm/hmac.js
+var _HMAC = class _HMAC extends Hash {
+  constructor(hash2, _key) {
+    super();
+    this.finished = false;
+    this.destroyed = false;
+    hash(hash2);
+    const key = toBytes(_key);
+    this.iHash = hash2.create();
+    if (typeof this.iHash.update !== "function")
+      throw new Error("Expected instance of class which extends utils.Hash");
+    this.blockLen = this.iHash.blockLen;
+    this.outputLen = this.iHash.outputLen;
+    const blockLen = this.blockLen;
+    const pad = new Uint8Array(blockLen);
+    pad.set(key.length > blockLen ? hash2.create().update(key).digest() : key);
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54;
+    this.iHash.update(pad);
+    this.oHash = hash2.create();
+    for (let i = 0; i < pad.length; i++)
+      pad[i] ^= 54 ^ 92;
+    this.oHash.update(pad);
+    pad.fill(0);
+  }
+  update(buf) {
+    exists(this);
+    this.iHash.update(buf);
+    return this;
+  }
+  digestInto(out) {
+    exists(this);
+    bytes(out, this.outputLen);
+    this.finished = true;
+    this.iHash.digestInto(out);
+    this.oHash.update(out);
+    this.oHash.digestInto(out);
+    this.destroy();
+  }
+  digest() {
+    const out = new Uint8Array(this.oHash.outputLen);
+    this.digestInto(out);
+    return out;
+  }
+  _cloneInto(to) {
+    to || (to = Object.create(Object.getPrototypeOf(this), {}));
+    const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+    to = to;
+    to.finished = finished;
+    to.destroyed = destroyed;
+    to.blockLen = blockLen;
+    to.outputLen = outputLen;
+    to.oHash = oHash._cloneInto(to.oHash);
+    to.iHash = iHash._cloneInto(to.iHash);
+    return to;
+  }
+  destroy() {
+    this.destroyed = true;
+    this.oHash.destroy();
+    this.iHash.destroy();
+  }
+};
+__name(_HMAC, "HMAC");
+var HMAC = _HMAC;
+var hmac = /* @__PURE__ */ __name((hash2, key, message) => new HMAC(hash2, key).update(message).digest(), "hmac");
+hmac.create = (hash2, key) => new HMAC(hash2, key);
 
 // ../../../node_modules/@noble/curves/esm/_shortw_utils.js
 function getHash(hash2) {
@@ -2476,6 +2329,8 @@ var secp256k1 = createCurve({
   }
 }, sha256);
 var _0n5 = BigInt(0);
+var fe = /* @__PURE__ */ __name((x) => typeof x === "bigint" && _0n5 < x && x < secp256k1P, "fe");
+var ge = /* @__PURE__ */ __name((x) => typeof x === "bigint" && _0n5 < x && x < secp256k1N, "ge");
 var TAGGED_HASH_PREFIXES = {};
 function taggedHash(tag, ...messages) {
   let tagP = TAGGED_HASH_PREFIXES[tag];
@@ -2501,7 +2356,8 @@ function schnorrGetExtPubKey(priv) {
 }
 __name(schnorrGetExtPubKey, "schnorrGetExtPubKey");
 function lift_x(x) {
-  aInRange("x", x, _1n5, secp256k1P);
+  if (!fe(x))
+    throw new Error("bad x: need 0 < x < p");
   const xx = modP(x * x);
   const c = modP(xx * x + BigInt(7));
   let y = sqrtMod(c);
@@ -2512,9 +2368,8 @@ function lift_x(x) {
   return p;
 }
 __name(lift_x, "lift_x");
-var num = bytesToNumberBE;
 function challenge(...args) {
-  return modN(num(taggedHash("BIP0340/challenge", ...args)));
+  return modN(bytesToNumberBE(taggedHash("BIP0340/challenge", ...args)));
 }
 __name(challenge, "challenge");
 function schnorrGetPublicKey(privateKey) {
@@ -2525,9 +2380,9 @@ function schnorrSign(message, privateKey, auxRand = randomBytes(32)) {
   const m = ensureBytes("message", message);
   const { bytes: px, scalar: d } = schnorrGetExtPubKey(privateKey);
   const a = ensureBytes("auxRand", auxRand, 32);
-  const t = numTo32b(d ^ num(taggedHash("BIP0340/aux", a)));
+  const t = numTo32b(d ^ bytesToNumberBE(taggedHash("BIP0340/aux", a)));
   const rand = taggedHash("BIP0340/nonce", t, px, m);
-  const k_ = modN(num(rand));
+  const k_ = modN(bytesToNumberBE(rand));
   if (k_ === _0n5)
     throw new Error("sign failed: k is zero");
   const { bytes: rx, scalar: k } = schnorrGetExtPubKey(k_);
@@ -2545,12 +2400,12 @@ function schnorrVerify(signature, message, publicKey) {
   const m = ensureBytes("message", message);
   const pub = ensureBytes("publicKey", publicKey, 32);
   try {
-    const P = lift_x(num(pub));
-    const r = num(sig.subarray(0, 32));
-    if (!inRange(r, _1n5, secp256k1P))
+    const P = lift_x(bytesToNumberBE(pub));
+    const r = bytesToNumberBE(sig.subarray(0, 32));
+    if (!fe(r))
       return false;
-    const s = num(sig.subarray(32, 64));
-    if (!inRange(s, _1n5, secp256k1N))
+    const s = bytesToNumberBE(sig.subarray(32, 64));
+    if (!ge(s))
       return false;
     const e = challenge(numTo32b(r), pointToBytes(P), m);
     const R = GmulAdd(P, s, modN(-e));
@@ -4820,26 +4675,19 @@ async function getOptimalDO(cf, env, url) {
   } else {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
-  const primaryEndpoint = ALL_ENDPOINTS.find((ep) => ep.hint === bestHint) || ALL_ENDPOINTS[1];
-  const orderedEndpoints = [
-    primaryEndpoint,
-    ...ALL_ENDPOINTS.filter((ep) => ep.name !== primaryEndpoint.name)
-  ];
-  for (const endpoint of orderedEndpoints) {
-    try {
-      const id2 = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
-      const stub2 = env.RELAY_WEBSOCKET.get(id2, { locationHint: endpoint.hint });
-      console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
-      return { stub: stub2, doName: endpoint.name };
-    } catch (error) {
-      console.log(`Failed to connect to ${endpoint.name}: ${error}`);
-    }
+  const regionCode = bestHint.toUpperCase();
+  const redirectShard = url.searchParams.get("redirectShard");
+  if (redirectShard) {
+    console.log(`Following redirect to: ${redirectShard}`);
+    const shardId2 = env.RELAY_WEBSOCKET.idFromName(redirectShard);
+    const stub2 = env.RELAY_WEBSOCKET.get(shardId2, { locationHint: bestHint });
+    return { stub: stub2, doName: redirectShard };
   }
-  const fallback = ALL_ENDPOINTS[1];
-  const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
-  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
-  console.log(`Fallback to DO: ${fallback.name} (hint: ${fallback.hint})`);
-  return { stub, doName: fallback.name };
+  const defaultShard = `relay-${regionCode}-0`;
+  console.log(`Deterministic routing: ${defaultShard} (region: ${regionCode})`);
+  const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
+  const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
+  return { stub, doName: defaultShard };
 }
 __name(getOptimalDO, "getOptimalDO");
 var relay_worker_default = {
@@ -4910,6 +4758,12 @@ var _RelayWebSocket = class _RelayWebSocket {
     // Payment status cache
     this.paymentCache = /* @__PURE__ */ new Map();
     this.PAYMENT_CACHE_TTL = 6e4;
+    // Auto-scaling metrics tracking
+    this.messageCount = 0;
+    this.lastMetricsReset = Date.now();
+    this.heartbeatInterval = 3e4;
+    // 30 seconds
+    this.lastHeartbeat = 0;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -5012,6 +4866,69 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
     }
   }
+  // Send heartbeat to coordinator with current metrics
+  async sendHeartbeatToCoordinator() {
+    try {
+      if (!this.env.COORDINATOR || this.doName === "unknown") {
+        return;
+      }
+      const now = Date.now();
+      if (now - this.lastHeartbeat < this.heartbeatInterval) {
+        return;
+      }
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
+      if (!regionMatch) {
+        return;
+      }
+      const region = regionMatch[1];
+      const elapsedSeconds = (now - this.lastMetricsReset) / 1e3;
+      const messagesPerSecond = elapsedSeconds > 0 ? Math.round(this.messageCount / elapsedSeconds) : 0;
+      const connectionCount = this.state.getWebSockets().length;
+      const coordinatorId = this.env.COORDINATOR.idFromName("coordinator-global");
+      const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+      await coordinatorStub.fetch(new Request("https://internal/heartbeat", {
+        method: "POST",
+        body: JSON.stringify({
+          shardId: this.doName,
+          region,
+          connectionCount,
+          messagesPerSecond
+        })
+      }));
+      this.lastHeartbeat = now;
+      this.messageCount = 0;
+      this.lastMetricsReset = now;
+    } catch (error) {
+      console.error("Failed to send heartbeat to coordinator:", error);
+    }
+  }
+  // Track message for metrics
+  trackMessage() {
+    this.messageCount++;
+    const now = Date.now();
+    if (now - this.lastHeartbeat >= this.heartbeatInterval) {
+      this.sendHeartbeatToCoordinator().catch(
+        (err) => console.error("Heartbeat failed:", err)
+      );
+    }
+  }
+  // Get next available shard for redirect (when shard is overloaded)
+  async getNextAvailableShard() {
+    try {
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-(\d+)/);
+      if (!regionMatch) {
+        return null;
+      }
+      const region = regionMatch[1];
+      const currentIndex = parseInt(regionMatch[2], 10);
+      const nextIndex = currentIndex + 1;
+      const nextShard = `relay-${region}-${nextIndex}`;
+      return nextShard;
+    } catch (error) {
+      console.error("Failed to determine next shard:", error);
+      return null;
+    }
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
@@ -5028,6 +4945,27 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.region = url.searchParams.get("region") || this.region || "unknown";
     const colo = url.searchParams.get("colo") || "default";
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
+    const connectionCount = this.state.getWebSockets().length;
+    const REDIRECT_THRESHOLD = 6400;
+    if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
+      const nextShard = await this.getNextAvailableShard();
+      if (nextShard && nextShard !== this.doName) {
+        console.log(`Shard ${this.doName} overloaded (${connectionCount} connections) - redirecting to ${nextShard}`);
+        return new Response(JSON.stringify({
+          error: "Shard overloaded",
+          redirectTo: nextShard,
+          currentLoad: connectionCount
+        }), {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shard-Redirect": nextShard,
+            "Retry-After": "1"
+            // Retry immediately
+          }
+        });
+      }
+    }
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     const sessionId = crypto.randomUUID();
@@ -5048,6 +4986,7 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   // WebSocket Hibernation API handler methods
   async webSocketMessage(ws, message) {
+    this.trackMessage();
     const attachment = ws.deserializeAttachment();
     if (!attachment) {
       console.error("No session attachment found");
@@ -5367,7 +5306,22 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastToOtherDOs(event) {
     const broadcasts = [];
-    for (const endpoint of _RelayWebSocket.ALLOWED_ENDPOINTS) {
+    let endpoints = [];
+    try {
+      if (this.env.COORDINATOR && this.doName !== "unknown") {
+        const coordinatorId = this.env.COORDINATOR.idFromName("coordinator-global");
+        const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+        const response = await coordinatorStub.fetch(new Request("https://internal/get-all-shards"));
+        const data = await response.json();
+        endpoints = data.shards || [];
+      }
+    } catch (error) {
+      console.warn("Failed to fetch shard list from coordinator, falling back to static list:", error);
+    }
+    if (endpoints.length === 0) {
+      endpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
+    }
+    for (const endpoint of endpoints) {
       if (endpoint === this.doName) continue;
       broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
@@ -5384,11 +5338,17 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async sendToSpecificDO(doName, event) {
     try {
-      if (!_RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
-        throw new Error(`Invalid DO name: ${doName}`);
-      }
       const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
-      const locationHint = _RelayWebSocket.ENDPOINT_HINTS[doName] || "auto";
+      let locationHint = _RelayWebSocket.ENDPOINT_HINTS[doName];
+      if (!locationHint) {
+        const regionMatch = doName.match(/relay-([A-Z]+)-/);
+        if (regionMatch) {
+          const region = regionMatch[1].toLowerCase();
+          locationHint = region;
+        } else {
+          locationHint = "auto";
+        }
+      }
       const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
       const url = new URL("https://internal/do-broadcast");
       url.searchParams.set("doName", doName);
@@ -5514,7 +5474,387 @@ _RelayWebSocket.ENDPOINT_HINTS = {
   // ME redirects to EEUR
 };
 var RelayWebSocket = _RelayWebSocket;
+
+// src/coordinator.ts
+var DEFAULT_CONFIG = {
+  minConnectionsPerShard: 1e3,
+  maxConnectionsPerShard: 8e3,
+  // Conservative limit per shard
+  targetConnectionsPerShard: 5e3,
+  scaleUpThreshold: 0.8,
+  // Scale up at 80% capacity (6400 connections)
+  scaleDownThreshold: 0.3,
+  // Scale down below 30% capacity (2400 connections)
+  minShardsPerRegion: 1,
+  maxShardsPerRegion: 10,
+  // 10 shards × 8000 = 80k per region
+  scaleUpCooldown: 6e4,
+  // 1 minute between scale-ups
+  scaleDownCooldown: 3e5,
+  // 5 minutes between scale-downs
+  heartbeatTimeout: 12e4
+  // 2 minutes
+};
+var REGIONS = ["WNAM", "ENAM", "WEUR", "EEUR", "APAC", "OC", "SAM", "AFR", "ME"];
+var REGION_HINTS = {
+  "WNAM": "wnam",
+  "ENAM": "enam",
+  "WEUR": "weur",
+  "EEUR": "eeur",
+  "APAC": "apac",
+  "OC": "oc",
+  "SAM": "enam",
+  // SAM redirects to ENAM
+  "AFR": "weur",
+  // AFR redirects to WEUR
+  "ME": "eeur"
+  // ME redirects to EEUR
+};
+var _CoordinatorDO = class _CoordinatorDO {
+  // 5 seconds
+  constructor(state, env) {
+    // In-memory cache of shard metrics
+    this.shardMetrics = /* @__PURE__ */ new Map();
+    // Last scaling action timestamp per region
+    this.lastScaleUp = /* @__PURE__ */ new Map();
+    this.lastScaleDown = /* @__PURE__ */ new Map();
+    // Response cache (reduces load during traffic bursts)
+    this.responseCache = /* @__PURE__ */ new Map();
+    this.RESPONSE_CACHE_TTL = 5e3;
+    this.state = state;
+    this.env = env;
+    this.config = DEFAULT_CONFIG;
+    this.state.blockConcurrencyWhile(async () => {
+      await this.loadState();
+    });
+    this.scheduleHealthCheck();
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    try {
+      switch (path) {
+        case "/heartbeat":
+          return await this.handleHeartbeat(request);
+        case "/get-shard":
+          return await this.handleGetShard(request);
+        case "/list-shards":
+          return await this.handleListShards(request);
+        case "/get-all-shards":
+          return await this.handleGetAllShards();
+        case "/metrics":
+          return await this.handleMetrics();
+        case "/config":
+          return await this.handleConfig(request);
+        case "/health":
+          return new Response(JSON.stringify({ status: "healthy" }), {
+            headers: { "Content-Type": "application/json" }
+          });
+        default:
+          return new Response("Not Found", { status: 404 });
+      }
+    } catch (error) {
+      console.error("Coordinator error:", error);
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+  // Handle heartbeat from relay shards
+  async handleHeartbeat(request) {
+    const data = await request.json();
+    const metrics = {
+      ...data,
+      lastHeartbeat: Date.now(),
+      status: "active"
+    };
+    this.shardMetrics.set(data.shardId, metrics);
+    await this.state.storage.put(`shard:${data.shardId}`, metrics);
+    await this.evaluateAutoScaling(data.region);
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  // Get optimal shard for a region
+  async handleGetShard(request) {
+    const url = new URL(request.url);
+    const region = url.searchParams.get("region");
+    const strategy = url.searchParams.get("strategy") || "least-connections";
+    const sessionHash = url.searchParams.get("sessionHash");
+    if (!region || !REGIONS.includes(region)) {
+      return new Response(JSON.stringify({ error: "Invalid region" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const shard = await this.selectShard(region, strategy, sessionHash);
+    return new Response(JSON.stringify(shard), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  // List all active shards in a region (with caching)
+  async handleListShards(request) {
+    const url = new URL(request.url);
+    const region = url.searchParams.get("region");
+    if (!region) {
+      return new Response(JSON.stringify({ error: "Missing region" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    const cacheKey = `list-shards:${region}`;
+    const cached = this.responseCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < this.RESPONSE_CACHE_TTL) {
+      return new Response(JSON.stringify(cached.data), {
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cache": "HIT"
+        }
+      });
+    }
+    const shards = await this.getRegionShards(region);
+    const data = { shards };
+    this.responseCache.set(cacheKey, { data, timestamp: now });
+    return new Response(JSON.stringify(data), {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Cache": "MISS"
+      }
+    });
+  }
+  // Get all active shards across all regions (for broadcasting) - with caching
+  async handleGetAllShards() {
+    const cacheKey = "get-all-shards";
+    const cached = this.responseCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < this.RESPONSE_CACHE_TTL) {
+      return new Response(JSON.stringify(cached.data), {
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cache": "HIT"
+        }
+      });
+    }
+    const allShards = [];
+    for (const region of REGIONS) {
+      const shards = await this.getRegionShards(region);
+      allShards.push(...shards.map((s) => s.shardId));
+    }
+    const data = { shards: allShards };
+    this.responseCache.set(cacheKey, { data, timestamp: now });
+    return new Response(JSON.stringify(data), {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Cache": "MISS"
+      }
+    });
+  }
+  // Get coordinator metrics
+  async handleMetrics() {
+    const metrics = {
+      totalShards: this.shardMetrics.size,
+      totalConnections: Array.from(this.shardMetrics.values()).reduce((sum, m) => sum + m.connectionCount, 0),
+      byRegion: {}
+    };
+    for (const region of REGIONS) {
+      const shards = await this.getRegionShards(region);
+      metrics.byRegion[region] = {
+        shardCount: shards.length,
+        totalConnections: shards.reduce((sum, s) => sum + s.connectionCount, 0),
+        avgConnectionsPerShard: shards.length > 0 ? Math.round(shards.reduce((sum, s) => sum + s.connectionCount, 0) / shards.length) : 0
+      };
+    }
+    return new Response(JSON.stringify(metrics), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  // Update configuration
+  async handleConfig(request) {
+    if (request.method === "GET") {
+      return new Response(JSON.stringify(this.config), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (request.method === "POST") {
+      const newConfig = await request.json();
+      this.config = { ...this.config, ...newConfig };
+      await this.state.storage.put("config", this.config);
+      return new Response(JSON.stringify(this.config), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response("Method not allowed", { status: 405 });
+  }
+  // Select optimal shard for a region
+  async selectShard(region, strategy, sessionHash) {
+    const shards = await this.getRegionShards(region);
+    if (shards.length === 0) {
+      const shardId = `relay-${region}-0`;
+      await this.initializeShard(shardId, region);
+      return { shardId, locationHint: REGION_HINTS[region] || "auto" };
+    }
+    let selectedShard;
+    switch (strategy) {
+      case "consistent-hash":
+        if (sessionHash) {
+          const hash2 = this.hashString(sessionHash);
+          const index = hash2 % shards.length;
+          selectedShard = shards[index];
+        } else {
+          selectedShard = shards.reduce(
+            (min, s) => s.connectionCount < min.connectionCount ? s : min
+          );
+        }
+        break;
+      case "round-robin":
+        const rrIndex = Date.now() % shards.length;
+        selectedShard = shards[rrIndex];
+        break;
+      case "least-connections":
+      default:
+        selectedShard = shards.reduce(
+          (min, s) => s.connectionCount < min.connectionCount ? s : min
+        );
+        break;
+    }
+    return {
+      shardId: selectedShard.shardId,
+      locationHint: REGION_HINTS[region] || "auto"
+    };
+  }
+  // Get all active shards for a region
+  async getRegionShards(region) {
+    const now = Date.now();
+    const activeShards = [];
+    for (const [shardId, metrics] of this.shardMetrics.entries()) {
+      if (metrics.region === region && metrics.status === "active" && now - metrics.lastHeartbeat < this.config.heartbeatTimeout) {
+        activeShards.push(metrics);
+      }
+    }
+    return activeShards.sort((a, b) => a.shardId.localeCompare(b.shardId));
+  }
+  // Evaluate if auto-scaling is needed for a region
+  async evaluateAutoScaling(region) {
+    const shards = await this.getRegionShards(region);
+    if (shards.length === 0) {
+      await this.scaleUp(region);
+      return;
+    }
+    const totalConnections = shards.reduce((sum, s) => sum + s.connectionCount, 0);
+    const avgConnectionsPerShard = totalConnections / shards.length;
+    const maxConnections = Math.max(...shards.map((s) => s.connectionCount));
+    const scaleUpNeeded = maxConnections >= this.config.maxConnectionsPerShard * this.config.scaleUpThreshold && shards.length < this.config.maxShardsPerRegion;
+    const scaleDownNeeded = avgConnectionsPerShard <= this.config.minConnectionsPerShard * this.config.scaleDownThreshold && shards.length > this.config.minShardsPerRegion;
+    const now = Date.now();
+    if (scaleUpNeeded) {
+      const lastScaleUp = this.lastScaleUp.get(region) || 0;
+      if (now - lastScaleUp > this.config.scaleUpCooldown) {
+        console.log(`Auto-scaling UP region ${region}: ${shards.length} \u2192 ${shards.length + 1} shards (max connections: ${maxConnections})`);
+        await this.scaleUp(region);
+        this.lastScaleUp.set(region, now);
+      }
+    } else if (scaleDownNeeded) {
+      const lastScaleDown = this.lastScaleDown.get(region) || 0;
+      if (now - lastScaleDown > this.config.scaleDownCooldown) {
+        console.log(`Auto-scaling DOWN region ${region}: ${shards.length} \u2192 ${shards.length - 1} shards (avg connections: ${avgConnectionsPerShard})`);
+        await this.scaleDown(region);
+        this.lastScaleDown.set(region, now);
+      }
+    }
+  }
+  // Scale up: add new shard to region
+  async scaleUp(region) {
+    const shards = await this.getRegionShards(region);
+    const nextIndex = shards.length;
+    if (nextIndex >= this.config.maxShardsPerRegion) {
+      console.warn(`Cannot scale up ${region}: already at max shards (${this.config.maxShardsPerRegion})`);
+      return;
+    }
+    const newShardId = `relay-${region}-${nextIndex}`;
+    await this.initializeShard(newShardId, region);
+    console.log(`Scaled up ${region}: created shard ${newShardId}`);
+  }
+  // Scale down: remove least-loaded shard from region
+  async scaleDown(region) {
+    const shards = await this.getRegionShards(region);
+    if (shards.length <= this.config.minShardsPerRegion) {
+      console.warn(`Cannot scale down ${region}: already at min shards (${this.config.minShardsPerRegion})`);
+      return;
+    }
+    const shardToRemove = shards.reduce(
+      (min, s) => s.connectionCount < min.connectionCount ? s : min
+    );
+    shardToRemove.status = "draining";
+    this.shardMetrics.set(shardToRemove.shardId, shardToRemove);
+    await this.state.storage.put(`shard:${shardToRemove.shardId}`, shardToRemove);
+    console.log(`Scaled down ${region}: draining shard ${shardToRemove.shardId} (${shardToRemove.connectionCount} connections)`);
+  }
+  // Initialize a new shard (create metadata)
+  async initializeShard(shardId, region) {
+    const metrics = {
+      shardId,
+      region,
+      connectionCount: 0,
+      messagesPerSecond: 0,
+      lastHeartbeat: Date.now(),
+      status: "active"
+    };
+    this.shardMetrics.set(shardId, metrics);
+    await this.state.storage.put(`shard:${shardId}`, metrics);
+  }
+  // Load state from storage on initialization
+  async loadState() {
+    const savedConfig = await this.state.storage.get("config");
+    if (savedConfig) {
+      this.config = savedConfig;
+    }
+    const shardKeys = await this.state.storage.list({ prefix: "shard:" });
+    for (const [key, value] of shardKeys.entries()) {
+      const metrics = value;
+      this.shardMetrics.set(metrics.shardId, metrics);
+    }
+    console.log(`Coordinator loaded: ${this.shardMetrics.size} shards`);
+  }
+  // Schedule periodic health checks using DO alarms
+  scheduleHealthCheck() {
+    const checkInterval = setInterval(() => {
+      this.performHealthCheck();
+    }, 3e4);
+  }
+  // Perform health check: remove dead shards
+  async performHealthCheck() {
+    const now = Date.now();
+    const deadShards = [];
+    for (const [shardId, metrics] of this.shardMetrics.entries()) {
+      if (now - metrics.lastHeartbeat > this.config.heartbeatTimeout) {
+        deadShards.push(shardId);
+      }
+    }
+    if (deadShards.length > 0) {
+      console.log(`Health check: removing ${deadShards.length} dead shards`);
+      for (const shardId of deadShards) {
+        this.shardMetrics.delete(shardId);
+        await this.state.storage.delete(`shard:${shardId}`);
+      }
+    }
+  }
+  // Simple string hash function for consistent hashing
+  hashString(str) {
+    let hash2 = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash2 = (hash2 << 5) - hash2 + char;
+      hash2 = hash2 & hash2;
+    }
+    return Math.abs(hash2);
+  }
+};
+__name(_CoordinatorDO, "CoordinatorDO");
+var CoordinatorDO = _CoordinatorDO;
 export {
+  CoordinatorDO,
   RelayWebSocket,
   relay_worker_default as default
 };
@@ -5524,20 +5864,10 @@ export {
   (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 
 @noble/curves/esm/abstract/utils.js:
-  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
-
 @noble/curves/esm/abstract/modular.js:
-  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
-
 @noble/curves/esm/abstract/curve.js:
-  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
-
 @noble/curves/esm/abstract/weierstrass.js:
-  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
-
 @noble/curves/esm/_shortw_utils.js:
-  (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
-
 @noble/curves/esm/secp256k1.js:
   (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */

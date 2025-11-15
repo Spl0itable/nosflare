@@ -2434,7 +2434,7 @@ async function handlePaymentNotification(request: Request, env: Env): Promise<Re
   }
 }
 
-// Multi-region DO selection logic with location hints
+// Multi-region DO selection logic with deterministic routing and auto-scaling
 async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: DurableObjectStub; doName: string }> {
   const continent = cf?.continent || 'NA';
   const country = cf?.country || 'US';
@@ -2556,7 +2556,7 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     'OC': 'oc'
   };
 
-  // Determine best hint 
+  // Determine best hint
   let bestHint: string;
 
   // Only check US states if country is actually US
@@ -2567,36 +2567,34 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
     bestHint = countryToHint[country] || continentToHint[continent] || 'enam';
   }
 
-  // Find the primary endpoint based on hint
-  const primaryEndpoint = ALL_ENDPOINTS.find(ep => ep.hint === bestHint) || ALL_ENDPOINTS[1]; // Default to ENAM
+  // Convert hint to region code (e.g., "enam" → "ENAM")
+  const regionCode = bestHint.toUpperCase();
 
-  // Order endpoints by proximity (primary first, then others)
-  const orderedEndpoints = [
-    primaryEndpoint,
-    ...ALL_ENDPOINTS.filter(ep => ep.name !== primaryEndpoint.name)
-  ];
+  // Check if redirect parameter is provided (from shard-level redirect)
+  const redirectShard = url.searchParams.get('redirectShard');
 
-  // Try each endpoint
-  for (const endpoint of orderedEndpoints) {
-    try {
-      const id = env.RELAY_WEBSOCKET.idFromName(endpoint.name);
-      const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: endpoint.hint });
-
-      console.log(`Connected to DO: ${endpoint.name} (hint: ${endpoint.hint})`);
-      // @ts-ignore
-      return { stub, doName: endpoint.name };
-    } catch (error) {
-      console.log(`Failed to connect to ${endpoint.name}: ${error}`);
-    }
+  if (redirectShard) {
+    // We've been redirected by an overloaded shard
+    console.log(`Following redirect to: ${redirectShard}`);
+    const shardId = env.RELAY_WEBSOCKET.idFromName(redirectShard);
+    const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
+    // @ts-ignore
+    return { stub, doName: redirectShard };
   }
 
-  // Fallback to ENAM
-  const fallback = ALL_ENDPOINTS[1]; // ENAM
-  const id = env.RELAY_WEBSOCKET.idFromName(fallback.name);
-  const stub = env.RELAY_WEBSOCKET.get(id, { locationHint: fallback.hint });
-  console.log(`Fallback to DO: ${fallback.name} (hint: ${fallback.hint})`);
+  // Default: deterministic routing to shard-0
+  // Format: relay-{REGION}-0 (e.g., relay-ENAM-0)
+  const defaultShard = `relay-${regionCode}-0`;
+
+  console.log(`Deterministic routing: ${defaultShard} (region: ${regionCode})`);
+  const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
+  const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
+
   // @ts-ignore
-  return { stub, doName: fallback.name };
+  return { stub, doName: defaultShard };
+
+  // If shard-0 doesn't exist yet, it will be auto-created by coordinator on first heartbeat
+  // If shard-0 is overloaded, it will redirect via WebSocket upgrade response
 }
 
 // Export functions for use by Durable Object
@@ -2674,7 +2672,7 @@ export default {
       await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
       console.log('Archive process completed successfully');
 
-      // Use PRAGMA optimize - much more efficient
+      // Use PRAGMA optimize
       const session = env.RELAY_DATABASE.withSession('first-primary');
       await session.prepare('PRAGMA optimize').run();
       console.log('Database optimization completed');

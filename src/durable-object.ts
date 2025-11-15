@@ -40,15 +40,21 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
-  
+
   // Query cache for REQ messages
   private queryCache: Map<string, CacheEntry> = new Map();
   private readonly QUERY_CACHE_TTL = 60000;
   private readonly MAX_CACHE_SIZE = 100;
-  
+
   // Payment status cache
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 60000;
+
+  // Auto-scaling metrics tracking
+  private messageCount: number = 0;
+  private lastMetricsReset: number = Date.now();
+  private heartbeatInterval: number = 30000; // 30 seconds
+  private lastHeartbeat: number = 0;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -216,6 +222,96 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
+  // Send heartbeat to coordinator with current metrics
+  private async sendHeartbeatToCoordinator(): Promise<void> {
+    try {
+      // Only send heartbeat if coordinator is available and configured
+      if (!this.env.COORDINATOR || this.doName === 'unknown') {
+        return;
+      }
+
+      const now = Date.now();
+
+      // Rate limit heartbeats
+      if (now - this.lastHeartbeat < this.heartbeatInterval) {
+        return;
+      }
+
+      // Extract region from doName
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
+      if (!regionMatch) {
+        return;
+      }
+      const region = regionMatch[1];
+
+      // Calculate messages per second
+      const elapsedSeconds = (now - this.lastMetricsReset) / 1000;
+      const messagesPerSecond = elapsedSeconds > 0
+        ? Math.round(this.messageCount / elapsedSeconds)
+        : 0;
+
+      // Get connection count
+      const connectionCount = this.state.getWebSockets().length;
+
+      // Send heartbeat to coordinator
+      const coordinatorId = this.env.COORDINATOR.idFromName('coordinator-global');
+      const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+
+      await coordinatorStub.fetch(new Request('https://internal/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({
+          shardId: this.doName,
+          region,
+          connectionCount,
+          messagesPerSecond
+        })
+      }));
+
+      // Reset counters
+      this.lastHeartbeat = now;
+      this.messageCount = 0;
+      this.lastMetricsReset = now;
+    } catch (error) {
+      console.error('Failed to send heartbeat to coordinator:', error);
+    }
+  }
+
+  // Track message for metrics
+  private trackMessage(): void {
+    this.messageCount++;
+
+    // Opportunistically send heartbeat if enough time has passed
+    const now = Date.now();
+    if (now - this.lastHeartbeat >= this.heartbeatInterval) {
+      this.sendHeartbeatToCoordinator().catch(err =>
+        console.error('Heartbeat failed:', err)
+      );
+    }
+  }
+
+  // Get next available shard for redirect (when shard is overloaded)
+  private async getNextAvailableShard(): Promise<string | null> {
+    try {
+      // Extract region from this shard's name
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-(\d+)/);
+      if (!regionMatch) {
+        return null;
+      }
+
+      const region = regionMatch[1];
+      const currentIndex = parseInt(regionMatch[2], 10);
+
+      // Try next shard in sequence
+      const nextIndex = currentIndex + 1;
+      const nextShard = `relay-${region}-${nextIndex}`;
+
+      return nextShard;
+    } catch (error) {
+      console.error('Failed to determine next shard:', error);
+      return null;
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -241,6 +337,33 @@ export class RelayWebSocket implements DurableObject {
     const colo = url.searchParams.get('colo') || 'default';
 
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
+
+    // Check if this shard is overloaded and redirect if needed
+    const connectionCount = this.state.getWebSockets().length;
+    const REDIRECT_THRESHOLD = 6400; // 80% of 8000 max connections per shard
+
+    if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
+      // This shard is overloaded - redirect to next available shard
+      const nextShard = await this.getNextAvailableShard();
+
+      if (nextShard && nextShard !== this.doName) {
+        console.log(`Shard ${this.doName} overloaded (${connectionCount} connections) - redirecting to ${nextShard}`);
+
+        // Return redirect response (client will reconnect to new shard)
+        return new Response(JSON.stringify({
+          error: 'Shard overloaded',
+          redirectTo: nextShard,
+          currentLoad: connectionCount
+        }), {
+          status: 503,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Shard-Redirect': nextShard,
+            'Retry-After': '1' // Retry immediately
+          }
+        });
+      }
+    }
 
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
@@ -271,6 +394,9 @@ export class RelayWebSocket implements DurableObject {
 
   // WebSocket Hibernation API handler methods
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
+    // Track message for auto-scaling metrics
+    this.trackMessage();
+
     const attachment = ws.deserializeAttachment() as SessionAttachment | null;
     if (!attachment) {
       console.error('No session attachment found');
@@ -709,9 +835,28 @@ export class RelayWebSocket implements DurableObject {
 
   private async broadcastToOtherDOs(event: NostrEvent): Promise<void> {
     const broadcasts: Promise<Response>[] = [];
+    let endpoints: string[] = [];
 
-    // Broadcast to all allowed endpoints except ourselves
-    for (const endpoint of RelayWebSocket.ALLOWED_ENDPOINTS) {
+    try {
+      // Try to get dynamic shard list from coordinator
+      if (this.env.COORDINATOR && this.doName !== 'unknown') {
+        const coordinatorId = this.env.COORDINATOR.idFromName('coordinator-global');
+        const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+        const response = await coordinatorStub.fetch(new Request('https://internal/get-all-shards'));
+        const data = await response.json() as { shards: string[] };
+        endpoints = data.shards || [];
+      }
+    } catch (error) {
+      console.warn('Failed to fetch shard list from coordinator, falling back to static list:', error);
+    }
+
+    // Fallback to static endpoints if coordinator unavailable
+    if (endpoints.length === 0) {
+      endpoints = RelayWebSocket.ALLOWED_ENDPOINTS;
+    }
+
+    // Broadcast to all endpoints except ourselves
+    for (const endpoint of endpoints) {
       if (endpoint === this.doName) continue;
 
       broadcasts.push(this.sendToSpecificDO(endpoint, event));
@@ -733,13 +878,22 @@ export class RelayWebSocket implements DurableObject {
 
   private async sendToSpecificDO(doName: string, event: NostrEvent): Promise<Response> {
     try {
-      // Ensure we're only using allowed endpoints
-      if (!RelayWebSocket.ALLOWED_ENDPOINTS.includes(doName)) {
-        throw new Error(`Invalid DO name: ${doName}`);
+      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
+
+      // Determine location hint - check static list first, then extract from name
+      let locationHint = RelayWebSocket.ENDPOINT_HINTS[doName];
+
+      if (!locationHint) {
+        // Extract region from dynamic shard name (e.g., "relay-ENAM-2" → "enam")
+        const regionMatch = doName.match(/relay-([A-Z]+)-/);
+        if (regionMatch) {
+          const region = regionMatch[1].toLowerCase();
+          locationHint = region;
+        } else {
+          locationHint = 'auto';
+        }
       }
 
-      const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
-      const locationHint = RelayWebSocket.ENDPOINT_HINTS[doName] || 'auto';
       const stub = this.env.RELAY_WEBSOCKET.get(id, { locationHint });
 
       // Include the target DO name in the URL
