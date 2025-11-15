@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.13",
+  version: "7.5.14",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4676,15 +4676,26 @@ async function getOptimalDO(cf, env, url) {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
   const regionCode = bestHint.toUpperCase();
-  const redirectShard = url.searchParams.get("redirectShard");
-  if (redirectShard) {
-    console.log(`Following redirect to: ${redirectShard}`);
-    const shardId2 = env.RELAY_WEBSOCKET.idFromName(redirectShard);
-    const stub2 = env.RELAY_WEBSOCKET.get(shardId2, { locationHint: bestHint });
-    return { stub: stub2, doName: redirectShard };
+  if (env.COORDINATOR) {
+    try {
+      const coordinatorId = env.COORDINATOR.idFromName("coordinator-global");
+      const coordinatorStub = env.COORDINATOR.get(coordinatorId);
+      const response = await coordinatorStub.fetch(
+        new Request(`https://internal/get-shard?region=${regionCode}&strategy=least-connections`)
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const shardId2 = env.RELAY_WEBSOCKET.idFromName(data.shardId);
+        const stub2 = env.RELAY_WEBSOCKET.get(shardId2, { locationHint: data.locationHint });
+        console.log(`Coordinator routing: ${data.shardId} (region: ${regionCode})`);
+        return { stub: stub2, doName: data.shardId };
+      }
+    } catch (error) {
+      console.warn("Coordinator query failed, using fallback:", error);
+    }
   }
   const defaultShard = `relay-${regionCode}-0`;
-  console.log(`Deterministic routing: ${defaultShard} (region: ${regionCode})`);
+  console.log(`Fallback routing: ${defaultShard} (region: ${regionCode})`);
   const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
   const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
   return { stub, doName: defaultShard };

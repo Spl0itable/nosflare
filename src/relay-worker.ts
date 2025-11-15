@@ -2570,31 +2570,40 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   // Convert hint to region code (e.g., "enam" → "ENAM")
   const regionCode = bestHint.toUpperCase();
 
-  // Check if redirect parameter is provided (from shard-level redirect)
-  const redirectShard = url.searchParams.get('redirectShard');
+  // Query coordinator for optimal shard (with 5s caching in coordinator)
+  if (env.COORDINATOR) {
+    try {
+      const coordinatorId = env.COORDINATOR.idFromName('coordinator-global');
+      const coordinatorStub = env.COORDINATOR.get(coordinatorId);
 
-  if (redirectShard) {
-    // We've been redirected by an overloaded shard
-    console.log(`Following redirect to: ${redirectShard}`);
-    const shardId = env.RELAY_WEBSOCKET.idFromName(redirectShard);
-    const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
-    // @ts-ignore
-    return { stub, doName: redirectShard };
+      const response = await coordinatorStub.fetch(
+        new Request(`https://internal/get-shard?region=${regionCode}&strategy=least-connections`)
+      );
+
+      if (response.ok) {
+        const data = await response.json() as { shardId: string; locationHint: string };
+        const shardId = env.RELAY_WEBSOCKET.idFromName(data.shardId);
+        const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: data.locationHint });
+
+        console.log(`Coordinator routing: ${data.shardId} (region: ${regionCode})`);
+        // @ts-ignore
+        return { stub, doName: data.shardId };
+      }
+    } catch (error) {
+      console.warn('Coordinator query failed, using fallback:', error);
+      // Fall through to fallback below
+    }
   }
 
-  // Default: deterministic routing to shard-0
-  // Format: relay-{REGION}-0 (e.g., relay-ENAM-0)
+  // Deterministic routing to shard-0 if coordinator unavailable
   const defaultShard = `relay-${regionCode}-0`;
 
-  console.log(`Deterministic routing: ${defaultShard} (region: ${regionCode})`);
+  console.log(`Fallback routing: ${defaultShard} (region: ${regionCode})`);
   const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
   const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
 
   // @ts-ignore
   return { stub, doName: defaultShard };
-
-  // If shard-0 doesn't exist yet, it will be auto-created by coordinator on first heartbeat
-  // If shard-0 is overloaded, it will redirect via WebSocket upgrade response
 }
 
 // Export functions for use by Durable Object
