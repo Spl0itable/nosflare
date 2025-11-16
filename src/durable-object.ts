@@ -17,8 +17,7 @@ interface SessionAttachment {
   bookmark: string;
   host: string;
   doName: string;
-  hasPaid?: boolean;
-  subscriptions?: [string, NostrFilter[]][];
+  hasPaid?: boolean; // Cache payment status in session
 }
 
 // Cache entry interface
@@ -44,12 +43,12 @@ export class RelayWebSocket implements DurableObject {
 
   // Query cache for REQ messages
   private queryCache: Map<string, CacheEntry> = new Map();
-  private readonly QUERY_CACHE_TTL = 300000; // 5 minutes
+  private readonly QUERY_CACHE_TTL = 60000;
   private readonly MAX_CACHE_SIZE = 100;
 
   // Payment status cache
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
-  private readonly PAYMENT_CACHE_TTL = 300000; // 5 minutes
+  private readonly PAYMENT_CACHE_TTL = 60000;
 
   // Auto-scaling metrics tracking
   private messageCount: number = 0;
@@ -93,6 +92,24 @@ export class RelayWebSocket implements DurableObject {
     this.processedEvents = new Map();
     this.queryCache = new Map();
     this.paymentCache = new Map();
+  }
+
+  // Storage helper methods for subscriptions
+  private async saveSubscriptions(sessionId: string, subscriptions: Map<string, NostrFilter[]>): Promise<void> {
+    const key = `subs:${sessionId}`;
+    const data = Array.from(subscriptions.entries());
+    await this.state.storage.put(key, data);
+  }
+
+  private async loadSubscriptions(sessionId: string): Promise<Map<string, NostrFilter[]>> {
+    const key = `subs:${sessionId}`;
+    const data = await this.state.storage.get<[string, NostrFilter[]][]>(key);
+    return new Map(data || []);
+  }
+
+  private async deleteSubscriptions(sessionId: string): Promise<void> {
+    const key = `subs:${sessionId}`;
+    await this.state.storage.delete(key);
   }
 
   // Payment cache methods
@@ -338,7 +355,7 @@ export class RelayWebSocket implements DurableObject {
 
     // Check if this shard is overloaded and redirect if needed
     const connectionCount = this.state.getWebSockets().length;
-    const REDIRECT_THRESHOLD = 8000; // Max connections per shard
+    const REDIRECT_THRESHOLD = 28000; // 87.5% of 32000 max connections per shard
 
     if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
       // This shard is overloaded - redirect to next available shard
@@ -409,11 +426,14 @@ export class RelayWebSocket implements DurableObject {
       if (attachment.doName && this.doName === 'unknown') {
         this.doName = attachment.doName;
       }
-      // Recreate session from attachment - subscriptions in memory only
+      // Load subscriptions from storage
+      const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+
+      // Recreate session from attachment
       session = {
         id: attachment.sessionId,
         webSocket: ws,
-        subscriptions: new Map(), // Start with empty subscriptions
+        subscriptions,
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
@@ -441,8 +461,7 @@ export class RelayWebSocket implements DurableObject {
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid,
-        subscriptions: Array.from(session.subscriptions.entries())
+        hasPaid: attachment.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -461,7 +480,9 @@ export class RelayWebSocket implements DurableObject {
     if (attachment) {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
       this.sessions.delete(attachment.sessionId);
-      // Subscriptions automatically cleaned up when session is deleted
+
+      // Clean up stored subscriptions
+      await this.deleteSubscriptions(attachment.sessionId);
     }
   }
 
@@ -724,8 +745,11 @@ export class RelayWebSocket implements DurableObject {
       }
     }
 
-    // Store subscription in memory only
+    // Store subscription
     session.subscriptions.set(subscriptionId, filters);
+
+    // Save to storage
+    await this.saveSubscriptions(session.id, session.subscriptions);
 
     console.log(`New subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
 
@@ -760,6 +784,9 @@ export class RelayWebSocket implements DurableObject {
 
     const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
+      // Save updated subscriptions to storage
+      await this.saveSubscriptions(session.id, session.subscriptions);
+
       console.log(`Closed subscription ${subscriptionId} for session ${session.id} on DO ${this.doName}`);
       this.sendClosed(session.webSocket, subscriptionId, 'Subscription closed');
     } else {
@@ -788,11 +815,14 @@ export class RelayWebSocket implements DurableObject {
       // Get or recreate session
       let session = this.sessions.get(attachment.sessionId);
       if (!session) {
-        // Recreate minimal session for broadcast - subscriptions in memory only
+        // Load subscriptions from storage
+        const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+
+        // Recreate minimal session for broadcast
         session = {
           id: attachment.sessionId,
           webSocket: ws,
-          subscriptions: new Map(attachment.subscriptions || []),
+          subscriptions,
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
@@ -865,11 +895,11 @@ export class RelayWebSocket implements DurableObject {
     try {
       const id = this.env.RELAY_WEBSOCKET.idFromName(doName);
 
-      // Determine location hint
+      // Determine location hint - check static list first, then extract from name
       let locationHint = RelayWebSocket.ENDPOINT_HINTS[doName];
 
       if (!locationHint) {
-        // Extract region from dynamic shard name
+        // Extract region from dynamic shard name (e.g., "relay-ENAM-2" → "enam")
         const regionMatch = doName.match(/relay-([A-Z]+)-/);
         if (regionMatch) {
           const region = regionMatch[1].toLowerCase();

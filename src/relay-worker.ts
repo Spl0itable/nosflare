@@ -20,7 +20,7 @@ const {
 
 // Archive configuration constants
 const ARCHIVE_RETENTION_DAYS = 90;
-const ARCHIVE_BATCH_SIZE = 100;
+const ARCHIVE_BATCH_SIZE = 10;
 
 // Query optimization constants
 const GLOBAL_MAX_EVENTS = 5000;
@@ -417,45 +417,25 @@ async function validateNIP05(nip05Address: string, pubkey: string): Promise<bool
       return false;
     }
 
-    // Fetch the NIP-05 data with timeout
+    // Fetch the NIP-05 data
     const url = `https://${domain}/.well-known/nostr.json?name=${name}`;
+    const response = await fetch(url);
 
-    // Add timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Nosflare-Relay/1.0'
-        }
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        console.error(`Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
-        return false;
-      }
-
-      const nip05Data = await response.json() as Nip05Response;
-
-      if (!nip05Data.names || !nip05Data.names[name]) {
-        console.error(`NIP-05 data does not contain a matching public key for ${name}`);
-        return false;
-      }
-
-      const nip05Pubkey = nip05Data.names[name];
-      return nip05Pubkey === pubkey;
-    } catch (error: any) {
-      clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
-        console.error(`NIP-05 validation timeout for ${url}`);
-      } else {
-        console.error(`Error validating NIP-05 address: ${error}`);
-      }
+    if (!response.ok) {
+      console.error(`Failed to fetch NIP-05 data from ${url}: ${response.statusText}`);
       return false;
     }
+
+    const nip05Data = await response.json() as Nip05Response;
+
+    if (!nip05Data.names || !nip05Data.names[name]) {
+      console.error(`NIP-05 data does not contain a matching public key for ${name}`);
+      return false;
+    }
+
+    const nip05Pubkey = nip05Data.names[name];
+    return nip05Pubkey === pubkey;
+
   } catch (error) {
     console.error(`Error validating NIP-05 address: ${error}`);
     return false;
@@ -566,18 +546,18 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
       }
     }
 
-    // Insert tags using single statement with multiple VALUES (more efficient)
-    if (tagInserts.length > 0) {
-      // Split into chunks of 100 to avoid SQL query size limits
-      for (let i = 0; i < tagInserts.length; i += 100) {
-        const chunk = tagInserts.slice(i, i + 100);
-        const placeholders = chunk.map(() => '(?, ?, ?)').join(',');
-        const params = chunk.flatMap(t => [event.id, t.tag_name, t.tag_value]);
-
-        await session.prepare(`
+    // Insert tags in chunks of 50
+    for (let i = 0; i < tagInserts.length; i += 50) {
+      const chunk = tagInserts.slice(i, i + 50);
+      const batch = chunk.map(t =>
+        session.prepare(`
           INSERT INTO tags (event_id, tag_name, tag_value)
-          VALUES ${placeholders}
-        `).bind(...params).run();
+          VALUES (?, ?, ?)
+        `).bind(event.id, t.tag_name, t.tag_value)
+      );
+
+      if (batch.length > 0) {
+        await session.batch(batch);
       }
     }
 
@@ -622,44 +602,67 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
   }
 
   const session = env.RELAY_DATABASE.withSession('first-primary');
+  let deletedCount = 0;
+  const errors: string[] = [];
 
-  // Verify all events belong to the pubkey in one query
-  const placeholders = deletedEventIds.map(() => '?').join(',');
-  const existingEvents = await session.prepare(
-    `SELECT id, pubkey FROM events WHERE id IN (${placeholders})`
-  ).bind(...deletedEventIds).all();
+  for (const eventId of deletedEventIds) {
+    try {
+      // First check if the event exists and belongs to the requesting pubkey
+      const existing = await session.prepare(
+        "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
+      ).bind(eventId).first();
 
-  const ownedEventIds = existingEvents.results
-    .filter(e => e.pubkey === event.pubkey)
-    .map(e => e.id as string);
+      if (!existing) {
+        console.warn(`Event ${eventId} not found. Nothing to delete.`);
+        continue;
+      }
 
-  if (ownedEventIds.length === 0) {
-    // Save the deletion event itself even if nothing to delete
-    await saveEventToD1(event, env);
-    return { success: false, message: "unauthorized: no events to delete" };
+      if (existing.pubkey !== event.pubkey) {
+        console.warn(`Event ${eventId} does not belong to pubkey ${event.pubkey}. Skipping deletion.`);
+        errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
+        continue;
+      }
+
+      // Delete associated tags first (due to foreign key constraint)
+      await session.prepare(
+        "DELETE FROM tags WHERE event_id = ?"
+      ).bind(eventId).run();
+
+      // Delete from content_hashes if exists
+      await session.prepare(
+        "DELETE FROM content_hashes WHERE event_id = ?"
+      ).bind(eventId).run();
+
+      // Delete from event_tags_cache
+      await session.prepare(
+        "DELETE FROM event_tags_cache WHERE event_id = ?"
+      ).bind(eventId).run();
+
+      // Now delete the event
+      const result = await session.prepare(
+        "DELETE FROM events WHERE id = ?"
+      ).bind(eventId).run();
+
+      if (result.meta.changes > 0) {
+        console.log(`Event ${eventId} deleted successfully.`);
+        deletedCount++;
+      }
+    } catch (error) {
+      console.error(`Error deleting event ${eventId}:`, error);
+      errors.push(`error deleting ${eventId}`);
+    }
   }
-
-  // Delete all in chunks of 100
-  for (let i = 0; i < ownedEventIds.length; i += 100) {
-    const chunk = ownedEventIds.slice(i, i + 100);
-    const chunkPlaceholders = chunk.map(() => '?').join(',');
-
-    await session.batch([
-      session.prepare(`DELETE FROM tags WHERE event_id IN (${chunkPlaceholders})`).bind(...chunk),
-      session.prepare(`DELETE FROM content_hashes WHERE event_id IN (${chunkPlaceholders})`).bind(...chunk),
-      session.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${chunkPlaceholders})`).bind(...chunk),
-      session.prepare(`DELETE FROM events WHERE id IN (${chunkPlaceholders})`).bind(...chunk)
-    ]);
-  }
-
-  console.log(`Deleted ${ownedEventIds.length} events successfully.`);
 
   // Save the deletion event itself
   await saveEventToD1(event, env);
 
+  if (errors.length > 0) {
+    return { success: false, message: errors[0] };
+  }
+
   return {
     success: true,
-    message: `Successfully deleted ${ownedEventIds.length} event(s)`
+    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete"
   };
 }
 
@@ -1277,7 +1280,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
       eventsByKindHour.get(kindHourKey)!.push(nostrEvent);
       manifest.indices.kinds.add(nostrEvent.kind);
 
-      // Secondary indices by tags
+      // Secondary indices by tags - FIXED SECTION
       for (const [tagName, ...tagValues] of formattedTags) {
         for (const tagValue of tagValues) {
           const tagKey = `${tagName}/${tagValue}/${hourKey}`;
@@ -2317,10 +2320,7 @@ function serveLandingPage(): Response {
     status: 200,
     headers: {
       'Content-Type': 'text/html;charset=UTF-8',
-      'Cache-Control': 'public, max-age=3600',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://nosflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:;",
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY'
+      'Cache-Control': 'public, max-age=3600'
     }
   });
 }
