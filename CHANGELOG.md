@@ -1,7 +1,3 @@
-## v7.5.12 - 2025-11-02
-
-New: regional Durable Object auto-provisioning based on traffic patterns
-
 ## v7.4.12 - 2025-11-02
 
 Hotfix: increased unbound queries to last 90 days

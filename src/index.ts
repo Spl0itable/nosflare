@@ -1,6 +1,5 @@
-// Re-export the Durable Object classes as named exports
+// Re-export the Durable Object class as a named export
 export { RelayWebSocket } from './durable-object';
-export { CoordinatorDO } from './coordinator';
 
 // Re-export the default worker handler
 export { default } from './relay-worker';

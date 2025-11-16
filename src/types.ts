@@ -55,7 +55,6 @@ export interface QueryResult {
 export interface Env {
   RELAY_DATABASE: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
-  COORDINATOR: DurableObjectNamespace;
   EVENT_ARCHIVE: R2Bucket;
 }
 
@@ -135,7 +134,7 @@ export interface BroadcastEventRequest {
   event: NostrEvent;
 }
 
-// DO-to-DO broadcast request
+// Simplified DO-to-DO broadcast request
 export interface DOBroadcastRequest {
   event: NostrEvent;
   sourceDoId: string;
@@ -190,7 +189,6 @@ export interface DurableObjectStorage {
   put(entries: Record<string, any>): Promise<void>;
   delete(key: string): Promise<boolean>;
   delete(keys: string[]): Promise<number>;
-  list<T = any>(options?: { prefix?: string; start?: string; end?: string; limit?: number }): Promise<Map<string, T>>;
   setAlarm(scheduledTime: number | Date): Promise<void>;
   getAlarm(): Promise<number | null>;
   deleteAlarm(): Promise<void>;

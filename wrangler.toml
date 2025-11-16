@@ -3,14 +3,10 @@ name = "nosflare"
 compatibility_date = "2025-01-04"
 main = "worker.js"
 
-# Durable Objects bindings
+# Durable Objects binding
 [[durable_objects.bindings]]
 name = "RELAY_WEBSOCKET"
 class_name = "RelayWebSocket"
-
-[[durable_objects.bindings]]
-name = "COORDINATOR"
-class_name = "CoordinatorDO"
 
 # D1 Database binding
 # Important! Change name and id settings to your own
@@ -32,14 +28,10 @@ cpu_ms = 30000
 [observability.logs]
 enabled = true
 
-# Durable Object migrations with SQLite storage backend
+# Durable Object migration with SQLite storage backend
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["RelayWebSocket"]
-
-[[migrations]]
-tag = "v4"
-new_sqlite_classes = ["CoordinatorDO"]
 
 # Scheduled worker for archiving
 [triggers]
