@@ -40,15 +40,19 @@ export class RelayWebSocket implements DurableObject {
   private doId: string;
   private doName: string;
   private processedEvents: Map<string, number> = new Map(); // eventId -> timestamp
-  
+
   // Query cache for REQ messages
   private queryCache: Map<string, CacheEntry> = new Map();
   private readonly QUERY_CACHE_TTL = 60000;
   private readonly MAX_CACHE_SIZE = 100;
-  
+
   // Payment status cache
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 60000;
+
+  // Alarm and cleanup configuration
+  private readonly IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  private lastActivityTime: number = Date.now();
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -86,6 +90,101 @@ export class RelayWebSocket implements DurableObject {
     this.processedEvents = new Map();
     this.queryCache = new Map();
     this.paymentCache = new Map();
+    this.lastActivityTime = Date.now();
+  }
+
+  // Alarm handler - called when scheduled alarm fires
+  async alarm(): Promise<void> {
+    console.log(`Alarm triggered for DO ${this.doName}`);
+
+    const now = Date.now();
+    const idleTime = now - this.lastActivityTime;
+
+    // Get active WebSocket count
+    const activeWebSockets = this.state.getWebSockets();
+    const activeCount = activeWebSockets.length;
+
+    console.log(`DO ${this.doName} - Active WebSockets: ${activeCount}, Idle time: ${idleTime}ms`);
+
+    // If no active connections and idle timeout exceeded, clean up
+    if (activeCount === 0 && idleTime >= this.IDLE_TIMEOUT) {
+      console.log(`Cleaning up idle DO ${this.doName}`);
+      await this.cleanup();
+      // Don't set another alarm - let the DO shut down
+      return;
+    }
+
+    // If still active, schedule next cleanup check
+    const nextAlarm = now + this.IDLE_TIMEOUT;
+    await this.state.storage.setAlarm(nextAlarm);
+    console.log(`Next alarm scheduled for DO ${this.doName} in ${this.IDLE_TIMEOUT}ms`);
+  }
+
+  // Cleanup method to clear caches and sessions
+  private async cleanup(): Promise<void> {
+    console.log(`Running cleanup for DO ${this.doName}`);
+
+    // Clear in-memory caches
+    this.queryCache.clear();
+    this.paymentCache.clear();
+    this.processedEvents.clear();
+
+    // Clear sessions
+    this.sessions.clear();
+
+    // Clean up orphaned subscription storage data
+    await this.cleanupOrphanedSubscriptions();
+
+    console.log(`Cleanup complete for DO ${this.doName}`);
+  }
+
+  // Remove orphaned subscription data from storage
+  private async cleanupOrphanedSubscriptions(): Promise<void> {
+    try {
+      // Get all keys from storage
+      const allKeys = await this.state.storage.list();
+
+      // Get current active WebSocket sessions
+      const activeWebSockets = this.state.getWebSockets();
+      const activeSessionIds = new Set<string>();
+
+      for (const ws of activeWebSockets) {
+        const attachment = ws.deserializeAttachment() as SessionAttachment | null;
+        if (attachment) {
+          activeSessionIds.add(attachment.sessionId);
+        }
+      }
+
+      // Find and delete orphaned subscription keys
+      const keysToDelete: string[] = [];
+      for (const [key] of allKeys) {
+        if (key.startsWith('subs:')) {
+          const sessionId = key.substring(5); // Remove 'subs:' prefix
+          if (!activeSessionIds.has(sessionId)) {
+            keysToDelete.push(key);
+          }
+        }
+      }
+
+      if (keysToDelete.length > 0) {
+        await this.state.storage.delete(keysToDelete);
+        console.log(`Cleaned up ${keysToDelete.length} orphaned subscription entries`);
+      }
+    } catch (error) {
+      console.error('Error cleaning up orphaned subscriptions:', error);
+    }
+  }
+
+  // Schedule alarm if one doesn't exist
+  private async scheduleAlarmIfNeeded(): Promise<void> {
+    const existingAlarm = await this.state.storage.getAlarm();
+
+    // Only schedule if no alarm exists
+    if (existingAlarm === null) {
+      const alarmTime = Date.now() + this.IDLE_TIMEOUT;
+      await this.state.storage.setAlarm(alarmTime);
+      console.log(`Scheduled first alarm for DO ${this.doName}`);
+    }
   }
 
   // Storage helper methods for subscriptions
@@ -124,12 +223,12 @@ export class RelayWebSocket implements DurableObject {
       hasPaid,
       timestamp: Date.now()
     });
-    
+
     // Clean up old payment cache entries if too large
     if (this.paymentCache.size > 1000) {
       const sortedEntries = Array.from(this.paymentCache.entries())
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      
+
       // Remove oldest 20%
       const toRemove = Math.floor(this.paymentCache.size * 0.2);
       for (let i = 0; i < toRemove; i++) {
@@ -142,28 +241,28 @@ export class RelayWebSocket implements DurableObject {
   private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
     // Create cache key from filters and bookmark
     const cacheKey = JSON.stringify({ filters, bookmark });
-    
+
     // Check cache
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
       console.log('Returning cached query result');
       return cached.result;
     }
-    
+
     // Query database
     const result = await queryEventsWithArchive(filters, bookmark, this.env);
-    
+
     // Cache the result
-    this.queryCache.set(cacheKey, { 
-      result, 
-      timestamp: Date.now() 
+    this.queryCache.set(cacheKey, {
+      result,
+      timestamp: Date.now()
     });
-    
+
     // Clean up old cache entries if cache is too large
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
       this.cleanupQueryCache();
     }
-    
+
     return result;
   }
 
@@ -175,12 +274,12 @@ export class RelayWebSocket implements DurableObject {
         this.queryCache.delete(key);
       }
     }
-    
+
     // If still too large, remove oldest entries
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
       const sortedEntries = Array.from(this.queryCache.entries())
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      
+
       const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
       for (let i = 0; i < toRemove; i++) {
         this.queryCache.delete(sortedEntries[i][0]);
@@ -191,16 +290,16 @@ export class RelayWebSocket implements DurableObject {
   private invalidateRelevantCaches(event: NostrEvent): void {
     // Invalidate query caches that might include this new event
     let invalidated = 0;
-    
+
     for (const [cacheKey] of this.queryCache.entries()) {
       try {
         const { filters } = JSON.parse(cacheKey);
-        
+
         // Check if the new event matches any of the cached filters
-        const wouldMatch = filters.some((filter: NostrFilter) => 
+        const wouldMatch = filters.some((filter: NostrFilter) =>
           this.matchesFilter(event, filter)
         );
-        
+
         if (wouldMatch) {
           this.queryCache.delete(cacheKey);
           invalidated++;
@@ -210,7 +309,7 @@ export class RelayWebSocket implements DurableObject {
         this.queryCache.delete(cacheKey);
       }
     }
-    
+
     if (invalidated > 0) {
       console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
     }
@@ -261,6 +360,10 @@ export class RelayWebSocket implements DurableObject {
     // Use hibernatable WebSocket accept
     this.state.acceptWebSocket(server);
 
+    // Update activity time and schedule alarm
+    this.lastActivityTime = Date.now();
+    await this.scheduleAlarmIfNeeded();
+
     console.log(`New WebSocket session: ${sessionId} on DO ${this.doName}`);
 
     return new Response(null, {
@@ -271,6 +374,9 @@ export class RelayWebSocket implements DurableObject {
 
   // WebSocket Hibernation API handler methods
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
+    // Track activity
+    this.lastActivityTime = Date.now();
+
     const attachment = ws.deserializeAttachment() as SessionAttachment | null;
     if (!attachment) {
       console.error('No session attachment found');
@@ -456,14 +562,14 @@ export class RelayWebSocket implements DurableObject {
       if (PAY_TO_RELAY_ENABLED) {
         // Check cache first
         let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
-        
+
         if (hasPaid === null) {
           // Not in cache, check database
           hasPaid = await hasPaidForRelay(event.pubkey, this.env);
           // Cache the result
           this.setCachedPaymentStatus(event.pubkey, hasPaid);
         }
-        
+
         if (!hasPaid) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
@@ -512,7 +618,7 @@ export class RelayWebSocket implements DurableObject {
 
         // Mark as processed
         this.processedEvents.set(event.id, Date.now());
-        
+
         // Invalidate relevant query caches
         this.invalidateRelevantCaches(event);
 

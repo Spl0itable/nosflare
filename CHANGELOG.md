@@ -1,3 +1,7 @@
+## v7.4.13 - 2025-11-16
+
+Hotfix: added alarms to shutdown DOs
+
 ## v7.4.12 - 2025-11-02
 
 Hotfix: increased unbound queries to last 90 days
