@@ -50,6 +50,10 @@ export class RelayWebSocket implements DurableObject {
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 60000;
 
+  // Alarm and cleanup configuration
+  private readonly IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  private lastActivityTime: number = Date.now();
+
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
     'relay-WNAM-primary',  // Western North America
@@ -86,6 +90,61 @@ export class RelayWebSocket implements DurableObject {
     this.processedEvents = new Map();
     this.queryCache = new Map();
     this.paymentCache = new Map();
+    this.lastActivityTime = Date.now();
+  }
+
+  // Alarm handler - called when scheduled alarm fires
+  async alarm(): Promise<void> {
+    console.log(`Alarm triggered for DO ${this.doName}`);
+
+    const now = Date.now();
+    const idleTime = now - this.lastActivityTime;
+
+    // Get active WebSocket count
+    const activeWebSockets = this.state.getWebSockets();
+    const activeCount = activeWebSockets.length;
+
+    console.log(`DO ${this.doName} - Active WebSockets: ${activeCount}, Idle time: ${idleTime}ms`);
+
+    // If no active connections and idle timeout exceeded, clean up
+    if (activeCount === 0 && idleTime >= this.IDLE_TIMEOUT) {
+      console.log(`Cleaning up idle DO ${this.doName}`);
+      await this.cleanup();
+      // Don't set another alarm - let the DO shut down
+      return;
+    }
+
+    // If still active, schedule next cleanup check
+    const nextAlarm = now + this.IDLE_TIMEOUT;
+    await this.state.storage.setAlarm(nextAlarm);
+    console.log(`Next alarm scheduled for DO ${this.doName} in ${this.IDLE_TIMEOUT}ms`);
+  }
+
+  // Cleanup method to clear caches and sessions
+  private async cleanup(): Promise<void> {
+    console.log(`Running cleanup for DO ${this.doName}`);
+
+    // Clear in-memory caches
+    this.queryCache.clear();
+    this.paymentCache.clear();
+    this.processedEvents.clear();
+
+    // Clear sessions
+    this.sessions.clear();
+
+    console.log(`Cleanup complete for DO ${this.doName}`);
+  }
+
+  // Schedule alarm if one doesn't exist
+  private async scheduleAlarmIfNeeded(): Promise<void> {
+    const existingAlarm = await this.state.storage.getAlarm();
+
+    // Only schedule if no alarm exists
+    if (existingAlarm === null) {
+      const alarmTime = Date.now() + this.IDLE_TIMEOUT;
+      await this.state.storage.setAlarm(alarmTime);
+      console.log(`Scheduled first alarm for DO ${this.doName}`);
+    }
   }
 
   // Storage helper methods for subscriptions
@@ -261,6 +320,10 @@ export class RelayWebSocket implements DurableObject {
     // Use hibernatable WebSocket accept
     this.state.acceptWebSocket(server);
 
+    // Update activity time and schedule alarm
+    this.lastActivityTime = Date.now();
+    await this.scheduleAlarmIfNeeded();
+
     console.log(`New WebSocket session: ${sessionId} on DO ${this.doName}`);
 
     return new Response(null, {
@@ -271,6 +334,9 @@ export class RelayWebSocket implements DurableObject {
 
   // WebSocket Hibernation API handler methods
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
+    // Track activity
+    this.lastActivityTime = Date.now();
+
     const attachment = ws.deserializeAttachment() as SessionAttachment | null;
     if (!attachment) {
       console.error('No session attachment found');
