@@ -1,8 +1,3 @@
-## v7.5.15 - 2025-11-15
-
-Hotfix: increased max websocket connections per shard
-Hotfix: improved DO broadcasting
-
 ## v7.5.14 - 2025-11-15
 
 Hotfix: correct shard failover

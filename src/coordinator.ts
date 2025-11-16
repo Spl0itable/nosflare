@@ -34,17 +34,18 @@ export interface AutoScaleConfig {
 // Default configuration
 const DEFAULT_CONFIG: AutoScaleConfig = {
     minConnectionsPerShard: 1000,
-    maxConnectionsPerShard: 32000,   // Just under 32,768 limit
-    targetConnectionsPerShard: 28000, // 87.5% utilization target
+    maxConnectionsPerShard: 8000,   // Conservative limit per shard
+    targetConnectionsPerShard: 5000,
 
-    scaleUpThreshold: 0.875,   // Scale at 28,000 connections
-    scaleDownThreshold: 0.2,   // Scale down at 6,400 connections
+    scaleUpThreshold: 0.8,    // Scale up at 80% capacity (6400 connections)
+    scaleDownThreshold: 0.3,  // Scale down below 30% capacity (2400 connections)
     minShardsPerRegion: 1,
-    maxShardsPerRegion: 10,    // ~320k connections per region
+    maxShardsPerRegion: 10,   // 10 shards × 8000 = 80k per region
 
-    scaleUpCooldown: 60000,
-    scaleDownCooldown: 300000,
-    heartbeatTimeout: 120000
+    scaleUpCooldown: 60000,   // 1 minute between scale-ups
+    scaleDownCooldown: 300000, // 5 minutes between scale-downs
+
+    heartbeatTimeout: 120000  // 2 minutes
 };
 
 // Region definitions

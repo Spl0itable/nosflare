@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.15",
+  version: "7.5.14",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4969,7 +4969,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     const colo = url.searchParams.get("colo") || "default";
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const connectionCount = this.state.getWebSockets().length;
-    const REDIRECT_THRESHOLD = 28e3;
+    const REDIRECT_THRESHOLD = 6400;
     if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
       const nextShard = await this.getNextAvailableShard();
       if (nextShard && nextShard !== this.doName) {
@@ -5501,20 +5501,22 @@ var RelayWebSocket = _RelayWebSocket;
 // src/coordinator.ts
 var DEFAULT_CONFIG = {
   minConnectionsPerShard: 1e3,
-  maxConnectionsPerShard: 32e3,
-  // Just under 32,768 limit
-  targetConnectionsPerShard: 28e3,
-  // 87.5% utilization target
-  scaleUpThreshold: 0.875,
-  // Scale at 28,000 connections
-  scaleDownThreshold: 0.2,
-  // Scale down at 6,400 connections
+  maxConnectionsPerShard: 8e3,
+  // Conservative limit per shard
+  targetConnectionsPerShard: 5e3,
+  scaleUpThreshold: 0.8,
+  // Scale up at 80% capacity (6400 connections)
+  scaleDownThreshold: 0.3,
+  // Scale down below 30% capacity (2400 connections)
   minShardsPerRegion: 1,
   maxShardsPerRegion: 10,
-  // ~320k connections per region
+  // 10 shards × 8000 = 80k per region
   scaleUpCooldown: 6e4,
+  // 1 minute between scale-ups
   scaleDownCooldown: 3e5,
+  // 5 minutes between scale-downs
   heartbeatTimeout: 12e4
+  // 2 minutes
 };
 var REGIONS = ["WNAM", "ENAM", "WEUR", "EEUR", "APAC", "OC", "SAM", "AFR", "ME"];
 var REGION_HINTS = {
