@@ -132,7 +132,47 @@ export class RelayWebSocket implements DurableObject {
     // Clear sessions
     this.sessions.clear();
 
+    // Clean up orphaned subscription storage data
+    await this.cleanupOrphanedSubscriptions();
+
     console.log(`Cleanup complete for DO ${this.doName}`);
+  }
+
+  // Remove orphaned subscription data from storage
+  private async cleanupOrphanedSubscriptions(): Promise<void> {
+    try {
+      // Get all keys from storage
+      const allKeys = await this.state.storage.list();
+
+      // Get current active WebSocket sessions
+      const activeWebSockets = this.state.getWebSockets();
+      const activeSessionIds = new Set<string>();
+
+      for (const ws of activeWebSockets) {
+        const attachment = ws.deserializeAttachment() as SessionAttachment | null;
+        if (attachment) {
+          activeSessionIds.add(attachment.sessionId);
+        }
+      }
+
+      // Find and delete orphaned subscription keys
+      const keysToDelete: string[] = [];
+      for (const [key] of allKeys) {
+        if (key.startsWith('subs:')) {
+          const sessionId = key.substring(5); // Remove 'subs:' prefix
+          if (!activeSessionIds.has(sessionId)) {
+            keysToDelete.push(key);
+          }
+        }
+      }
+
+      if (keysToDelete.length > 0) {
+        await this.state.storage.delete(keysToDelete);
+        console.log(`Cleaned up ${keysToDelete.length} orphaned subscription entries`);
+      }
+    } catch (error) {
+      console.error('Error cleaning up orphaned subscriptions:', error);
+    }
   }
 
   // Schedule alarm if one doesn't exist
