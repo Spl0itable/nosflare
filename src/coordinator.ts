@@ -18,8 +18,8 @@ export interface AutoScaleConfig {
     targetConnectionsPerShard: number;
 
     // Scaling behavior
-    scaleUpThreshold: number;
-    scaleDownThreshold: number;
+    scaleUpThreshold: number;    // % of max before adding shard
+    scaleDownThreshold: number;  // % of min before removing shard
     minShardsPerRegion: number;
     maxShardsPerRegion: number;
 
@@ -28,7 +28,7 @@ export interface AutoScaleConfig {
     scaleDownCooldown: number;
 
     // Health check
-    heartbeatTimeout: number;
+    heartbeatTimeout: number;    // Consider shard dead after this
 }
 
 // Default configuration
@@ -37,10 +37,10 @@ const DEFAULT_CONFIG: AutoScaleConfig = {
     maxConnectionsPerShard: 9000,
     targetConnectionsPerShard: 8000,
 
-    scaleUpThreshold: 0.8,
+    scaleUpThreshold: 0.9,
     scaleDownThreshold: 0.2,
     minShardsPerRegion: 1,
-    maxShardsPerRegion: Infinity,
+    maxShardsPerRegion: 10,
 
     scaleUpCooldown: 60000,
     scaleDownCooldown: 300000,
@@ -392,9 +392,9 @@ export class CoordinatorDO implements DurableObject {
         const avgConnectionsPerShard = totalConnections / shards.length;
         const maxConnections = Math.max(...shards.map(s => s.connectionCount));
 
-        // Check for scale-up condition (scale proactively before hitting target)
+        // Check for scale-up condition
         const scaleUpNeeded =
-            maxConnections >= this.config.targetConnectionsPerShard * this.config.scaleUpThreshold &&
+            maxConnections >= this.config.maxConnectionsPerShard * this.config.scaleUpThreshold &&
             shards.length < this.config.maxShardsPerRegion;
 
         // Check for scale-down condition
@@ -426,10 +426,15 @@ export class CoordinatorDO implements DurableObject {
         const shards = await this.getRegionShards(region);
         const nextIndex = shards.length;
 
+        if (nextIndex >= this.config.maxShardsPerRegion) {
+            console.warn(`Cannot scale up ${region}: already at max shards (${this.config.maxShardsPerRegion})`);
+            return;
+        }
+
         const newShardId = `relay-${region}-${nextIndex}`;
         await this.initializeShard(newShardId, region);
 
-        console.log(`Scaled up ${region}: created shard ${newShardId} (total shards: ${nextIndex + 1})`);
+        console.log(`Scaled up ${region}: created shard ${newShardId}`);
     }
 
     // Scale down: remove least-loaded shard from region

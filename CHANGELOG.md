@@ -1,7 +1,3 @@
-## v7.5.17 - 2025-11-16
-
-Hotfix: removed hardcap on shards
-
 ## v7.5.16 - 2025-11-16
 
 Hotfix: added security headers to landing page
