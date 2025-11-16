@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.18",
+  version: "7.5.16",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -5054,6 +5054,23 @@ var _RelayWebSocket = class _RelayWebSocket {
       );
     }
   }
+  // Get next available shard for redirect (when shard is overloaded)
+  async getNextAvailableShard() {
+    try {
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-(\d+)/);
+      if (!regionMatch) {
+        return null;
+      }
+      const region = regionMatch[1];
+      const currentIndex = parseInt(regionMatch[2], 10);
+      const nextIndex = currentIndex + 1;
+      const nextShard = `relay-${region}-${nextIndex}`;
+      return nextShard;
+    } catch (error) {
+      console.error("Failed to determine next shard:", error);
+      return null;
+    }
+  }
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
@@ -5082,6 +5099,27 @@ var _RelayWebSocket = class _RelayWebSocket {
     }
     const colo = url.searchParams.get("colo") || "default";
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
+    const connectionCount = this.state.getWebSockets().length;
+    const REDIRECT_THRESHOLD = 8e3;
+    if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
+      const nextShard = await this.getNextAvailableShard();
+      if (nextShard && nextShard !== this.doName) {
+        console.log(`Shard ${this.doName} overloaded (${connectionCount} connections) - redirecting to ${nextShard}`);
+        return new Response(JSON.stringify({
+          error: "Shard overloaded",
+          redirectTo: nextShard,
+          currentLoad: connectionCount
+        }), {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shard-Redirect": nextShard,
+            "Retry-After": "1"
+            // Retry immediately
+          }
+        });
+      }
+    }
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     const sessionId = crypto.randomUUID();
@@ -5593,10 +5631,10 @@ var DEFAULT_CONFIG = {
   minConnectionsPerShard: 1e3,
   maxConnectionsPerShard: 9e3,
   targetConnectionsPerShard: 8e3,
-  scaleUpThreshold: 0.8,
+  scaleUpThreshold: 0.9,
   scaleDownThreshold: 0.2,
   minShardsPerRegion: 1,
-  maxShardsPerRegion: Infinity,
+  maxShardsPerRegion: 10,
   scaleUpCooldown: 6e4,
   scaleDownCooldown: 3e5,
   heartbeatTimeout: 12e4
@@ -5851,7 +5889,7 @@ var _CoordinatorDO = class _CoordinatorDO {
     const totalConnections = shards.reduce((sum, s) => sum + s.connectionCount, 0);
     const avgConnectionsPerShard = totalConnections / shards.length;
     const maxConnections = Math.max(...shards.map((s) => s.connectionCount));
-    const scaleUpNeeded = maxConnections >= this.config.targetConnectionsPerShard * this.config.scaleUpThreshold && shards.length < this.config.maxShardsPerRegion;
+    const scaleUpNeeded = maxConnections >= this.config.maxConnectionsPerShard * this.config.scaleUpThreshold && shards.length < this.config.maxShardsPerRegion;
     const scaleDownNeeded = avgConnectionsPerShard <= this.config.minConnectionsPerShard * this.config.scaleDownThreshold && shards.length > this.config.minShardsPerRegion;
     const now = Date.now();
     if (scaleUpNeeded) {
@@ -5874,9 +5912,13 @@ var _CoordinatorDO = class _CoordinatorDO {
   async scaleUp(region) {
     const shards = await this.getRegionShards(region);
     const nextIndex = shards.length;
+    if (nextIndex >= this.config.maxShardsPerRegion) {
+      console.warn(`Cannot scale up ${region}: already at max shards (${this.config.maxShardsPerRegion})`);
+      return;
+    }
     const newShardId = `relay-${region}-${nextIndex}`;
     await this.initializeShard(newShardId, region);
-    console.log(`Scaled up ${region}: created shard ${newShardId} (total shards: ${nextIndex + 1})`);
+    console.log(`Scaled up ${region}: created shard ${newShardId}`);
   }
   // Scale down: remove least-loaded shard from region
   async scaleDown(region) {

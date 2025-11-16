@@ -1,7 +1,3 @@
-## v7.5.18 - 2025-11-16
-
-Hotfix: subscription attachment size
-
 ## v7.5.17 - 2025-11-16
 
 Hotfix: removed hardcap on shards
