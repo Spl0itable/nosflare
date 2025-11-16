@@ -272,28 +272,6 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  // Get next available shard for redirect (when shard is overloaded)
-  private async getNextAvailableShard(): Promise<string | null> {
-    try {
-      // Extract region from this shard's name
-      const regionMatch = this.doName.match(/relay-([A-Z]+)-(\d+)/);
-      if (!regionMatch) {
-        return null;
-      }
-
-      const region = regionMatch[1];
-      const currentIndex = parseInt(regionMatch[2], 10);
-
-      // Try next shard in sequence
-      const nextIndex = currentIndex + 1;
-      const nextShard = `relay-${region}-${nextIndex}`;
-
-      return nextShard;
-    } catch (error) {
-      console.error('Failed to determine next shard:', error);
-      return null;
-    }
-  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -335,33 +313,6 @@ export class RelayWebSocket implements DurableObject {
     const colo = url.searchParams.get('colo') || 'default';
 
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
-
-    // Check if this shard is overloaded and redirect if needed
-    const connectionCount = this.state.getWebSockets().length;
-    const REDIRECT_THRESHOLD = 8000; // Max connections per shard
-
-    if (connectionCount >= REDIRECT_THRESHOLD && this.env.COORDINATOR) {
-      // This shard is overloaded - redirect to next available shard
-      const nextShard = await this.getNextAvailableShard();
-
-      if (nextShard && nextShard !== this.doName) {
-        console.log(`Shard ${this.doName} overloaded (${connectionCount} connections) - redirecting to ${nextShard}`);
-
-        // Return redirect response (client will reconnect to new shard)
-        return new Response(JSON.stringify({
-          error: 'Shard overloaded',
-          redirectTo: nextShard,
-          currentLoad: connectionCount
-        }), {
-          status: 503,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Shard-Redirect': nextShard,
-            'Retry-After': '1' // Retry immediately
-          }
-        });
-      }
-    }
 
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);

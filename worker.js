@@ -4411,7 +4411,6 @@ function serveLandingPage() {
     headers: {
       "Content-Type": "text/html;charset=UTF-8",
       "Cache-Control": "public, max-age=3600",
-      "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://nosflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:;",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     }
