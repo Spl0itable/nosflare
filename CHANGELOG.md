@@ -1,8 +1,4 @@
-## v7.5.13 - 2025-11-15
-
-Hotfix: correct DO name/region shows in logs
-
-## v7.5.12 - 2025-11-15
+## v7.5.12 - 2025-11-02
 
 New: regional Durable Object auto-provisioning based on traffic patterns
 

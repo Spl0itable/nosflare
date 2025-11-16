@@ -130,12 +130,12 @@ export class RelayWebSocket implements DurableObject {
       hasPaid,
       timestamp: Date.now()
     });
-
+    
     // Clean up old payment cache entries if too large
     if (this.paymentCache.size > 1000) {
       const sortedEntries = Array.from(this.paymentCache.entries())
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
-
+      
       // Remove oldest 20%
       const toRemove = Math.floor(this.paymentCache.size * 0.2);
       for (let i = 0; i < toRemove; i++) {
@@ -148,28 +148,28 @@ export class RelayWebSocket implements DurableObject {
   private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
     // Create cache key from filters and bookmark
     const cacheKey = JSON.stringify({ filters, bookmark });
-
+    
     // Check cache
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
       console.log('Returning cached query result');
       return cached.result;
     }
-
+    
     // Query database
     const result = await queryEventsWithArchive(filters, bookmark, this.env);
-
+    
     // Cache the result
-    this.queryCache.set(cacheKey, {
-      result,
-      timestamp: Date.now()
+    this.queryCache.set(cacheKey, { 
+      result, 
+      timestamp: Date.now() 
     });
-
+    
     // Clean up old cache entries if cache is too large
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
       this.cleanupQueryCache();
     }
-
+    
     return result;
   }
 
@@ -181,12 +181,12 @@ export class RelayWebSocket implements DurableObject {
         this.queryCache.delete(key);
       }
     }
-
+    
     // If still too large, remove oldest entries
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
       const sortedEntries = Array.from(this.queryCache.entries())
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
-
+      
       const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
       for (let i = 0; i < toRemove; i++) {
         this.queryCache.delete(sortedEntries[i][0]);
@@ -197,16 +197,16 @@ export class RelayWebSocket implements DurableObject {
   private invalidateRelevantCaches(event: NostrEvent): void {
     // Invalidate query caches that might include this new event
     let invalidated = 0;
-
+    
     for (const [cacheKey] of this.queryCache.entries()) {
       try {
         const { filters } = JSON.parse(cacheKey);
-
+        
         // Check if the new event matches any of the cached filters
-        const wouldMatch = filters.some((filter: NostrFilter) =>
+        const wouldMatch = filters.some((filter: NostrFilter) => 
           this.matchesFilter(event, filter)
         );
-
+        
         if (wouldMatch) {
           this.queryCache.delete(cacheKey);
           invalidated++;
@@ -216,7 +216,7 @@ export class RelayWebSocket implements DurableObject {
         this.queryCache.delete(cacheKey);
       }
     }
-
+    
     if (invalidated > 0) {
       console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
     }
@@ -317,14 +317,8 @@ export class RelayWebSocket implements DurableObject {
 
     // Extract and set DO name from URL if provided
     const urlDoName = url.searchParams.get('doName');
-    if (urlDoName && urlDoName !== 'unknown') {
-      // Accept both static endpoints
-      const isStaticEndpoint = RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName);
-      const isDynamicShard = /^relay-[A-Z]+-\d+$/.test(urlDoName);
-
-      if (isStaticEndpoint || isDynamicShard) {
-        this.doName = urlDoName;
-      }
+    if (urlDoName && urlDoName !== 'unknown' && RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      this.doName = urlDoName;
     }
 
     // DO-to-DO broadcast endpoint
@@ -339,16 +333,7 @@ export class RelayWebSocket implements DurableObject {
     }
 
     // Extract region info and DO name
-    const urlRegion = url.searchParams.get('region');
-    if (urlRegion) {
-      this.region = urlRegion;
-    } else if (this.doName && this.doName !== 'unknown') {
-      // Extract region from DO name
-      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
-      if (regionMatch) {
-        this.region = regionMatch[1];
-      }
-    }
+    this.region = url.searchParams.get('region') || this.region || 'unknown';
     const colo = url.searchParams.get('colo') || 'default';
 
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
@@ -597,14 +582,14 @@ export class RelayWebSocket implements DurableObject {
       if (PAY_TO_RELAY_ENABLED) {
         // Check cache first
         let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
-
+        
         if (hasPaid === null) {
           // Not in cache, check database
           hasPaid = await hasPaidForRelay(event.pubkey, this.env);
           // Cache the result
           this.setCachedPaymentStatus(event.pubkey, hasPaid);
         }
-
+        
         if (!hasPaid) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
@@ -653,7 +638,7 @@ export class RelayWebSocket implements DurableObject {
 
         // Mark as processed
         this.processedEvents.set(event.id, Date.now());
-
+        
         // Invalidate relevant query caches
         this.invalidateRelevantCaches(event);
 

@@ -4932,12 +4932,8 @@ var _RelayWebSocket = class _RelayWebSocket {
   async fetch(request) {
     const url = new URL(request.url);
     const urlDoName = url.searchParams.get("doName");
-    if (urlDoName && urlDoName !== "unknown") {
-      const isStaticEndpoint = _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName);
-      const isDynamicShard = /^relay-[A-Z]+-\d+$/.test(urlDoName);
-      if (isStaticEndpoint || isDynamicShard) {
-        this.doName = urlDoName;
-      }
+    if (urlDoName && urlDoName !== "unknown" && _RelayWebSocket.ALLOWED_ENDPOINTS.includes(urlDoName)) {
+      this.doName = urlDoName;
     }
     if (url.pathname === "/do-broadcast") {
       return await this.handleDOBroadcast(request);
@@ -4946,15 +4942,7 @@ var _RelayWebSocket = class _RelayWebSocket {
     if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
-    const urlRegion = url.searchParams.get("region");
-    if (urlRegion) {
-      this.region = urlRegion;
-    } else if (this.doName && this.doName !== "unknown") {
-      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
-      if (regionMatch) {
-        this.region = regionMatch[1];
-      }
-    }
+    this.region = url.searchParams.get("region") || this.region || "unknown";
     const colo = url.searchParams.get("colo") || "default";
     console.log(`WebSocket connection to DO: ${this.doName} (region: ${this.region}, colo: ${colo})`);
     const connectionCount = this.state.getWebSockets().length;
@@ -5835,7 +5823,7 @@ var _CoordinatorDO = class _CoordinatorDO {
       this.performHealthCheck();
     }, 3e4);
   }
-  // Remove dead shards
+  // Perform health check: remove dead shards
   async performHealthCheck() {
     const now = Date.now();
     const deadShards = [];
