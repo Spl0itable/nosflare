@@ -2318,7 +2318,6 @@ function serveLandingPage(): Response {
     headers: {
       'Content-Type': 'text/html;charset=UTF-8',
       'Cache-Control': 'public, max-age=3600',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://nosflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:;",
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY'
     }
@@ -2434,7 +2433,7 @@ async function handlePaymentNotification(request: Request, env: Env): Promise<Re
   }
 }
 
-// Multi-region DO selection with stateless random distribution (no coordinator)
+// Multi-region DO selection logic with deterministic routing and auto-scaling
 async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: DurableObjectStub; doName: string }> {
   const continent = cf?.continent || 'NA';
   const country = cf?.country || 'US';
@@ -2570,18 +2569,40 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   // Convert hint to region code (e.g., "enam" → "ENAM")
   const regionCode = bestHint.toUpperCase();
 
-  // Hub-based shard architecture for real-time event broadcasting
-  const MAX_SHARDS_PER_REGION = 50;
-  const shardIndex = Math.floor(Math.random() * MAX_SHARDS_PER_REGION);
-  const shardName = `relay-${regionCode}-${shardIndex}`;
+  // Query coordinator for optimal shard (with 5s caching in coordinator)
+  if (env.COORDINATOR) {
+    try {
+      const coordinatorId = env.COORDINATOR.idFromName('coordinator-global');
+      const coordinatorStub = env.COORDINATOR.get(coordinatorId);
 
-  console.log(`Random shard selection: ${shardName} (region: ${regionCode}, hub: ${shardIndex === 0})`);
+      const response = await coordinatorStub.fetch(
+        new Request(`https://internal/get-shard?region=${regionCode}&strategy=least-connections`)
+      );
 
-  const shardId = env.RELAY_WEBSOCKET.idFromName(shardName);
+      if (response.ok) {
+        const data = await response.json() as { shardId: string; locationHint: string };
+        const shardId = env.RELAY_WEBSOCKET.idFromName(data.shardId);
+        const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: data.locationHint });
+
+        console.log(`Coordinator routing: ${data.shardId} (region: ${regionCode})`);
+        // @ts-ignore
+        return { stub, doName: data.shardId };
+      }
+    } catch (error) {
+      console.warn('Coordinator query failed, using fallback:', error);
+      // Fall through to fallback below
+    }
+  }
+
+  // Deterministic routing to shard-0 if coordinator unavailable
+  const defaultShard = `relay-${regionCode}-0`;
+
+  console.log(`Fallback routing: ${defaultShard} (region: ${regionCode})`);
+  const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
   const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
 
   // @ts-ignore
-  return { stub, doName: shardName };
+  return { stub, doName: defaultShard };
 }
 
 // Export functions for use by Durable Object

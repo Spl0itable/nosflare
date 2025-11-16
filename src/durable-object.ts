@@ -18,6 +18,7 @@ interface SessionAttachment {
   host: string;
   doName: string;
   hasPaid?: boolean;
+  subscriptions?: [string, NostrFilter[]][];
 }
 
 // Cache entry interface
@@ -50,8 +51,11 @@ export class RelayWebSocket implements DurableObject {
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 300000; // 5 minutes
 
-  // Message tracking for metrics
+  // Auto-scaling metrics tracking
   private messageCount: number = 0;
+  private lastMetricsReset: number = Date.now();
+  private heartbeatInterval: number = 30000; // 30 seconds
+  private lastHeartbeat: number = 0;
 
   // Define allowed endpoints
   private static readonly ALLOWED_ENDPOINTS = [
@@ -201,9 +205,71 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  // Track message for metrics (simple counter for logging/debugging)
+  // Send heartbeat to coordinator with current metrics
+  private async sendHeartbeatToCoordinator(): Promise<void> {
+    try {
+      // Only send heartbeat if coordinator is available and configured
+      if (!this.env.COORDINATOR || this.doName === 'unknown') {
+        return;
+      }
+
+      const now = Date.now();
+
+      // Rate limit heartbeats
+      if (now - this.lastHeartbeat < this.heartbeatInterval) {
+        return;
+      }
+
+      // Extract region from doName
+      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
+      if (!regionMatch) {
+        return;
+      }
+      const region = regionMatch[1];
+
+      // Calculate messages per second
+      const elapsedSeconds = (now - this.lastMetricsReset) / 1000;
+      const messagesPerSecond = elapsedSeconds > 0
+        ? Math.round(this.messageCount / elapsedSeconds)
+        : 0;
+
+      // Get connection count
+      const connectionCount = this.state.getWebSockets().length;
+
+      // Send heartbeat to coordinator
+      const coordinatorId = this.env.COORDINATOR.idFromName('coordinator-global');
+      const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+
+      await coordinatorStub.fetch(new Request('https://internal/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({
+          shardId: this.doName,
+          region,
+          connectionCount,
+          messagesPerSecond
+        })
+      }));
+
+      // Reset counters
+      this.lastHeartbeat = now;
+      this.messageCount = 0;
+      this.lastMetricsReset = now;
+    } catch (error) {
+      console.error('Failed to send heartbeat to coordinator:', error);
+    }
+  }
+
+  // Track message for metrics
   private trackMessage(): void {
     this.messageCount++;
+
+    // Opportunistically send heartbeat if enough time has passed
+    const now = Date.now();
+    if (now - this.lastHeartbeat >= this.heartbeatInterval) {
+      this.sendHeartbeatToCoordinator().catch(err =>
+        console.error('Heartbeat failed:', err)
+      );
+    }
   }
 
 
@@ -320,13 +386,14 @@ export class RelayWebSocket implements DurableObject {
 
       await this.handleMessage(session, parsedMessage);
 
-      // Update attachment with latest session state (subscriptions kept in memory only)
+      // Update attachment with latest session state
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid
+        hasPaid: attachment.hasPaid,
+        subscriptions: Array.from(session.subscriptions.entries())
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -672,11 +739,11 @@ export class RelayWebSocket implements DurableObject {
       // Get or recreate session
       let session = this.sessions.get(attachment.sessionId);
       if (!session) {
-        // Recreate minimal session for broadcast - subscriptions must be re-established after hibernation
+        // Recreate minimal session for broadcast - subscriptions in memory only
         session = {
           id: attachment.sessionId,
           webSocket: ws,
-          subscriptions: new Map(), // Subscriptions are not persisted in attachment
+          subscriptions: new Map(attachment.subscriptions || []),
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
@@ -704,41 +771,31 @@ export class RelayWebSocket implements DurableObject {
 
   private async broadcastToOtherDOs(event: NostrEvent): Promise<void> {
     const broadcasts: Promise<Response>[] = [];
-    const MAX_SHARDS_PER_REGION = 50;
-    const REGIONS = ['WNAM', 'ENAM', 'WEUR', 'EEUR', 'APAC', 'OC', 'SAM', 'AFR', 'ME'];
+    let endpoints: string[] = [];
 
-    // Extract region and shard index from doName (e.g., relay-ENAM-5 → ENAM, 5)
-    const shardMatch = this.doName.match(/^relay-([A-Z]+)-(\d+)$/);
-    if (!shardMatch) {
-      console.warn(`Cannot extract region/shard from doName: ${this.doName}`);
-      return;
+    try {
+      // Try to get dynamic shard list from coordinator
+      if (this.env.COORDINATOR && this.doName !== 'unknown') {
+        const coordinatorId = this.env.COORDINATOR.idFromName('coordinator-global');
+        const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
+        const response = await coordinatorStub.fetch(new Request('https://internal/get-all-shards'));
+        const data = await response.json() as { shards: string[] };
+        endpoints = data.shards || [];
+      }
+    } catch (error) {
+      console.warn('Failed to fetch shard list from coordinator, falling back to static list:', error);
     }
 
-    const myRegion = shardMatch[1];
-    const myShardIndex = parseInt(shardMatch[2], 10);
-    const isHub = myShardIndex === 0;
+    // Fallback to static endpoints if coordinator unavailable
+    if (endpoints.length === 0) {
+      endpoints = RelayWebSocket.ALLOWED_ENDPOINTS;
+    }
 
-    if (isHub) {
-      // Hub: broadcast to all shards in my region + other regional hubs
-      console.log(`Hub ${this.doName} broadcasting event ${event.id}`);
+    // Broadcast to all endpoints except ourselves
+    for (const endpoint of endpoints) {
+      if (endpoint === this.doName) continue;
 
-      // Broadcast to all shards in my region (except myself)
-      for (let i = 1; i < MAX_SHARDS_PER_REGION; i++) {
-        const shardName = `relay-${myRegion}-${i}`;
-        broadcasts.push(this.sendToSpecificDO(shardName, event));
-      }
-
-      // Broadcast to other regional hubs (shard-0 of each region)
-      for (const region of REGIONS) {
-        if (region === myRegion) continue; // Skip my own region
-        const hubName = `relay-${region}-0`;
-        broadcasts.push(this.sendToSpecificDO(hubName, event));
-      }
-    } else {
-      // Non-hub shard: send only to regional hub
-      const hubName = `relay-${myRegion}-0`;
-      console.log(`Shard ${this.doName} forwarding event ${event.id} to hub ${hubName}`);
-      broadcasts.push(this.sendToSpecificDO(hubName, event));
+      broadcasts.push(this.sendToSpecificDO(endpoint, event));
     }
 
     // Execute broadcasts in parallel with timeout
