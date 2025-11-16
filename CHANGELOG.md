@@ -1,3 +1,8 @@
+## v7.5.16 - 2025-11-16
+
+Hotfix: added security headers to landing page
+Hotfix: removed DO subscription storage
+
 ## v7.5.15 - 2025-11-15
 
 Hotfix: increased max websocket connections per shard

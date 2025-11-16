@@ -34,13 +34,13 @@ export interface AutoScaleConfig {
 // Default configuration
 const DEFAULT_CONFIG: AutoScaleConfig = {
     minConnectionsPerShard: 1000,
-    maxConnectionsPerShard: 32000,   // Just under 32,768 limit
-    targetConnectionsPerShard: 28000, // 87.5% utilization target
+    maxConnectionsPerShard: 9000,
+    targetConnectionsPerShard: 8000,
 
-    scaleUpThreshold: 0.875,   // Scale at 28,000 connections
-    scaleDownThreshold: 0.2,   // Scale down at 6,400 connections
+    scaleUpThreshold: 0.9,
+    scaleDownThreshold: 0.2,
     minShardsPerRegion: 1,
-    maxShardsPerRegion: 10,    // ~320k connections per region
+    maxShardsPerRegion: 10,
 
     scaleUpCooldown: 60000,
     scaleDownCooldown: 300000,
@@ -77,7 +77,7 @@ export class CoordinatorDO implements DurableObject {
 
     // Response cache (reduces load during traffic bursts)
     private responseCache: Map<string, { data: any; timestamp: number }> = new Map();
-    private readonly RESPONSE_CACHE_TTL = 5000; // 5 seconds
+    private readonly RESPONSE_CACHE_TTL = 30000; // 30 seconds
 
     constructor(state: DurableObjectState, env: Env) {
         this.state = state;

@@ -26,7 +26,7 @@ bucket_name = "nostr-event-archive"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
-cpu_ms = 300000
+cpu_ms = 30000
 
 # Enable logs (on by default, but can disable)
 [observability.logs]
