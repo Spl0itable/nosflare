@@ -1,7 +1,3 @@
-## v7.5.14 - 2025-11-15
-
-Hotfix: correct shard failover
-
 ## v7.5.13 - 2025-11-15
 
 Hotfix: correct DO name/region shows in logs
