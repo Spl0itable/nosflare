@@ -8,6 +8,10 @@ main = "worker.js"
 name = "RELAY_WEBSOCKET"
 class_name = "RelayWebSocket"
 
+[[durable_objects.bindings]]
+name = "COORDINATOR"
+class_name = "CoordinatorDO"
+
 # D1 Database binding
 # Important! Change name and id settings to your own
 [[d1_databases]]
