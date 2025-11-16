@@ -1,3 +1,7 @@
+## v7.5.19 - 2025-11-16
+
+Hotfix: use stateless deterministic routing at the Worker level.
+
 ## v7.5.18 - 2025-11-16
 
 Hotfix: subscription attachment size

@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.18",
+  version: "7.5.19",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4411,6 +4411,7 @@ function serveLandingPage() {
     headers: {
       "Content-Type": "text/html;charset=UTF-8",
       "Cache-Control": "public, max-age=3600",
+      "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://nosflare.com; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:;",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     }
@@ -4820,29 +4821,13 @@ async function getOptimalDO(cf, env, url) {
     bestHint = countryToHint[country] || continentToHint[continent] || "enam";
   }
   const regionCode = bestHint.toUpperCase();
-  if (env.COORDINATOR) {
-    try {
-      const coordinatorId = env.COORDINATOR.idFromName("coordinator-global");
-      const coordinatorStub = env.COORDINATOR.get(coordinatorId);
-      const response = await coordinatorStub.fetch(
-        new Request(`https://internal/get-shard?region=${regionCode}&strategy=least-connections`)
-      );
-      if (response.ok) {
-        const data = await response.json();
-        const shardId2 = env.RELAY_WEBSOCKET.idFromName(data.shardId);
-        const stub2 = env.RELAY_WEBSOCKET.get(shardId2, { locationHint: data.locationHint });
-        console.log(`Coordinator routing: ${data.shardId} (region: ${regionCode})`);
-        return { stub: stub2, doName: data.shardId };
-      }
-    } catch (error) {
-      console.warn("Coordinator query failed, using fallback:", error);
-    }
-  }
-  const defaultShard = `relay-${regionCode}-0`;
-  console.log(`Fallback routing: ${defaultShard} (region: ${regionCode})`);
-  const shardId = env.RELAY_WEBSOCKET.idFromName(defaultShard);
+  const MAX_SHARDS_PER_REGION = 50;
+  const shardIndex = Math.floor(Math.random() * MAX_SHARDS_PER_REGION);
+  const shardName = `relay-${regionCode}-${shardIndex}`;
+  console.log(`Random shard selection: ${shardName} (region: ${regionCode}, hub: ${shardIndex === 0})`);
+  const shardId = env.RELAY_WEBSOCKET.idFromName(shardName);
   const stub = env.RELAY_WEBSOCKET.get(shardId, { locationHint: bestHint });
-  return { stub, doName: defaultShard };
+  return { stub, doName: shardName };
 }
 __name(getOptimalDO, "getOptimalDO");
 var relay_worker_default = {
@@ -4915,12 +4900,8 @@ var _RelayWebSocket = class _RelayWebSocket {
     this.paymentCache = /* @__PURE__ */ new Map();
     this.PAYMENT_CACHE_TTL = 3e5;
     // 5 minutes
-    // Auto-scaling metrics tracking
+    // Message tracking for metrics
     this.messageCount = 0;
-    this.lastMetricsReset = Date.now();
-    this.heartbeatInterval = 3e4;
-    // 30 seconds
-    this.lastHeartbeat = 0;
     this.state = state;
     this.sessions = /* @__PURE__ */ new Map();
     this.env = env;
@@ -5008,51 +4989,9 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
     }
   }
-  // Send heartbeat to coordinator with current metrics
-  async sendHeartbeatToCoordinator() {
-    try {
-      if (!this.env.COORDINATOR || this.doName === "unknown") {
-        return;
-      }
-      const now = Date.now();
-      if (now - this.lastHeartbeat < this.heartbeatInterval) {
-        return;
-      }
-      const regionMatch = this.doName.match(/relay-([A-Z]+)-/);
-      if (!regionMatch) {
-        return;
-      }
-      const region = regionMatch[1];
-      const elapsedSeconds = (now - this.lastMetricsReset) / 1e3;
-      const messagesPerSecond = elapsedSeconds > 0 ? Math.round(this.messageCount / elapsedSeconds) : 0;
-      const connectionCount = this.state.getWebSockets().length;
-      const coordinatorId = this.env.COORDINATOR.idFromName("coordinator-global");
-      const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
-      await coordinatorStub.fetch(new Request("https://internal/heartbeat", {
-        method: "POST",
-        body: JSON.stringify({
-          shardId: this.doName,
-          region,
-          connectionCount,
-          messagesPerSecond
-        })
-      }));
-      this.lastHeartbeat = now;
-      this.messageCount = 0;
-      this.lastMetricsReset = now;
-    } catch (error) {
-      console.error("Failed to send heartbeat to coordinator:", error);
-    }
-  }
-  // Track message for metrics
+  // Track message for metrics (simple counter for logging/debugging)
   trackMessage() {
     this.messageCount++;
-    const now = Date.now();
-    if (now - this.lastHeartbeat >= this.heartbeatInterval) {
-      this.sendHeartbeatToCoordinator().catch(
-        (err) => console.error("Heartbeat failed:", err)
-      );
-    }
   }
   async fetch(request) {
     const url = new URL(request.url);
@@ -5141,8 +5080,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid,
-        subscriptions: Array.from(session.subscriptions.entries())
+        hasPaid: attachment.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
     } catch (error) {
@@ -5394,7 +5332,8 @@ var _RelayWebSocket = class _RelayWebSocket {
         session = {
           id: attachment.sessionId,
           webSocket: ws,
-          subscriptions: new Map(attachment.subscriptions || []),
+          subscriptions: /* @__PURE__ */ new Map(),
+          // Subscriptions are not persisted in attachment
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
@@ -5419,24 +5358,31 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   async broadcastToOtherDOs(event) {
     const broadcasts = [];
-    let endpoints = [];
-    try {
-      if (this.env.COORDINATOR && this.doName !== "unknown") {
-        const coordinatorId = this.env.COORDINATOR.idFromName("coordinator-global");
-        const coordinatorStub = this.env.COORDINATOR.get(coordinatorId);
-        const response = await coordinatorStub.fetch(new Request("https://internal/get-all-shards"));
-        const data = await response.json();
-        endpoints = data.shards || [];
+    const MAX_SHARDS_PER_REGION = 50;
+    const REGIONS = ["WNAM", "ENAM", "WEUR", "EEUR", "APAC", "OC", "SAM", "AFR", "ME"];
+    const shardMatch = this.doName.match(/^relay-([A-Z]+)-(\d+)$/);
+    if (!shardMatch) {
+      console.warn(`Cannot extract region/shard from doName: ${this.doName}`);
+      return;
+    }
+    const myRegion = shardMatch[1];
+    const myShardIndex = parseInt(shardMatch[2], 10);
+    const isHub = myShardIndex === 0;
+    if (isHub) {
+      console.log(`Hub ${this.doName} broadcasting event ${event.id}`);
+      for (let i = 1; i < MAX_SHARDS_PER_REGION; i++) {
+        const shardName = `relay-${myRegion}-${i}`;
+        broadcasts.push(this.sendToSpecificDO(shardName, event));
       }
-    } catch (error) {
-      console.warn("Failed to fetch shard list from coordinator, falling back to static list:", error);
-    }
-    if (endpoints.length === 0) {
-      endpoints = _RelayWebSocket.ALLOWED_ENDPOINTS;
-    }
-    for (const endpoint of endpoints) {
-      if (endpoint === this.doName) continue;
-      broadcasts.push(this.sendToSpecificDO(endpoint, event));
+      for (const region of REGIONS) {
+        if (region === myRegion) continue;
+        const hubName = `relay-${region}-0`;
+        broadcasts.push(this.sendToSpecificDO(hubName, event));
+      }
+    } else {
+      const hubName = `relay-${myRegion}-0`;
+      console.log(`Shard ${this.doName} forwarding event ${event.id} to hub ${hubName}`);
+      broadcasts.push(this.sendToSpecificDO(hubName, event));
     }
     const results = await Promise.allSettled(
       broadcasts.map((p) => Promise.race([
@@ -5587,376 +5533,7 @@ _RelayWebSocket.ENDPOINT_HINTS = {
   // ME redirects to EEUR
 };
 var RelayWebSocket = _RelayWebSocket;
-
-// src/coordinator.ts
-var DEFAULT_CONFIG = {
-  minConnectionsPerShard: 1e3,
-  maxConnectionsPerShard: 9e3,
-  targetConnectionsPerShard: 8e3,
-  scaleUpThreshold: 0.8,
-  scaleDownThreshold: 0.2,
-  minShardsPerRegion: 1,
-  maxShardsPerRegion: Infinity,
-  scaleUpCooldown: 6e4,
-  scaleDownCooldown: 3e5,
-  heartbeatTimeout: 12e4
-};
-var REGIONS = ["WNAM", "ENAM", "WEUR", "EEUR", "APAC", "OC", "SAM", "AFR", "ME"];
-var REGION_HINTS = {
-  "WNAM": "wnam",
-  "ENAM": "enam",
-  "WEUR": "weur",
-  "EEUR": "eeur",
-  "APAC": "apac",
-  "OC": "oc",
-  "SAM": "enam",
-  // SAM redirects to ENAM
-  "AFR": "weur",
-  // AFR redirects to WEUR
-  "ME": "eeur"
-  // ME redirects to EEUR
-};
-var _CoordinatorDO = class _CoordinatorDO {
-  // 30 seconds
-  constructor(state, env) {
-    // In-memory cache of shard metrics
-    this.shardMetrics = /* @__PURE__ */ new Map();
-    // Last scaling action timestamp per region
-    this.lastScaleUp = /* @__PURE__ */ new Map();
-    this.lastScaleDown = /* @__PURE__ */ new Map();
-    // Response cache (reduces load during traffic bursts)
-    this.responseCache = /* @__PURE__ */ new Map();
-    this.RESPONSE_CACHE_TTL = 3e4;
-    this.state = state;
-    this.env = env;
-    this.config = DEFAULT_CONFIG;
-    this.state.blockConcurrencyWhile(async () => {
-      await this.loadState();
-    });
-    this.scheduleHealthCheck();
-  }
-  async fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    try {
-      switch (path) {
-        case "/heartbeat":
-          return await this.handleHeartbeat(request);
-        case "/get-shard":
-          return await this.handleGetShard(request);
-        case "/list-shards":
-          return await this.handleListShards(request);
-        case "/get-all-shards":
-          return await this.handleGetAllShards();
-        case "/metrics":
-          return await this.handleMetrics();
-        case "/config":
-          return await this.handleConfig(request);
-        case "/health":
-          return new Response(JSON.stringify({ status: "healthy" }), {
-            headers: { "Content-Type": "application/json" }
-          });
-        default:
-          return new Response("Not Found", { status: 404 });
-      }
-    } catch (error) {
-      console.error("Coordinator error:", error);
-      return new Response(JSON.stringify({ error: error.message }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-  }
-  // Handle heartbeat from relay shards
-  async handleHeartbeat(request) {
-    const data = await request.json();
-    const metrics = {
-      ...data,
-      lastHeartbeat: Date.now(),
-      status: "active"
-    };
-    this.shardMetrics.set(data.shardId, metrics);
-    await this.state.storage.put(`shard:${data.shardId}`, metrics);
-    await this.evaluateAutoScaling(data.region);
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  // Get optimal shard for a region
-  async handleGetShard(request) {
-    const url = new URL(request.url);
-    const region = url.searchParams.get("region");
-    const strategy = url.searchParams.get("strategy") || "least-connections";
-    const sessionHash = url.searchParams.get("sessionHash");
-    if (!region || !REGIONS.includes(region)) {
-      return new Response(JSON.stringify({ error: "Invalid region" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    const shard = await this.selectShard(region, strategy, sessionHash);
-    return new Response(JSON.stringify(shard), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  // List all active shards in a region (with caching)
-  async handleListShards(request) {
-    const url = new URL(request.url);
-    const region = url.searchParams.get("region");
-    if (!region) {
-      return new Response(JSON.stringify({ error: "Missing region" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    const cacheKey = `list-shards:${region}`;
-    const cached = this.responseCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && now - cached.timestamp < this.RESPONSE_CACHE_TTL) {
-      return new Response(JSON.stringify(cached.data), {
-        headers: {
-          "Content-Type": "application/json",
-          "X-Cache": "HIT"
-        }
-      });
-    }
-    const shards = await this.getRegionShards(region);
-    const data = { shards };
-    this.responseCache.set(cacheKey, { data, timestamp: now });
-    return new Response(JSON.stringify(data), {
-      headers: {
-        "Content-Type": "application/json",
-        "X-Cache": "MISS"
-      }
-    });
-  }
-  // Get all active shards across all regions (for broadcasting) - with caching
-  async handleGetAllShards() {
-    const cacheKey = "get-all-shards";
-    const cached = this.responseCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && now - cached.timestamp < this.RESPONSE_CACHE_TTL) {
-      return new Response(JSON.stringify(cached.data), {
-        headers: {
-          "Content-Type": "application/json",
-          "X-Cache": "HIT"
-        }
-      });
-    }
-    const allShards = [];
-    for (const region of REGIONS) {
-      const shards = await this.getRegionShards(region);
-      allShards.push(...shards.map((s) => s.shardId));
-    }
-    const data = { shards: allShards };
-    this.responseCache.set(cacheKey, { data, timestamp: now });
-    return new Response(JSON.stringify(data), {
-      headers: {
-        "Content-Type": "application/json",
-        "X-Cache": "MISS"
-      }
-    });
-  }
-  // Get coordinator metrics
-  async handleMetrics() {
-    const metrics = {
-      totalShards: this.shardMetrics.size,
-      totalConnections: Array.from(this.shardMetrics.values()).reduce((sum, m) => sum + m.connectionCount, 0),
-      byRegion: {}
-    };
-    for (const region of REGIONS) {
-      const shards = await this.getRegionShards(region);
-      metrics.byRegion[region] = {
-        shardCount: shards.length,
-        totalConnections: shards.reduce((sum, s) => sum + s.connectionCount, 0),
-        avgConnectionsPerShard: shards.length > 0 ? Math.round(shards.reduce((sum, s) => sum + s.connectionCount, 0) / shards.length) : 0
-      };
-    }
-    return new Response(JSON.stringify(metrics), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  // Update configuration
-  async handleConfig(request) {
-    if (request.method === "GET") {
-      return new Response(JSON.stringify(this.config), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    if (request.method === "POST") {
-      const newConfig = await request.json();
-      this.config = { ...this.config, ...newConfig };
-      await this.state.storage.put("config", this.config);
-      return new Response(JSON.stringify(this.config), {
-        headers: { "Content-Type": "application/json" }
-      });
-    }
-    return new Response("Method not allowed", { status: 405 });
-  }
-  // Select optimal shard for a region
-  async selectShard(region, strategy, sessionHash) {
-    const shards = await this.getRegionShards(region);
-    if (shards.length === 0) {
-      const shardId = `relay-${region}-0`;
-      await this.initializeShard(shardId, region);
-      return { shardId, locationHint: REGION_HINTS[region] || "auto" };
-    }
-    let selectedShard;
-    switch (strategy) {
-      case "consistent-hash":
-        if (sessionHash) {
-          const hash2 = this.hashString(sessionHash);
-          const index = hash2 % shards.length;
-          selectedShard = shards[index];
-        } else {
-          selectedShard = shards.reduce(
-            (min, s) => s.connectionCount < min.connectionCount ? s : min
-          );
-        }
-        break;
-      case "round-robin":
-        const rrIndex = Date.now() % shards.length;
-        selectedShard = shards[rrIndex];
-        break;
-      case "least-connections":
-      default:
-        selectedShard = shards.reduce(
-          (min, s) => s.connectionCount < min.connectionCount ? s : min
-        );
-        break;
-    }
-    return {
-      shardId: selectedShard.shardId,
-      locationHint: REGION_HINTS[region] || "auto"
-    };
-  }
-  // Get all active shards for a region
-  async getRegionShards(region) {
-    const now = Date.now();
-    const activeShards = [];
-    for (const [shardId, metrics] of this.shardMetrics.entries()) {
-      if (metrics.region === region && metrics.status === "active" && now - metrics.lastHeartbeat < this.config.heartbeatTimeout) {
-        activeShards.push(metrics);
-      }
-    }
-    return activeShards.sort((a, b) => a.shardId.localeCompare(b.shardId));
-  }
-  // Evaluate if auto-scaling is needed for a region
-  async evaluateAutoScaling(region) {
-    const shards = await this.getRegionShards(region);
-    if (shards.length === 0) {
-      await this.scaleUp(region);
-      return;
-    }
-    const totalConnections = shards.reduce((sum, s) => sum + s.connectionCount, 0);
-    const avgConnectionsPerShard = totalConnections / shards.length;
-    const maxConnections = Math.max(...shards.map((s) => s.connectionCount));
-    const scaleUpNeeded = maxConnections >= this.config.targetConnectionsPerShard * this.config.scaleUpThreshold && shards.length < this.config.maxShardsPerRegion;
-    const scaleDownNeeded = avgConnectionsPerShard <= this.config.minConnectionsPerShard * this.config.scaleDownThreshold && shards.length > this.config.minShardsPerRegion;
-    const now = Date.now();
-    if (scaleUpNeeded) {
-      const lastScaleUp = this.lastScaleUp.get(region) || 0;
-      if (now - lastScaleUp > this.config.scaleUpCooldown) {
-        console.log(`Auto-scaling UP region ${region}: ${shards.length} \u2192 ${shards.length + 1} shards (max connections: ${maxConnections})`);
-        await this.scaleUp(region);
-        this.lastScaleUp.set(region, now);
-      }
-    } else if (scaleDownNeeded) {
-      const lastScaleDown = this.lastScaleDown.get(region) || 0;
-      if (now - lastScaleDown > this.config.scaleDownCooldown) {
-        console.log(`Auto-scaling DOWN region ${region}: ${shards.length} \u2192 ${shards.length - 1} shards (avg connections: ${avgConnectionsPerShard})`);
-        await this.scaleDown(region);
-        this.lastScaleDown.set(region, now);
-      }
-    }
-  }
-  // Scale up: add new shard to region
-  async scaleUp(region) {
-    const shards = await this.getRegionShards(region);
-    const nextIndex = shards.length;
-    const newShardId = `relay-${region}-${nextIndex}`;
-    await this.initializeShard(newShardId, region);
-    console.log(`Scaled up ${region}: created shard ${newShardId} (total shards: ${nextIndex + 1})`);
-  }
-  // Scale down: remove least-loaded shard from region
-  async scaleDown(region) {
-    const shards = await this.getRegionShards(region);
-    if (shards.length <= this.config.minShardsPerRegion) {
-      console.warn(`Cannot scale down ${region}: already at min shards (${this.config.minShardsPerRegion})`);
-      return;
-    }
-    const shardToRemove = shards.reduce(
-      (min, s) => s.connectionCount < min.connectionCount ? s : min
-    );
-    shardToRemove.status = "draining";
-    this.shardMetrics.set(shardToRemove.shardId, shardToRemove);
-    await this.state.storage.put(`shard:${shardToRemove.shardId}`, shardToRemove);
-    console.log(`Scaled down ${region}: draining shard ${shardToRemove.shardId} (${shardToRemove.connectionCount} connections)`);
-  }
-  // Initialize a new shard (create metadata)
-  async initializeShard(shardId, region) {
-    const metrics = {
-      shardId,
-      region,
-      connectionCount: 0,
-      messagesPerSecond: 0,
-      lastHeartbeat: Date.now(),
-      status: "active"
-    };
-    this.shardMetrics.set(shardId, metrics);
-    await this.state.storage.put(`shard:${shardId}`, metrics);
-  }
-  // Load state from storage on initialization
-  async loadState() {
-    const savedConfig = await this.state.storage.get("config");
-    if (savedConfig) {
-      this.config = savedConfig;
-    }
-    const shardKeys = await this.state.storage.list({ prefix: "shard:" });
-    for (const [key, value] of shardKeys.entries()) {
-      const metrics = value;
-      this.shardMetrics.set(metrics.shardId, metrics);
-    }
-    console.log(`Coordinator loaded: ${this.shardMetrics.size} shards`);
-  }
-  // Schedule periodic health checks using DO alarms
-  scheduleHealthCheck() {
-    const checkInterval = setInterval(() => {
-      this.performHealthCheck();
-    }, 3e4);
-  }
-  // Remove dead shards
-  async performHealthCheck() {
-    const now = Date.now();
-    const deadShards = [];
-    for (const [shardId, metrics] of this.shardMetrics.entries()) {
-      if (now - metrics.lastHeartbeat > this.config.heartbeatTimeout) {
-        deadShards.push(shardId);
-      }
-    }
-    if (deadShards.length > 0) {
-      console.log(`Health check: removing ${deadShards.length} dead shards`);
-      for (const shardId of deadShards) {
-        this.shardMetrics.delete(shardId);
-        await this.state.storage.delete(`shard:${shardId}`);
-      }
-    }
-  }
-  // Simple string hash function for consistent hashing
-  hashString(str) {
-    let hash2 = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash2 = (hash2 << 5) - hash2 + char;
-      hash2 = hash2 & hash2;
-    }
-    return Math.abs(hash2);
-  }
-};
-__name(_CoordinatorDO, "CoordinatorDO");
-var CoordinatorDO = _CoordinatorDO;
 export {
-  CoordinatorDO,
   RelayWebSocket,
   relay_worker_default as default
 };
