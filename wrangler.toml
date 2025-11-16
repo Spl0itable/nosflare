@@ -30,7 +30,7 @@ enabled = true
 
 # Durable Object migration with SQLite storage backend
 [[migrations]]
-tag = "v3"
+tag = "v4"
 new_sqlite_classes = ["RelayWebSocket"]
 
 # Scheduled worker for archiving
