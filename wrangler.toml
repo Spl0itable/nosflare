@@ -23,7 +23,7 @@ bucket_name = "nostr-event-archive"
 # KV namespace binding for pending events (write buffer)
 [[kv_namespaces]]
 binding = "PENDING_EVENTS"
-id = "pending_events_kv"
+id = "d71e90a69a9845c49dae119b13873aa6"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
