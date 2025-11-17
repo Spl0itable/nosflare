@@ -21,6 +21,7 @@ binding = "EVENT_ARCHIVE"
 bucket_name = "nostr-event-archive"
 
 # KV namespace binding for pending events (write buffer)
+# Important! Change name and id settings to your own
 [[kv_namespaces]]
 binding = "PENDING_EVENTS"
 id = "d71e90a69a9845c49dae119b13873aa6"
