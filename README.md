@@ -14,6 +14,8 @@ This relay implementation also uses a multi-regional [Durable Objects](https://d
 
 It also uses the [Websocket Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocket-hibernation-api) in order to reduce costs for billable Duration (GB-s) charges with Durable Objects so the billable usage is not incurred during periods of inactivity, but where clients haven't disconnected.
 
+Additionally, the relay implementation uses [Queues](https://developers.cloudflare.com/queues/) to handle saving EVENT messages, which is capable of sustaining message bursts up to 5000/sec. Each message is then saved to the D1 database in batches of 100 messages.
+
 ![Nosflare diagram](images/diagram.png)
 
 ## One-click Deploy
