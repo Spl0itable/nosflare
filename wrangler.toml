@@ -20,11 +20,17 @@ database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 binding = "EVENT_ARCHIVE"
 bucket_name = "nostr-event-archive"
 
-# KV namespace binding for pending events (write buffer)
-# Important! Change name and id settings to your own
-[[kv_namespaces]]
-binding = "PENDING_EVENTS"
-id = "d71e90a69a9845c49dae119b13873aa6"
+# Queue binding for event processing
+[[queues.producers]]
+binding = "EVENT_QUEUE"
+queue = "event-processing-queue"
+
+[[queues.consumers]]
+queue = "event-processing-queue"
+max_batch_size = 100
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "event-dlq"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
@@ -39,6 +45,6 @@ enabled = true
 tag = "v4"
 new_sqlite_classes = ["RelayWebSocket"]
 
-# Scheduled worker for KV batching and archiving
+# Scheduled cron for event archiving
 [triggers]
 crons = ["* * * * *"]

@@ -19,7 +19,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.15",
+  version: "7.5.16",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -155,12 +155,6 @@ export const excludedRateLimitKinds = new Set<number>([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
-
-// KV-first write strategy settings
-export const KV_FIRST_WRITE_ENABLED = true; // Set to true to use KV as write buffer before D1
-export const KV_BATCH_SIZE = 100; // Number of events to batch process from KV to D1
-export const KV_BATCH_TRANSACTION_SIZE = 50; // Number of events per D1 transaction
-export const KV_TTL_SECONDS = 3600; // 1 hour TTL for KV entries (safety fallback)
 
 // *************************** //
 // ** END EDITABLE SETTINGS ** //

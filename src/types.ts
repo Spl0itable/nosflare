@@ -51,7 +51,7 @@ export interface QueryResult {
   bookmark: string | null;
 }
 
-// KV pending event metadata
+// Queue event metadata
 export interface PendingEventMetadata {
   event: NostrEvent;
   timestamp: number;
@@ -69,7 +69,7 @@ export interface Env {
   RELAY_DATABASE: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
   EVENT_ARCHIVE: R2Bucket;
-  PENDING_EVENTS: KVNamespace;
+  EVENT_QUEUE: Queue<PendingEventMetadata>;
 }
 
 // Durable Object types

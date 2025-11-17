@@ -1,3 +1,7 @@
+## v7.6.15 - 2025-11-17
+
+New: uses Queues for all event messages
+
 ## v7.5.15 - 2025-11-17
 
 Hotfix: cache published event IDs to prevent duplicates
