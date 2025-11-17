@@ -1,3 +1,7 @@
+## v7.5.13 - 2025-11-17
+
+New: uses KV write buffer
+
 ## v7.4.13 - 2025-11-16
 
 Hotfix: added alarms to shutdown DOs

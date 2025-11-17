@@ -51,11 +51,25 @@ export interface QueryResult {
   bookmark: string | null;
 }
 
+// KV pending event metadata
+export interface PendingEventMetadata {
+  event: NostrEvent;
+  timestamp: number;
+  tags: Array<{ name: string; value: string }>;
+  eventTagsCache: {
+    tag_p: string | null;
+    tag_e: string | null;
+    tag_a: string | null;
+  };
+  contentHash: string | null;
+}
+
 // Worker environment type
 export interface Env {
   RELAY_DATABASE: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
   EVENT_ARCHIVE: R2Bucket;
+  PENDING_EVENTS: KVNamespace;
 }
 
 // Durable Object types

@@ -1,5 +1,5 @@
 import { schnorr } from "@noble/curves/secp256k1";
-import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response } from './types';
+import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response, PendingEventMetadata } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
@@ -16,6 +16,10 @@ const {
   checkValidNip05,
   blockedNip05Domains,
   allowedNip05Domains,
+  KV_FIRST_WRITE_ENABLED,
+  KV_BATCH_SIZE,
+  KV_BATCH_TRANSACTION_SIZE,
+  KV_TTL_SECONDS,
 } = config;
 
 // Archive configuration constants
@@ -500,12 +504,104 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
     }
 
     // Save event
-    const saveResult = await saveEventToD1(event, env);
+    const saveResult = KV_FIRST_WRITE_ENABLED
+      ? await saveEventToKV(event, env)
+      : await saveEventToD1(event, env);
     return saveResult;
 
   } catch (error: any) {
     console.error(`Error processing event: ${error.message}`);
     return { success: false, message: `error: ${error.message}` };
+  }
+}
+
+// Save event to KV
+async function saveEventToKV(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
+  try {
+    // Check for duplicate content (only if anti-spam is enabled)
+    // We still need to check D1 for existing duplicates and KV for pending duplicates
+    if (shouldCheckForDuplicates(event.kind)) {
+      const contentHash = await hashContent(event);
+
+      // Check D1 first for existing duplicates
+      const session = env.RELAY_DATABASE.withSession('first-primary');
+      const duplicateCheck = enableGlobalDuplicateCheck
+        ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first()
+        : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
+
+      if (duplicateCheck) {
+        return { success: false, message: "duplicate: content already exists" };
+      }
+
+      // Check KV for pending duplicates
+      const pendingDuplicateKey = `duplicate:${contentHash}`;
+      const pendingDuplicate = await env.PENDING_EVENTS.get(pendingDuplicateKey);
+      if (pendingDuplicate) {
+        return { success: false, message: "duplicate: content pending in write buffer" };
+      }
+
+      // Store duplicate marker in KV
+      await env.PENDING_EVENTS.put(pendingDuplicateKey, event.id, {
+        expirationTtl: KV_TTL_SECONDS,
+      });
+    }
+
+    // Process tags and extract common tag values for cache
+    const tagInserts = [];
+    let tagP = null, tagE = null, tagA = null;
+
+    for (const tag of event.tags) {
+      if (tag[0] && tag[1]) {
+        tagInserts.push({ name: tag[0], value: tag[1] });
+
+        // Capture common tags for cache
+        if (tag[0] === 'p' && !tagP) tagP = tag[1];
+        if (tag[0] === 'e' && !tagE) tagE = tag[1];
+        if (tag[0] === 'a' && !tagA) tagA = tag[1];
+      }
+    }
+
+    // Create content hash if needed
+    const contentHash = shouldCheckForDuplicates(event.kind) ? await hashContent(event) : null;
+
+    // Create metadata structure
+    const metadata: PendingEventMetadata = {
+      event,
+      timestamp: Date.now(),
+      tags: tagInserts,
+      eventTagsCache: {
+        tag_p: tagP,
+        tag_e: tagE,
+        tag_a: tagA,
+      },
+      contentHash,
+    };
+
+    // Store event in KV with two keys for different access patterns
+    const eventKey = `event:${event.id}`;
+    const pendingKey = `pending:${metadata.timestamp}:${event.id}`;
+
+    // Store the full metadata
+    const metadataJson = JSON.stringify(metadata);
+
+    await Promise.all([
+      // Store by event ID for direct lookups
+      env.PENDING_EVENTS.put(eventKey, metadataJson, {
+        expirationTtl: KV_TTL_SECONDS,
+      }),
+      // Store in pending queue for batch processing
+      env.PENDING_EVENTS.put(pendingKey, event.id, {
+        expirationTtl: KV_TTL_SECONDS,
+      }),
+    ]);
+
+    console.log(`Event ${event.id} saved to KV write buffer.`);
+    return { success: true, message: "Event received successfully for processing" };
+
+  } catch (error: any) {
+    console.error(`Error saving event to KV: ${error.message}`);
+    console.error(`Event details: ID=${event.id}, Tags count=${event.tags.length}`);
+    return { success: false, message: "error: could not save event to write buffer" };
   }
 }
 
@@ -607,45 +703,90 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
 
   for (const eventId of deletedEventIds) {
     try {
-      // First check if the event exists and belongs to the requesting pubkey
+      // Check if the event exists in D1
       const existing = await session.prepare(
         "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
       ).bind(eventId).first();
 
-      if (!existing) {
-        console.warn(`Event ${eventId} not found. Nothing to delete.`);
+      // Also check if the event exists in KV (if KV-first is enabled)
+      let kvMetadata: PendingEventMetadata | null = null;
+      if (KV_FIRST_WRITE_ENABLED) {
+        const kvData = await env.PENDING_EVENTS.get(`event:${eventId}`, 'text');
+        if (kvData) {
+          try {
+            kvMetadata = JSON.parse(kvData) as PendingEventMetadata;
+          } catch (parseError) {
+            console.error(`Failed to parse KV metadata for event ${eventId}:`, parseError);
+          }
+        }
+      }
+
+      // If event doesn't exist in either location, skip
+      if (!existing && !kvMetadata) {
+        console.warn(`Event ${eventId} not found in D1 or KV. Nothing to delete.`);
         continue;
       }
 
-      if (existing.pubkey !== event.pubkey) {
+      // Check ownership - use D1 pubkey if available, otherwise KV
+      const eventPubkey = existing ? existing.pubkey : kvMetadata!.event.pubkey;
+      if (eventPubkey !== event.pubkey) {
         console.warn(`Event ${eventId} does not belong to pubkey ${event.pubkey}. Skipping deletion.`);
         errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
         continue;
       }
 
-      // Delete associated tags first (due to foreign key constraint)
-      await session.prepare(
-        "DELETE FROM tags WHERE event_id = ?"
-      ).bind(eventId).run();
+      // Delete from D1 if it exists there
+      if (existing) {
+        // Delete associated tags first (due to foreign key constraint)
+        await session.prepare(
+          "DELETE FROM tags WHERE event_id = ?"
+        ).bind(eventId).run();
 
-      // Delete from content_hashes if exists
-      await session.prepare(
-        "DELETE FROM content_hashes WHERE event_id = ?"
-      ).bind(eventId).run();
+        // Delete from content_hashes if exists
+        await session.prepare(
+          "DELETE FROM content_hashes WHERE event_id = ?"
+        ).bind(eventId).run();
 
-      // Delete from event_tags_cache
-      await session.prepare(
-        "DELETE FROM event_tags_cache WHERE event_id = ?"
-      ).bind(eventId).run();
+        // Delete from event_tags_cache
+        await session.prepare(
+          "DELETE FROM event_tags_cache WHERE event_id = ?"
+        ).bind(eventId).run();
 
-      // Now delete the event
-      const result = await session.prepare(
-        "DELETE FROM events WHERE id = ?"
-      ).bind(eventId).run();
+        // Now delete the event
+        const result = await session.prepare(
+          "DELETE FROM events WHERE id = ?"
+        ).bind(eventId).run();
 
-      if (result.meta.changes > 0) {
-        console.log(`Event ${eventId} deleted successfully.`);
-        deletedCount++;
+        if (result.meta.changes > 0) {
+          console.log(`Event ${eventId} deleted from D1.`);
+          deletedCount++;
+        }
+      }
+
+      // Delete from KV if it exists there
+      if (kvMetadata) {
+        // Find the pending key by listing with a pattern
+        const pendingKeys = await env.PENDING_EVENTS.list({ prefix: `pending:` });
+        const pendingKey = pendingKeys.keys.find(key => key.name.endsWith(`:${eventId}`));
+
+        const deletePromises = [
+          env.PENDING_EVENTS.delete(`event:${eventId}`)
+        ];
+
+        if (pendingKey) {
+          deletePromises.push(env.PENDING_EVENTS.delete(pendingKey.name));
+        }
+
+        // Also delete duplicate marker if it exists
+        if (kvMetadata.contentHash) {
+          deletePromises.push(env.PENDING_EVENTS.delete(`duplicate:${kvMetadata.contentHash}`));
+        }
+
+        await Promise.all(deletePromises);
+        console.log(`Event ${eventId} deleted from KV.`);
+        if (!existing) {
+          deletedCount++; // Only increment if we didn't already count it from D1
+        }
       }
     } catch (error) {
       console.error(`Error deleting event ${eventId}:`, error);
@@ -653,8 +794,10 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
     }
   }
 
-  // Save the deletion event itself
-  await saveEventToD1(event, env);
+  // Save the deletion event itself (use appropriate save method based on KV-first setting)
+  const saveResult = KV_FIRST_WRITE_ENABLED
+    ? await saveEventToKV(event, env)
+    : await saveEventToD1(event, env);
 
   if (errors.length > 0) {
     return { success: false, message: errors[0] };
@@ -1137,6 +1280,178 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
   } catch (error: any) {
     console.error(`Error querying events: ${error.message}`);
     return { events: [], bookmark: null };
+  }
+}
+
+// Batch process pending events from KV to D1
+async function batchEventsFromKVToD1(env: Env): Promise<void> {
+  if (!KV_FIRST_WRITE_ENABLED) {
+    console.log('KV-first write strategy is disabled, skipping batch processing');
+    return;
+  }
+
+  console.log('Starting KV to D1 batch processing...');
+
+  try {
+    // List pending events from KV
+    const listResult = await env.PENDING_EVENTS.list({ prefix: 'pending:', limit: KV_BATCH_SIZE });
+
+    if (listResult.keys.length === 0) {
+      console.log('No pending events to process');
+      return;
+    }
+
+    console.log(`Found ${listResult.keys.length} pending events to process`);
+
+    // Retrieve all event metadata in parallel
+    const eventIds = listResult.keys.map(key => key.name.split(':')[2]);
+    const metadataPromises = eventIds.map(eventId =>
+      env.PENDING_EVENTS.get(`event:${eventId}`, 'text')
+    );
+
+    const metadataResults = await Promise.all(metadataPromises);
+
+    // Parse metadata and filter out nulls (events that may have been deleted)
+    const pendingEvents: PendingEventMetadata[] = [];
+    for (let i = 0; i < metadataResults.length; i++) {
+      const metadataJson = metadataResults[i];
+      if (metadataJson) {
+        try {
+          const metadata = JSON.parse(metadataJson) as PendingEventMetadata;
+          pendingEvents.push(metadata);
+        } catch (parseError) {
+          console.error(`Failed to parse metadata for event ${eventIds[i]}:`, parseError);
+        }
+      }
+    }
+
+    if (pendingEvents.length === 0) {
+      console.log('No valid pending events after parsing metadata');
+      return;
+    }
+
+    console.log(`Processing ${pendingEvents.length} valid pending events`);
+
+    // Process events in smaller transaction batches
+    const session = env.RELAY_DATABASE.withSession('first-primary');
+    const processedEventIds: string[] = [];
+    const failedEventIds: string[] = [];
+
+    for (let i = 0; i < pendingEvents.length; i += KV_BATCH_TRANSACTION_SIZE) {
+      const batch = pendingEvents.slice(i, i + KV_BATCH_TRANSACTION_SIZE);
+      console.log(`Processing batch ${Math.floor(i / KV_BATCH_TRANSACTION_SIZE) + 1} with ${batch.length} events`);
+
+      try {
+        // Process each event in the batch
+        for (const metadata of batch) {
+          const event = metadata.event;
+
+          try {
+            // Insert the main event
+            await session.prepare(`
+              INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(id) DO NOTHING
+            `).bind(event.id, event.pubkey, event.created_at, event.kind, JSON.stringify(event.tags), event.content, event.sig).run();
+
+            // Insert tags in chunks
+            if (metadata.tags.length > 0) {
+              for (let j = 0; j < metadata.tags.length; j += 50) {
+                const tagChunk = metadata.tags.slice(j, j + 50);
+                const tagBatch = tagChunk.map(t =>
+                  session.prepare(`
+                    INSERT INTO tags (event_id, tag_name, tag_value)
+                    VALUES (?, ?, ?)
+                  `).bind(event.id, t.name, t.value)
+                );
+
+                if (tagBatch.length > 0) {
+                  await session.batch(tagBatch);
+                }
+              }
+            }
+
+            // Update event tags cache for common tags
+            if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
+              await session.prepare(`
+                INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                  tag_p = excluded.tag_p,
+                  tag_e = excluded.tag_e,
+                  tag_a = excluded.tag_a
+              `).bind(
+                event.id,
+                event.pubkey,
+                event.kind,
+                event.created_at,
+                metadata.eventTagsCache.tag_p,
+                metadata.eventTagsCache.tag_e,
+                metadata.eventTagsCache.tag_a
+              ).run();
+            }
+
+            // Insert content hash if present
+            if (metadata.contentHash) {
+              await session.prepare(`
+                INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(hash) DO NOTHING
+              `).bind(metadata.contentHash, event.id, event.pubkey, event.created_at).run();
+            }
+
+            processedEventIds.push(event.id);
+            console.log(`Successfully processed event ${event.id}`);
+
+          } catch (eventError: any) {
+            console.error(`Failed to process event ${event.id}:`, eventError.message);
+            failedEventIds.push(event.id);
+          }
+        }
+
+      } catch (batchError: any) {
+        console.error(`Failed to process batch:`, batchError.message);
+        // Mark all events in this batch as failed
+        batch.forEach(metadata => {
+          if (!processedEventIds.includes(metadata.event.id)) {
+            failedEventIds.push(metadata.event.id);
+          }
+        });
+      }
+    }
+
+    console.log(`Processed ${processedEventIds.length} events successfully, ${failedEventIds.length} failed`);
+
+    // Delete successfully processed events from KV
+    if (processedEventIds.length > 0) {
+      const deletePromises: Promise<void>[] = [];
+
+      for (const eventId of processedEventIds) {
+        // Find the original timestamp from the pending key
+        const pendingKey = listResult.keys.find(key => key.name.endsWith(`:${eventId}`));
+        if (pendingKey) {
+          deletePromises.push(
+            env.PENDING_EVENTS.delete(pendingKey.name),
+            env.PENDING_EVENTS.delete(`event:${eventId}`)
+          );
+
+          // Also delete duplicate marker if it exists
+          const metadata = pendingEvents.find(m => m.event.id === eventId);
+          if (metadata?.contentHash) {
+            deletePromises.push(env.PENDING_EVENTS.delete(`duplicate:${metadata.contentHash}`));
+          }
+        }
+      }
+
+      await Promise.all(deletePromises);
+      console.log(`Deleted ${processedEventIds.length} events from KV`);
+    }
+
+    console.log('KV to D1 batch processing completed');
+
+  } catch (error: any) {
+    console.error(`Error in batch processing: ${error.message}`);
+    throw error;
   }
 }
 
@@ -1919,7 +2234,7 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
     }
   }
 
-  // Merge results
+  // Merge results from D1 and archive
   const allEvents = new Map<string, NostrEvent>();
 
   // Add D1 events
@@ -2670,14 +2985,27 @@ export default {
     console.log('Running scheduled maintenance...');
 
     try {
-      // Run archive process
-      await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
-      console.log('Archive process completed successfully');
+      // Run KV to D1 batch processing every minute
+      if (KV_FIRST_WRITE_ENABLED) {
+        console.log('Starting KV to D1 batch processing...');
+        await batchEventsFromKVToD1(env);
+        console.log('KV to D1 batch processing completed');
+      }
 
-      // Use PRAGMA optimize - much more efficient
-      const session = env.RELAY_DATABASE.withSession('first-primary');
-      await session.prepare('PRAGMA optimize').run();
-      console.log('Database optimization completed');
+      // Run archive process and database optimization every 30 minutes
+      // Check if current minute is divisible by 30 (0, 30)
+      const currentMinute = new Date().getMinutes();
+      if (currentMinute % 30 === 0) {
+        console.log('Running archive and optimization (30-minute interval)...');
+
+        await archiveOldEvents(env.RELAY_DATABASE, env.EVENT_ARCHIVE);
+        console.log('Archive process completed successfully');
+
+        // Use PRAGMA optimize - much more efficient
+        const session = env.RELAY_DATABASE.withSession('first-primary');
+        await session.prepare('PRAGMA optimize').run();
+        console.log('Database optimization completed');
+      }
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
     }

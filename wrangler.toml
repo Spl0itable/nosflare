@@ -20,6 +20,11 @@ database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 binding = "EVENT_ARCHIVE"
 bucket_name = "nostr-event-archive"
 
+# KV namespace binding for pending events (write buffer)
+[[kv_namespaces]]
+binding = "PENDING_EVENTS"
+id = "pending_events_kv"
+
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
 cpu_ms = 30000
@@ -33,6 +38,6 @@ enabled = true
 tag = "v4"
 new_sqlite_classes = ["RelayWebSocket"]
 
-# Scheduled worker for archiving
+# Scheduled worker for KV batching and archiving
 [triggers]
-crons = ["*/30 * * * *"]  # Run every 30 min
+crons = ["* * * * *"]
