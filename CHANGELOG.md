@@ -1,3 +1,7 @@
+## v7.5.15 - 2025-11-17
+
+Hotfix: cache published event IDs to prevent duplicates
+
 ## v7.5.14 - 2025-11-17
 
 Hotfix: optimized the KV write buffer

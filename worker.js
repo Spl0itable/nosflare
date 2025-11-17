@@ -75,7 +75,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.5.13",
+  version: "7.5.15",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3304,21 +3304,23 @@ async function processEvent(event, sessionId, env) {
 __name(processEvent, "processEvent");
 async function saveEventToKV(event, env) {
   try {
+    const cache = caches.default;
+    const cacheKey = new Request(`https://event-cache/${event.id}`);
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
+    const session = env.RELAY_DATABASE.withSession("first-primary");
+    const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
+    if (existingEvent) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
     if (shouldCheckForDuplicates(event.kind)) {
       const contentHash2 = await hashContent(event);
-      const session = env.RELAY_DATABASE.withSession("first-primary");
-      const duplicateCheck = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash2).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash2, event.pubkey).first();
-      if (duplicateCheck) {
+      const duplicateContent = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash2).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash2, event.pubkey).first();
+      if (duplicateContent) {
         return { success: false, message: "duplicate: content already exists" };
       }
-      const pendingDuplicateKey = `duplicate:${contentHash2}`;
-      const pendingDuplicate = await env.PENDING_EVENTS.get(pendingDuplicateKey);
-      if (pendingDuplicate) {
-        return { success: false, message: "duplicate: content pending in write buffer" };
-      }
-      await env.PENDING_EVENTS.put(pendingDuplicateKey, event.id, {
-        expirationTtl: KV_TTL_SECONDS2
-      });
     }
     const tagInserts = [];
     let tagP = null, tagE = null, tagA = null;
@@ -3345,19 +3347,16 @@ async function saveEventToKV(event, env) {
       },
       contentHash
     };
-    const eventKey = `event:${event.id}`;
     const pendingKey = `pending:${metadata.timestamp}:${event.id}`;
     const metadataJson = JSON.stringify(metadata);
-    await Promise.all([
-      // Store by event ID for direct lookups
-      env.PENDING_EVENTS.put(eventKey, metadataJson, {
-        expirationTtl: KV_TTL_SECONDS2
-      }),
-      // Store in pending queue for batch processing
-      env.PENDING_EVENTS.put(pendingKey, event.id, {
-        expirationTtl: KV_TTL_SECONDS2
-      })
-    ]);
+    await env.PENDING_EVENTS.put(pendingKey, metadataJson, {
+      expirationTtl: KV_TTL_SECONDS2
+    });
+    await cache.put(cacheKey, new Response("cached", {
+      headers: {
+        "Cache-Control": `max-age=${KV_TTL_SECONDS2}`
+      }
+    }));
     console.log(`Event ${event.id} saved to KV write buffer.`);
     return { success: true, message: "Event received successfully for processing" };
   } catch (error) {
@@ -3369,11 +3368,21 @@ async function saveEventToKV(event, env) {
 __name(saveEventToKV, "saveEventToKV");
 async function saveEventToD1(event, env) {
   try {
+    const cache = caches.default;
+    const cacheKey = new Request(`https://event-cache/${event.id}`);
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
     const session = env.RELAY_DATABASE.withSession("first-primary");
+    const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
+    if (existingEvent) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
     if (shouldCheckForDuplicates(event.kind)) {
       const contentHash = await hashContent(event);
-      const duplicateCheck = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
-      if (duplicateCheck) {
+      const duplicateContent = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
+      if (duplicateContent) {
         return { success: false, message: "duplicate: content already exists" };
       }
     }
@@ -3423,6 +3432,11 @@ async function saveEventToD1(event, env) {
         VALUES (?, ?, ?, ?)
       `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
     }
+    await cache.put(cacheKey, new Response("cached", {
+      headers: {
+        "Cache-Control": `max-age=${KV_TTL_SECONDS2}`
+      }
+    }));
     console.log(`Event ${event.id} saved successfully to D1.`);
     return { success: true, message: "Event received successfully for processing" };
   } catch (error) {
@@ -3447,13 +3461,19 @@ async function processDeletionEvent(event, env) {
         "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
       ).bind(eventId).first();
       let kvMetadata = null;
+      let kvPendingKey = null;
       if (KV_FIRST_WRITE_ENABLED2) {
-        const kvData = await env.PENDING_EVENTS.get(`event:${eventId}`, "text");
-        if (kvData) {
-          try {
-            kvMetadata = JSON.parse(kvData);
-          } catch (parseError) {
-            console.error(`Failed to parse KV metadata for event ${eventId}:`, parseError);
+        const pendingKeys = await env.PENDING_EVENTS.list({ prefix: `pending:` });
+        const foundKey = pendingKeys.keys.find((key) => key.name.endsWith(`:${eventId}`));
+        if (foundKey) {
+          kvPendingKey = foundKey.name;
+          const kvData = await env.PENDING_EVENTS.get(foundKey.name, "text");
+          if (kvData) {
+            try {
+              kvMetadata = JSON.parse(kvData);
+            } catch (parseError) {
+              console.error(`Failed to parse KV metadata for event ${eventId}:`, parseError);
+            }
           }
         }
       }
@@ -3485,19 +3505,8 @@ async function processDeletionEvent(event, env) {
           deletedCount++;
         }
       }
-      if (kvMetadata) {
-        const pendingKeys = await env.PENDING_EVENTS.list({ prefix: `pending:` });
-        const pendingKey = pendingKeys.keys.find((key) => key.name.endsWith(`:${eventId}`));
-        const deletePromises = [
-          env.PENDING_EVENTS.delete(`event:${eventId}`)
-        ];
-        if (pendingKey) {
-          deletePromises.push(env.PENDING_EVENTS.delete(pendingKey.name));
-        }
-        if (kvMetadata.contentHash) {
-          deletePromises.push(env.PENDING_EVENTS.delete(`duplicate:${kvMetadata.contentHash}`));
-        }
-        await Promise.all(deletePromises);
+      if (kvMetadata && kvPendingKey) {
+        await env.PENDING_EVENTS.delete(kvPendingKey);
         console.log(`Event ${eventId} deleted from KV.`);
         if (!existing) {
           deletedCount++;
@@ -3892,9 +3901,8 @@ async function batchEventsFromKVToD1(env) {
       return;
     }
     console.log(`Found ${listResult.keys.length} pending events to process`);
-    const eventIds = listResult.keys.map((key) => key.name.split(":")[2]);
-    const metadataPromises = eventIds.map(
-      (eventId) => env.PENDING_EVENTS.get(`event:${eventId}`, "text")
+    const metadataPromises = listResult.keys.map(
+      (key) => env.PENDING_EVENTS.get(key.name, "text")
     );
     const metadataResults = await Promise.all(metadataPromises);
     const pendingEvents = [];
@@ -3905,7 +3913,8 @@ async function batchEventsFromKVToD1(env) {
           const metadata = JSON.parse(metadataJson);
           pendingEvents.push(metadata);
         } catch (parseError) {
-          console.error(`Failed to parse metadata for event ${eventIds[i]}:`, parseError);
+          const eventId = listResult.keys[i].name.split(":")[2];
+          console.error(`Failed to parse metadata for event ${eventId}:`, parseError);
         }
       }
     }
@@ -3990,14 +3999,7 @@ async function batchEventsFromKVToD1(env) {
       for (const eventId of processedEventIds) {
         const pendingKey = listResult.keys.find((key) => key.name.endsWith(`:${eventId}`));
         if (pendingKey) {
-          deletePromises.push(
-            env.PENDING_EVENTS.delete(pendingKey.name),
-            env.PENDING_EVENTS.delete(`event:${eventId}`)
-          );
-          const metadata = pendingEvents.find((m) => m.event.id === eventId);
-          if (metadata?.contentHash) {
-            deletePromises.push(env.PENDING_EVENTS.delete(`duplicate:${metadata.contentHash}`));
-          }
+          deletePromises.push(env.PENDING_EVENTS.delete(pendingKey.name));
         }
       }
       await Promise.all(deletePromises);

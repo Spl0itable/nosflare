@@ -518,9 +518,16 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
 // Save event to KV
 async function saveEventToKV(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   try {
-    const session = env.RELAY_DATABASE.withSession('first-primary');
+    // Check worker cache first for duplicate event ID
+    const cache = caches.default;
+    const cacheKey = new Request(`https://event-cache/${event.id}`);
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
 
-    // Always check for duplicate event ID first
+    // Check D1 for duplicate event ID
+    const session = env.RELAY_DATABASE.withSession('first-primary');
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists" };
@@ -580,6 +587,13 @@ async function saveEventToKV(event: NostrEvent, env: Env): Promise<{ success: bo
       expirationTtl: KV_TTL_SECONDS,
     });
 
+    // Cache the event ID in worker cache to prevent duplicates during KV buffer period
+    await cache.put(cacheKey, new Response('cached', {
+      headers: {
+        'Cache-Control': `max-age=${KV_TTL_SECONDS}`
+      }
+    }));
+
     console.log(`Event ${event.id} saved to KV write buffer.`);
     return { success: true, message: "Event received successfully for processing" };
 
@@ -592,9 +606,16 @@ async function saveEventToKV(event: NostrEvent, env: Env): Promise<{ success: bo
 
 async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   try {
-    const session = env.RELAY_DATABASE.withSession('first-primary');
+    // Check worker cache first for recently published events (fastest check)
+    const cache = caches.default;
+    const cacheKey = new Request(`https://event-cache/${event.id}`);
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      return { success: false, message: "duplicate: event already exists" };
+    }
 
-    // Always check for duplicate event ID first
+    // Check D1 for duplicate event ID
+    const session = env.RELAY_DATABASE.withSession('first-primary');
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists" };
@@ -668,6 +689,13 @@ async function saveEventToD1(event: NostrEvent, env: Env): Promise<{ success: bo
         VALUES (?, ?, ?, ?)
       `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
     }
+
+    // Cache the event ID in worker cache to prevent duplicates
+    await cache.put(cacheKey, new Response('cached', {
+      headers: {
+        'Cache-Control': `max-age=${KV_TTL_SECONDS}`
+      }
+    }));
 
     console.log(`Event ${event.id} saved successfully to D1.`);
     return { success: true, message: "Event received successfully for processing" };
