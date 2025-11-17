@@ -1,3 +1,7 @@
+## v7.5.14 - 2025-11-17
+
+Hotfix: optimized the KV write buffer
+
 ## v7.5.13 - 2025-11-17
 
 New: uses KV write buffer

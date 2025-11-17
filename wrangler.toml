@@ -28,7 +28,7 @@ id = "d71e90a69a9845c49dae119b13873aa6"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
-cpu_ms = 30000
+cpu_ms = 300000
 
 # Enable logs (on by default, but can disable)
 [observability.logs]
