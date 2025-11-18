@@ -1,3 +1,7 @@
+## v7.7.16 - 2025-11-18
+
+Hotfix: return up to 5000 events if value in REQ too high instead of immediate close
+
 ## v7.7.15 - 2025-11-18
 
 New: more indexes, better query handling, caching, and other database optimizations

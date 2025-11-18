@@ -819,13 +819,10 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
+      // Cap limit at 5000 if it's too high or set default if not provided
       if (filter.limit && filter.limit > 5000) {
-        this.sendClosed(session.webSocket, subscriptionId, 'invalid: limit too high (max 5000)');
-        return;
-      }
-
-      // Set default limit if not provided
-      if (!filter.limit) {
+        filter.limit = 5000;
+      } else if (!filter.limit) {
         filter.limit = 5000;
       }
     }
