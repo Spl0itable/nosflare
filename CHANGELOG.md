@@ -9,6 +9,37 @@ CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, c
 CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags);
 CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags);
 CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags);
+CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
+  event_id TEXT NOT NULL,
+  pubkey TEXT NOT NULL,
+  kind INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a')),
+  tag_value TEXT NOT NULL,
+  PRIMARY KEY (event_id, tag_type, tag_value)
+);
+CREATE INDEX IF NOT EXISTS idx_cache_multi_type_value_time ON event_tags_cache_multi(tag_type, tag_value, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cache_multi_type_value_event ON event_tags_cache_multi(tag_type, tag_value, event_id);
+CREATE INDEX IF NOT EXISTS idx_cache_multi_kind_type_value ON event_tags_cache_multi(kind, tag_type, tag_value, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cache_multi_event_id ON event_tags_cache_multi(event_id);
+CREATE TABLE IF NOT EXISTS mv_follow_graph (
+  follower_pubkey TEXT NOT NULL,
+  followed_pubkey TEXT NOT NULL,
+  last_updated INTEGER NOT NULL,
+  PRIMARY KEY (follower_pubkey, followed_pubkey)
+);
+CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_follower ON mv_follow_graph(follower_pubkey);
+CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_followed ON mv_follow_graph(followed_pubkey);
+CREATE TABLE IF NOT EXISTS mv_timeline_cache (
+  follower_pubkey TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  event_pubkey TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  kind INTEGER NOT NULL,
+  PRIMARY KEY (follower_pubkey, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mv_timeline_follower_time ON mv_timeline_cache(follower_pubkey, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mv_timeline_event ON mv_timeline_cache(event_id);
 CREATE TABLE IF NOT EXISTS mv_recent_notes (
   id TEXT PRIMARY KEY,
   pubkey TEXT NOT NULL,
@@ -19,13 +50,31 @@ CREATE TABLE IF NOT EXISTS mv_recent_notes (
   sig TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC);
-INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+SELECT
+  e.id,
+  e.pubkey,
+  e.kind,
+  e.created_at,
+  t.tag_name,
+  t.tag_value
+FROM events e
+INNER JOIN tags t ON e.id = t.event_id
+WHERE t.tag_name IN ('p', 'e', 'a');
 INSERT INTO mv_recent_notes (id, pubkey, created_at, kind, tags, content, sig)
 SELECT id, pubkey, created_at, kind, tags, content, sig
 FROM events
 WHERE kind = 1 AND created_at > (strftime('%s', 'now') - 86400)
 ORDER BY created_at DESC
 LIMIT 1000;
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '4');
+ANALYZE events;
+ANALYZE tags;
+ANALYZE event_tags_cache;
+ANALYZE event_tags_cache_multi;
+ANALYZE mv_follow_graph;
+ANALYZE mv_timeline_cache;
+ANALYZE mv_recent_notes;
 ```
 
 ## v7.6.15 - 2025-11-17

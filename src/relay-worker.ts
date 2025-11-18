@@ -26,11 +26,12 @@ const ARCHIVE_BATCH_SIZE = 10;
 const GLOBAL_MAX_EVENTS = 5000;
 const DEFAULT_TIME_WINDOW_DAYS = 90;
 const MAX_QUERY_COMPLEXITY = 1000;
+const CHUNK_SIZE = 150;
 
 // Archive index types
 interface ArchiveManifest {
   lastUpdated: string;
-  hoursWithEvents: string[];  // Format: "YYYY-MM-DD/HH"
+  hoursWithEvents: string[];
   firstHour: string;
   lastHour: string;
   totalEvents: number;
@@ -123,6 +124,20 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_created_at ON event_tags_cache(kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_pubkey_kind_created_at ON event_tags_cache(pubkey, kind, created_at DESC)`,
 
+      `CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
+        event_id TEXT NOT NULL,
+        pubkey TEXT NOT NULL,
+        kind INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a')),
+        tag_value TEXT NOT NULL,
+        PRIMARY KEY (event_id, tag_type, tag_value)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_cache_multi_type_value_time ON event_tags_cache_multi(tag_type, tag_value, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_cache_multi_type_value_event ON event_tags_cache_multi(tag_type, tag_value, event_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_cache_multi_kind_type_value ON event_tags_cache_multi(kind, tag_type, tag_value, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_cache_multi_event_id ON event_tags_cache_multi(event_id)`,
+
       `CREATE TABLE IF NOT EXISTS paid_pubkeys (
         pubkey TEXT PRIMARY KEY,
         paid_at INTEGER NOT NULL,
@@ -148,7 +163,27 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         content TEXT NOT NULL,
         sig TEXT NOT NULL
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC)`
+      `CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC)`,
+
+      `CREATE TABLE IF NOT EXISTS mv_follow_graph (
+        follower_pubkey TEXT NOT NULL,
+        followed_pubkey TEXT NOT NULL,
+        last_updated INTEGER NOT NULL,
+        PRIMARY KEY (follower_pubkey, followed_pubkey)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_follower ON mv_follow_graph(follower_pubkey)`,
+      `CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_followed ON mv_follow_graph(followed_pubkey)`,
+
+      `CREATE TABLE IF NOT EXISTS mv_timeline_cache (
+        follower_pubkey TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        event_pubkey TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        kind INTEGER NOT NULL,
+        PRIMARY KEY (follower_pubkey, event_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_mv_timeline_follower_time ON mv_timeline_cache(follower_pubkey, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_mv_timeline_event ON mv_timeline_cache(event_id)`
     ];
 
     for (const statement of statements) {
@@ -181,10 +216,26 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )
     `).run();
 
+    // Populate multi-value cache from existing data
+    await session.prepare(`
+      INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+      SELECT
+        e.id,
+        e.pubkey,
+        e.kind,
+        e.created_at,
+        t.tag_name,
+        t.tag_value
+      FROM events e
+      INNER JOIN tags t ON e.id = t.event_id
+      WHERE t.tag_name IN ('p', 'e', 'a')
+    `).run();
+
     // Run ANALYZE to initialize statistics
     await session.prepare("ANALYZE events").run();
     await session.prepare("ANALYZE tags").run();
     await session.prepare("ANALYZE event_tags_cache").run();
+    await session.prepare("ANALYZE event_tags_cache_multi").run();
 
     console.log("Database initialization completed!");
   } catch (error) {
@@ -651,9 +702,12 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
         "DELETE FROM content_hashes WHERE event_id = ?"
       ).bind(eventId).run();
 
-      // Delete from event_tags_cache
+      // Delete from event_tags_cache (both old and new)
       await session.prepare(
         "DELETE FROM event_tags_cache WHERE event_id = ?"
+      ).bind(eventId).run();
+      await session.prepare(
+        "DELETE FROM event_tags_cache_multi WHERE event_id = ?"
       ).bind(eventId).run();
 
       // Now delete the event
@@ -717,65 +771,122 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     }
   }
 
-  // Only cacheable tags (p, e, a) - use event_tags_cache
+  // Only cacheable tags (p, e, a)
   if (cacheableTags.length > 0 && otherTags.length === 0) {
-    let sql = "SELECT e.* FROM events e INNER JOIN event_tags_cache c ON e.id = c.event_id";
+    let sql: string;
     const whereConditions: string[] = [];
 
-    for (const tagFilter of cacheableTags) {
-      const tagColumn = `tag_${tagFilter.name}`;
-      whereConditions.push(`c.${tagColumn} IN (${tagFilter.values.map(() => '?').join(',')})`);
-      params.push(...tagFilter.values);
-    }
+    if (cacheableTags.length === 1) {
+      // Single cacheable tag
+      const tagFilter = cacheableTags[0];
+      sql = `SELECT DISTINCT e.* FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE c.tag_type = ? AND c.tag_value IN (${tagFilter.values.map(() => '?').join(',')})`;
+      params.push(tagFilter.name, ...tagFilter.values);
 
-    if (filter.ids && filter.ids.length > 0) {
-      whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
-      params.push(...filter.ids);
-    }
+      if (filter.ids && filter.ids.length > 0) {
+        whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+        params.push(...filter.ids);
+      }
 
-    if (filter.authors && filter.authors.length > 0) {
-      whereConditions.push(`c.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
-      params.push(...filter.authors);
-    }
+      if (filter.authors && filter.authors.length > 0) {
+        whereConditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+        params.push(...filter.authors);
+      }
 
-    if (filter.kinds && filter.kinds.length > 0) {
-      whereConditions.push(`c.kind IN (${filter.kinds.map(() => '?').join(',')})`);
-      params.push(...filter.kinds);
-    }
+      if (filter.kinds && filter.kinds.length > 0) {
+        whereConditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+        params.push(...filter.kinds);
+      }
 
-    if (filter.since) {
-      whereConditions.push("c.created_at >= ?");
-      params.push(filter.since);
-    }
+      if (filter.since) {
+        whereConditions.push("e.created_at >= ?");
+        params.push(filter.since);
+      }
 
-    if (filter.until) {
-      whereConditions.push("c.created_at <= ?");
-      params.push(filter.until);
-    }
+      if (filter.until) {
+        whereConditions.push("e.created_at <= ?");
+        params.push(filter.until);
+      }
 
-    // Cursor-based pagination support
-    if (filter.cursor) {
-      const [timestamp, lastId] = filter.cursor.split(':');
-      whereConditions.push("(c.created_at < ? OR (c.created_at = ? AND e.id > ?))");
-      params.push(parseInt(timestamp), parseInt(timestamp), lastId);
-    }
+      if (filter.cursor) {
+        const [timestamp, lastId] = filter.cursor.split(':');
+        whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
+        params.push(parseInt(timestamp), parseInt(timestamp), lastId);
+      }
 
-    if (whereConditions.length > 0) {
-      sql += " WHERE " + whereConditions.join(" AND ");
-    }
+      if (whereConditions.length > 0) {
+        sql += " AND " + whereConditions.join(" AND ");
+      }
 
-    sql += " ORDER BY c.created_at DESC";
-    sql += " LIMIT ?";
-    params.push(Math.min(filter.limit || 1000, 5000));
+      sql += " ORDER BY e.created_at DESC LIMIT ?";
+      params.push(Math.min(filter.limit || 1000, 5000));
+    } else {
+      // Multiple cacheable tags
+      const tagConditions = cacheableTags.map(t => {
+        const placeholders = t.values.map(() => '?').join(',');
+        return `(c.tag_type = ? AND c.tag_value IN (${placeholders}))`;
+      }).join(' OR ');
+
+      // Add all parameters
+      for (const tagFilter of cacheableTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+
+      sql = `SELECT DISTINCT e.* FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE ${tagConditions}`;
+
+      if (filter.ids && filter.ids.length > 0) {
+        whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+        params.push(...filter.ids);
+      }
+
+      if (filter.authors && filter.authors.length > 0) {
+        whereConditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+        params.push(...filter.authors);
+      }
+
+      if (filter.kinds && filter.kinds.length > 0) {
+        whereConditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+        params.push(...filter.kinds);
+      }
+
+      if (filter.since) {
+        whereConditions.push("e.created_at >= ?");
+        params.push(filter.since);
+      }
+
+      if (filter.until) {
+        whereConditions.push("e.created_at <= ?");
+        params.push(filter.until);
+      }
+
+      if (filter.cursor) {
+        const [timestamp, lastId] = filter.cursor.split(':');
+        whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
+        params.push(parseInt(timestamp), parseInt(timestamp), lastId);
+      }
+
+      if (whereConditions.length > 0) {
+        sql += " AND " + whereConditions.join(" AND ");
+      }
+
+      sql += ` GROUP BY e.id HAVING COUNT(DISTINCT c.tag_type) = ?`;
+      params.push(cacheableTags.length);
+
+      sql += " ORDER BY MAX(e.created_at) DESC LIMIT ?";
+      params.push(Math.min(filter.limit || 1000, 5000));
+    }
 
     return { sql, params };
   }
 
-  // Has any non-cacheable tags - use optimized strategy
+  // Has any non-cacheable tags
   if (tagCount > 0) {
     const allTags = [...cacheableTags, ...otherTags];
 
-    // Single tag filter - use direct join
+    // Single tag filter
     if (allTags.length === 1) {
       const tagFilter = allTags[0];
       let sql = `SELECT e.* FROM events e
@@ -829,17 +940,20 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
       return { sql, params };
     }
 
-    // Multiple tags - use INTERSECT strategy
-    const subqueries: string[] = [];
+    // Multiple tags
+    const tagConditions = allTags.map(t => {
+      const placeholders = t.values.map(() => '?').join(',');
+      return `(t.tag_name = ? AND t.tag_value IN (${placeholders}))`;
+    }).join(' OR ');
 
+    // Add all parameters
     for (const tagFilter of allTags) {
-      const tagParams = tagFilter.values.map(() => '?').join(',');
-      subqueries.push(`SELECT event_id FROM tags WHERE tag_name = ? AND tag_value IN (${tagParams})`);
       params.push(tagFilter.name, ...tagFilter.values);
     }
 
     let sql = `SELECT e.* FROM events e
-      WHERE e.id IN (${subqueries.join(' INTERSECT ')})`;
+      INNER JOIN tags t ON e.id = t.event_id
+      WHERE ${tagConditions}`;
 
     const whereConditions: string[] = [];
 
@@ -878,6 +992,10 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     if (whereConditions.length > 0) {
       sql += " AND " + whereConditions.join(" AND ");
     }
+
+    sql += " GROUP BY e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig";
+    sql += ` HAVING COUNT(DISTINCT t.tag_name) = ?`;
+    params.push(allTags.length);
 
     sql += " ORDER BY e.created_at DESC";
     sql += " LIMIT ?";
@@ -962,8 +1080,6 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 async function queryDatabaseChunked(filter: NostrFilter, bookmark: string, env: Env): Promise<{ events: NostrEvent[] }> {
   const session = env.RELAY_DATABASE.withSession(bookmark);
   const allEvents = new Map<string, NostrEvent>();
-
-  const CHUNK_SIZE = 50;
 
   // Create a base filter with everything except the large arrays
   const baseFilter: NostrFilter = { ...filter };
@@ -1157,16 +1273,16 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
 
       // Check if any array in the filter exceeds chunk size
       const needsChunking = (
-        (filter.ids && filter.ids.length > 50) ||
-        (filter.authors && filter.authors.length > 50) ||
-        (filter.kinds && filter.kinds.length > 50) ||
+        (filter.ids && filter.ids.length > CHUNK_SIZE) ||
+        (filter.authors && filter.authors.length > CHUNK_SIZE) ||
+        (filter.kinds && filter.kinds.length > CHUNK_SIZE) ||
         Object.entries(filter).some(([key, values]) =>
-          key.startsWith('#') && Array.isArray(values) && values.length > 50
+          key.startsWith('#') && Array.isArray(values) && values.length > CHUNK_SIZE
         )
       );
 
       if (needsChunking) {
-        console.log(`Filter has arrays >50 items, using chunked query...`);
+        console.log(`Filter has arrays >${CHUNK_SIZE} items, using chunked query...`);
         const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
         for (const event of chunkedResult.events) {
           if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
@@ -1266,7 +1382,7 @@ async function processEventsFromQueue(batch: MessageBatch<PendingEventMetadata>,
         }
       }
 
-      // Update event tags cache for common tags
+      // Update event tags cache for common tags (legacy single-value cache)
       if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
         await session.prepare(`
           INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
@@ -1284,6 +1400,18 @@ async function processEventsFromQueue(batch: MessageBatch<PendingEventMetadata>,
           metadata.eventTagsCache.tag_e,
           metadata.eventTagsCache.tag_a
         ).run();
+      }
+
+      // Insert ALL p/e/a tags into multi-value cache
+      const cacheableTags = metadata.tags.filter(t => ['p', 'e', 'a'].includes(t.name));
+      if (cacheableTags.length > 0) {
+        const cacheBatch = cacheableTags.map(t =>
+          session.prepare(`
+            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+        );
+        await session.batch(cacheBatch);
       }
 
       // Insert content hash if present
@@ -1607,6 +1735,7 @@ async function archiveOldEvents(db: D1Database, r2: R2Bucket): Promise<void> {
 
       await writeSession.prepare(`DELETE FROM tags WHERE event_id IN (${placeholders})`).bind(...chunk).run();
       await writeSession.prepare(`DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})`).bind(...chunk).run();
+      await writeSession.prepare(`DELETE FROM event_tags_cache_multi WHERE event_id IN (${placeholders})`).bind(...chunk).run();
       await writeSession.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...chunk).run();
     }
 
@@ -2876,6 +3005,9 @@ export default {
         await session.prepare('ANALYZE events').run();
         await session.prepare('ANALYZE tags').run();
         await session.prepare('ANALYZE event_tags_cache').run();
+        await session.prepare('ANALYZE event_tags_cache_multi').run();
+        await session.prepare('ANALYZE mv_follow_graph').run();
+        await session.prepare('ANALYZE mv_timeline_cache').run();
 
         console.log('ANALYZE completed - query planner statistics updated');
       }
@@ -2899,7 +3031,57 @@ export default {
           LIMIT 1000
         `).bind(oneDayAgo).run();
 
-        console.log('Materialized view refresh completed');
+        console.log('Recent notes materialized view refresh completed');
+
+        // Refresh follow graph from kind:3 events
+        // This extracts p tags from contact list events
+        console.log('Refreshing follow graph...');
+
+        // Get most recent kind:3 event for each user
+        const contactLists = await session.prepare(`
+          SELECT e.pubkey, e.tags, e.created_at
+          FROM events e
+          INNER JOIN (
+            SELECT pubkey, MAX(created_at) as max_created
+            FROM events
+            WHERE kind = 3
+            GROUP BY pubkey
+          ) latest ON e.pubkey = latest.pubkey AND e.created_at = latest.max_created
+          WHERE e.kind = 3
+        `).all();
+
+        // Clear old follow graph
+        await session.prepare('DELETE FROM mv_follow_graph').run();
+
+        // Insert new follow relationships
+        const followInserts = [];
+        for (const row of contactLists.results) {
+          const pubkey = row.pubkey as string;
+          const tags = JSON.parse(row.tags as string) as string[][];
+          const timestamp = row.created_at as number;
+
+          for (const tag of tags) {
+            if (tag[0] === 'p' && tag[1]) {
+              followInserts.push(
+                session.prepare(`
+                  INSERT OR REPLACE INTO mv_follow_graph (follower_pubkey, followed_pubkey, last_updated)
+                  VALUES (?, ?, ?)
+                `).bind(pubkey, tag[1], timestamp)
+              );
+            }
+          }
+        }
+
+        // Batch insert in chunks of 100
+        for (let i = 0; i < followInserts.length; i += 100) {
+          const chunk = followInserts.slice(i, i + 100);
+          if (chunk.length > 0) {
+            await session.batch(chunk);
+          }
+        }
+
+        console.log(`Follow graph refreshed with ${followInserts.length} relationships`);
+        console.log('All materialized views refresh completed');
       }
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
