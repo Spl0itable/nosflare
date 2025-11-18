@@ -26,7 +26,7 @@ const ARCHIVE_BATCH_SIZE = 10;
 const GLOBAL_MAX_EVENTS = 5000;
 const DEFAULT_TIME_WINDOW_DAYS = 90;
 const MAX_QUERY_COMPLEXITY = 1000;
-const CHUNK_SIZE = 150;
+const CHUNK_SIZE = 500;
 
 // Archive index types
 interface ArchiveManifest {
@@ -91,11 +91,6 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
 
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags)`,
-
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
@@ -129,7 +124,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         pubkey TEXT NOT NULL,
         kind INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
-        tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a')),
+        tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a', 't', 'd', 'r')),
         tag_value TEXT NOT NULL,
         PRIMARY KEY (event_id, tag_type, tag_value)
       )`,
@@ -228,7 +223,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         t.tag_value
       FROM events e
       INNER JOIN tags t ON e.id = t.event_id
-      WHERE t.tag_name IN ('p', 'e', 'a')
+      WHERE t.tag_name IN ('p', 'e', 'a', 't', 'd', 'r')
     `).run();
 
     // Run ANALYZE to initialize statistics
@@ -747,6 +742,193 @@ function chunkArray<T>(array: T[], chunkSize: number): T[][] {
   return chunks;
 }
 
+// Build COUNT query for precheck
+function buildCountQuery(filter: NostrFilter): { sql: string; params: any[] } {
+  const params: any[] = [];
+  const conditions: string[] = [];
+
+  // Count and categorize tag filters
+  const cacheableTags: Array<{ name: string; values: string[] }> = [];
+  const otherTags: Array<{ name: string; values: string[] }> = [];
+
+  for (const [key, values] of Object.entries(filter)) {
+    if (key.startsWith('#') && Array.isArray(values) && values.length > 0) {
+      const tagName = key.substring(1);
+      if (['p', 'e', 'a', 't', 'd', 'r'].includes(tagName)) {
+        cacheableTags.push({ name: tagName, values });
+      } else {
+        otherTags.push({ name: tagName, values });
+      }
+    }
+  }
+
+  if (cacheableTags.length > 0 && otherTags.length === 0) {
+    // Cacheable tags only
+    if (cacheableTags.length === 1) {
+      const tagFilter = cacheableTags[0];
+      let sql = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE c.tag_type = ? AND c.tag_value IN (${tagFilter.values.map(() => '?').join(',')})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+
+      if (filter.authors && filter.authors.length > 0) {
+        sql += ` AND e.pubkey IN (${filter.authors.map(() => '?').join(',')})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql += ` AND e.kind IN (${filter.kinds.map(() => '?').join(',')})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql, params };
+    } else {
+      // Multiple cacheable tags
+      const tagConditions = cacheableTags.map(t => {
+        const placeholders = t.values.map(() => '?').join(',');
+        return `(c.tag_type = ? AND c.tag_value IN (${placeholders}))`;
+      }).join(' OR ');
+
+      for (const tagFilter of cacheableTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+
+      let sql = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE ${tagConditions}`;
+
+      if (filter.authors && filter.authors.length > 0) {
+        sql += ` AND e.pubkey IN (${filter.authors.map(() => '?').join(',')})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql += ` AND e.kind IN (${filter.kinds.map(() => '?').join(',')})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+
+      sql += ` GROUP BY e.id HAVING COUNT(DISTINCT c.tag_type) = ?`;
+      params.push(cacheableTags.length);
+
+      // Wrap in outer SELECT to count
+      sql = `SELECT COUNT(*) as count FROM (${sql})`;
+      return { sql, params };
+    }
+  }
+
+  // Has non-cacheable tags
+  if (cacheableTags.length > 0 || otherTags.length > 0) {
+    const allTags = [...cacheableTags, ...otherTags];
+
+    if (allTags.length === 1) {
+      const tagFilter = allTags[0];
+      let sql = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN tags t ON e.id = t.event_id
+        WHERE t.tag_name = ? AND t.tag_value IN (${tagFilter.values.map(() => '?').join(',')})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+
+      if (filter.authors && filter.authors.length > 0) {
+        sql += ` AND e.pubkey IN (${filter.authors.map(() => '?').join(',')})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql += ` AND e.kind IN (${filter.kinds.map(() => '?').join(',')})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql, params };
+    } else {
+      // Multiple tags
+      const tagConditions = allTags.map(t => {
+        const placeholders = t.values.map(() => '?').join(',');
+        return `(t.tag_name = ? AND t.tag_value IN (${placeholders}))`;
+      }).join(' OR ');
+
+      for (const tagFilter of allTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+
+      let sql = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN tags t ON e.id = t.event_id
+        WHERE ${tagConditions}`;
+
+      if (filter.authors && filter.authors.length > 0) {
+        sql += ` AND e.pubkey IN (${filter.authors.map(() => '?').join(',')})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql += ` AND e.kind IN (${filter.kinds.map(() => '?').join(',')})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+
+      sql += ` GROUP BY e.id HAVING COUNT(DISTINCT t.tag_name) = ?`;
+      params.push(allTags.length);
+
+      // Wrap in outer SELECT to count
+      sql = `SELECT COUNT(*) as count FROM (${sql})`;
+      return { sql, params };
+    }
+  }
+
+  // No tag filters
+  let sql = "SELECT COUNT(*) as count FROM events";
+
+  if (filter.ids && filter.ids.length > 0) {
+    conditions.push(`id IN (${filter.ids.map(() => '?').join(',')})`);
+    params.push(...filter.ids);
+  }
+  if (filter.authors && filter.authors.length > 0) {
+    conditions.push(`pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+    params.push(...filter.authors);
+  }
+  if (filter.kinds && filter.kinds.length > 0) {
+    conditions.push(`kind IN (${filter.kinds.map(() => '?').join(',')})`);
+    params.push(...filter.kinds);
+  }
+  if (filter.since) {
+    conditions.push("created_at >= ?");
+    params.push(filter.since);
+  }
+  if (filter.until) {
+    conditions.push("created_at <= ?");
+    params.push(filter.until);
+  }
+
+  if (conditions.length > 0) {
+    sql += " WHERE " + conditions.join(" AND ");
+  }
+
+  return { sql, params };
+}
+
 // Query builder
 function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   const params: any[] = [];
@@ -762,8 +944,8 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
       tagCount += values.length;
       const tagName = key.substring(1);
 
-      // Check if this is a cacheable tag (p, e, or a)
-      if (['p', 'e', 'a'].includes(tagName)) {
+      // Check if this is a cacheable tag (p, e, a, t, d, r)
+      if (['p', 'e', 'a', 't', 'd', 'r'].includes(tagName)) {
         cacheableTags.push({ name: tagName, values });
       } else {
         otherTags.push({ name: tagName, values });
@@ -771,7 +953,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     }
   }
 
-  // Only cacheable tags (p, e, a)
+  // Only cacheable tags (p, e, a, t, d, r)
   if (cacheableTags.length > 0 && otherTags.length === 0) {
     let sql: string;
     const whereConditions: string[] = [];
@@ -1013,22 +1195,21 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   const authorCount = filter.authors?.length || 0;
   const kindCount = filter.kinds?.length || 0;
 
-  // Choose covering index based on query pattern
+  // Choose optimal index based on query pattern
   if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
     if (authorCount <= kindCount) {
-      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at_covering";
+      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
     } else {
-      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at_covering";
+      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
     }
   } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
-    // Use basic index for author-only queries as covering index may be too large
     indexHint = " INDEXED BY idx_events_pubkey_created_at";
   } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
-    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
+    indexHint = " INDEXED BY idx_events_kind_created_at";
   } else if (hasAuthors && hasKinds && authorCount > 10) {
-    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
+    indexHint = " INDEXED BY idx_events_kind_created_at";
   } else if (!hasAuthors && !hasKinds && hasTimeRange) {
-    indexHint = " INDEXED BY idx_events_created_at_covering";
+    indexHint = " INDEXED BY idx_events_created_at";
   }
 
   let sql = `SELECT * FROM events${indexHint}`;
@@ -1247,15 +1428,11 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
     const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = new Map<string, NostrEvent>();
 
-    let totalEventsRead = 0;
+    // Separate filters into chunked vs batchable
+    const chunkedFilters: NostrFilter[] = [];
+    const batchableFilters: NostrFilter[] = [];
 
     for (const filter of filters) {
-      // Skip if we've already hit the global limit
-      if (totalEventsRead >= GLOBAL_MAX_EVENTS) {
-        console.warn(`Global event limit reached (${GLOBAL_MAX_EVENTS}), stopping query`);
-        break;
-      }
-
       // Check query complexity
       const complexity = calculateQueryComplexity(filter);
       if (complexity > MAX_QUERY_COMPLEXITY) {
@@ -1282,49 +1459,101 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
       );
 
       if (needsChunking) {
-        console.log(`Filter has arrays >${CHUNK_SIZE} items, using chunked query...`);
-        const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
-        for (const event of chunkedResult.events) {
-          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
-          eventSet.set(event.id, event);
-          totalEventsRead++;
-        }
-        continue;
+        chunkedFilters.push(filter);
+      } else {
+        batchableFilters.push(filter);
+      }
+    }
+
+    // Execute chunked filters sequentially
+    let totalEventsRead = 0;
+    for (const filter of chunkedFilters) {
+      if (totalEventsRead >= GLOBAL_MAX_EVENTS) {
+        console.warn(`Global event limit reached (${GLOBAL_MAX_EVENTS}), stopping query`);
+        break;
       }
 
-      // Build and execute the query
-      const query = buildQuery(filter);
+      console.log(`Filter has arrays >${CHUNK_SIZE} items, using chunked query...`);
+      const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
+      for (const event of chunkedResult.events) {
+        if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+        eventSet.set(event.id, event);
+        totalEventsRead++;
+      }
+    }
 
-      try {
-        const result = await session.prepare(query.sql).bind(...query.params).all();
+    // Execute batchable filters in parallel using D1 batch API
+    if (batchableFilters.length > 0 && totalEventsRead < GLOBAL_MAX_EVENTS) {
+      // Precheck expensive tag queries with COUNT
+      const validFilters: NostrFilter[] = [];
+      for (const filter of batchableFilters) {
+        // Only precheck if filter has tag filters
+        const hasTagFilters = Object.keys(filter).some(key => key.startsWith('#'));
 
-        // Log query metadata
-        if (result.meta) {
-          console.log({
-            servedByRegion: result.meta.served_by_region ?? "",
-            servedByPrimary: result.meta.served_by_primary ?? false,
-            rowsRead: result.results.length
-          });
+        if (hasTagFilters) {
+          const countQuery = buildCountQuery(filter);
+          const countResult = await session.prepare(countQuery.sql).bind(...countQuery.params).first() as { count: number } | null;
+          const estimatedRows = (countResult?.count as number) || 0;
+
+          if (estimatedRows > 10000) {
+            console.warn(`Query precheck: estimated ${estimatedRows} rows, skipping filter to prevent timeout`);
+            continue;
+          } else {
+            console.log(`Query precheck: estimated ${estimatedRows} rows, proceeding`);
+          }
         }
 
-        for (const row of result.results) {
-          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+        validFilters.push(filter);
+      }
 
-          const event: NostrEvent = {
-            id: row.id as string,
-            pubkey: row.pubkey as string,
-            created_at: row.created_at as number,
-            kind: row.kind as number,
-            tags: JSON.parse(row.tags as string),
-            content: row.content as string,
-            sig: row.sig as string
-          };
-          eventSet.set(event.id, event);
-          totalEventsRead++;
+      if (validFilters.length === 0) {
+        console.warn('All filters were too expensive after COUNT precheck');
+      } else {
+        const queries = validFilters.map(filter => {
+          const query = buildQuery(filter);
+          return session.prepare(query.sql).bind(...query.params);
+        });
+
+        try {
+          const results = await session.batch(queries);
+
+        // Process all batch results
+        for (let i = 0; i < results.length; i++) {
+          const result = results[i];
+
+          // Log query metadata for first result
+          if (i === 0 && result.meta) {
+            console.log({
+              servedByRegion: result.meta.served_by_region ?? "",
+              servedByPrimary: result.meta.served_by_primary ?? false,
+              batchSize: results.length
+            });
+          }
+
+          if (result.success && result.results) {
+            for (const row of result.results as any[]) {
+              if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+
+              const event: NostrEvent = {
+                id: row.id as string,
+                pubkey: row.pubkey as string,
+                created_at: row.created_at as number,
+                kind: row.kind as number,
+                tags: JSON.parse(row.tags as string),
+                content: row.content as string,
+                sig: row.sig as string
+              };
+              eventSet.set(event.id, event);
+              totalEventsRead++;
+            }
+          } else if (!result.success) {
+            console.error(`Batch query ${i} failed:`, result.error);
+          }
         }
-      } catch (error: any) {
-        console.error(`Query execution error: ${error.message}`);
-        throw error;
+        } catch (error: any) {
+          console.error(`Batch query execution error: ${error.message}`);
+          throw error;
+        }
       }
     }
 
@@ -1402,8 +1631,8 @@ async function processEventsFromQueue(batch: MessageBatch<PendingEventMetadata>,
         ).run();
       }
 
-      // Insert ALL p/e/a tags into multi-value cache
-      const cacheableTags = metadata.tags.filter(t => ['p', 'e', 'a'].includes(t.name));
+      // Insert ALL p/e/a/t/d/r tags into multi-value cache
+      const cacheableTags = metadata.tags.filter(t => ['p', 'e', 'a', 't', 'd', 'r'].includes(t.name));
       if (cacheableTags.length > 0) {
         const cacheBatch = cacheableTags.map(t =>
           session.prepare(`

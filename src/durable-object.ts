@@ -20,10 +20,12 @@ interface SessionAttachment {
   hasPaid?: boolean; // Cache payment status in session
 }
 
-// Cache entry interface
+// Cache entry interface with access tracking
 interface CacheEntry {
   result: QueryResult;
   timestamp: number;
+  accessCount: number;
+  lastAccessed: number;
 }
 
 // Payment cache entry
@@ -262,6 +264,9 @@ export class RelayWebSocket implements DurableObject {
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
       console.log('Returning cached query result');
+      // Update access tracking
+      cached.accessCount++;
+      cached.lastAccessed = Date.now();
       return cached.result;
     }
 
@@ -275,7 +280,9 @@ export class RelayWebSocket implements DurableObject {
       // Cache the result
       this.queryCache.set(cacheKey, {
         result,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        accessCount: 1,
+        lastAccessed: Date.now()
       });
 
       // Index this cache entry for efficient invalidation
@@ -303,16 +310,32 @@ export class RelayWebSocket implements DurableObject {
       }
     }
 
-    // If still too large, remove oldest entries
+    // If still too large, use frequency-weighted eviction
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
-      const sortedEntries = Array.from(this.queryCache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const entries = Array.from(this.queryCache.entries());
 
+      // Calculate eviction score: lower score = more likely to evict
+      // Score combines recency and frequency (higher access count = higher score)
+      const scoredEntries = entries.map(([key, entry]) => {
+        const recencyScore = (now - entry.lastAccessed) / 1000; // seconds since last access
+        const frequencyScore = entry.accessCount * 10; // weight frequency heavily
+        const evictionScore = frequencyScore - (recencyScore / 60); // subtract age in minutes
+
+        return { key, score: evictionScore };
+      });
+
+      // Sort by score (ascending) to evict lowest-scoring entries
+      scoredEntries.sort((a, b) => a.score - b.score);
+
+      // Remove lowest 20% scoring entries
       const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
       for (let i = 0; i < toRemove; i++) {
-        this.queryCache.delete(sortedEntries[i][0]);
-        this.removeFromCacheIndex(sortedEntries[i][0]);
+        const key = scoredEntries[i].key;
+        this.queryCache.delete(key);
+        this.removeFromCacheIndex(key);
       }
+
+      console.log(`Evicted ${toRemove} low-scoring cache entries (LFU)`);
     }
   }
 

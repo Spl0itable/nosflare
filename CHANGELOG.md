@@ -5,16 +5,12 @@ New: more indexes, better query handling, caching, and other database optimizati
 *NOTE* this update includes is a small breaking change if database is already live. Please run the following from the Storage & Databases > D1 SQL database page in the Cloudflare dashboard and select your relay's database. Then click into console from the top menu. From there, run these commands:
 
 ```
-CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags);
-CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags);
-CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags);
-CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags);
 CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
   event_id TEXT NOT NULL,
   pubkey TEXT NOT NULL,
   kind INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a')),
+  tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a', 't', 'd', 'r')),
   tag_value TEXT NOT NULL,
   PRIMARY KEY (event_id, tag_type, tag_value)
 );
@@ -60,14 +56,14 @@ SELECT
   t.tag_value
 FROM events e
 INNER JOIN tags t ON e.id = t.event_id
-WHERE t.tag_name IN ('p', 'e', 'a');
+WHERE t.tag_name IN ('p', 'e', 'a', 't', 'd', 'r');
 INSERT INTO mv_recent_notes (id, pubkey, created_at, kind, tags, content, sig)
 SELECT id, pubkey, created_at, kind, tags, content, sig
 FROM events
 WHERE kind = 1 AND created_at > (strftime('%s', 'now') - 86400)
 ORDER BY created_at DESC
 LIMIT 1000;
-INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '4');
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '5');
 ANALYZE events;
 ANALYZE tags;
 ANALYZE event_tags_cache;

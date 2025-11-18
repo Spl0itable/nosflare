@@ -2451,7 +2451,7 @@ var ARCHIVE_BATCH_SIZE = 10;
 var GLOBAL_MAX_EVENTS = 5e3;
 var DEFAULT_TIME_WINDOW_DAYS = 90;
 var MAX_QUERY_COMPLEXITY = 1e3;
-var CHUNK_SIZE = 150;
+var CHUNK_SIZE = 500;
 async function initializeDatabase(db) {
   try {
     const session2 = db.withSession("first-unconstrained");
@@ -2494,10 +2494,6 @@ async function initializeDatabase(db) {
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags)`,
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
@@ -2529,7 +2525,7 @@ async function initializeDatabase(db) {
         pubkey TEXT NOT NULL,
         kind INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
-        tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a')),
+        tag_type TEXT NOT NULL CHECK(tag_type IN ('p', 'e', 'a', 't', 'd', 'r')),
         tag_value TEXT NOT NULL,
         PRIMARY KEY (event_id, tag_type, tag_value)
       )`,
@@ -2618,7 +2614,7 @@ async function initializeDatabase(db) {
         t.tag_value
       FROM events e
       INNER JOIN tags t ON e.id = t.event_id
-      WHERE t.tag_name IN ('p', 'e', 'a')
+      WHERE t.tag_name IN ('p', 'e', 'a', 't', 'd', 'r')
     `).run();
     await session.prepare("ANALYZE events").run();
     await session.prepare("ANALYZE tags").run();
@@ -3017,6 +3013,163 @@ function chunkArray(array, chunkSize) {
   return chunks;
 }
 __name(chunkArray, "chunkArray");
+function buildCountQuery(filter) {
+  const params = [];
+  const conditions = [];
+  const cacheableTags = [];
+  const otherTags = [];
+  for (const [key, values] of Object.entries(filter)) {
+    if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
+      const tagName = key.substring(1);
+      if (["p", "e", "a", "t", "d", "r"].includes(tagName)) {
+        cacheableTags.push({ name: tagName, values });
+      } else {
+        otherTags.push({ name: tagName, values });
+      }
+    }
+  }
+  if (cacheableTags.length > 0 && otherTags.length === 0) {
+    if (cacheableTags.length === 1) {
+      const tagFilter = cacheableTags[0];
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE c.tag_type = ? AND c.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql: sql2, params };
+    } else {
+      const tagConditions = cacheableTags.map((t) => {
+        const placeholders = t.values.map(() => "?").join(",");
+        return `(c.tag_type = ? AND c.tag_value IN (${placeholders}))`;
+      }).join(" OR ");
+      for (const tagFilter of cacheableTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN event_tags_cache_multi c ON e.id = c.event_id
+        WHERE ${tagConditions}`;
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      sql2 += ` GROUP BY e.id HAVING COUNT(DISTINCT c.tag_type) = ?`;
+      params.push(cacheableTags.length);
+      sql2 = `SELECT COUNT(*) as count FROM (${sql2})`;
+      return { sql: sql2, params };
+    }
+  }
+  if (cacheableTags.length > 0 || otherTags.length > 0) {
+    const allTags = [...cacheableTags, ...otherTags];
+    if (allTags.length === 1) {
+      const tagFilter = allTags[0];
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN tags t ON e.id = t.event_id
+        WHERE t.tag_name = ? AND t.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql: sql2, params };
+    } else {
+      const tagConditions = allTags.map((t) => {
+        const placeholders = t.values.map(() => "?").join(",");
+        return `(t.tag_name = ? AND t.tag_value IN (${placeholders}))`;
+      }).join(" OR ");
+      for (const tagFilter of allTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN tags t ON e.id = t.event_id
+        WHERE ${tagConditions}`;
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      sql2 += ` GROUP BY e.id HAVING COUNT(DISTINCT t.tag_name) = ?`;
+      params.push(allTags.length);
+      sql2 = `SELECT COUNT(*) as count FROM (${sql2})`;
+      return { sql: sql2, params };
+    }
+  }
+  let sql = "SELECT COUNT(*) as count FROM events";
+  if (filter.ids && filter.ids.length > 0) {
+    conditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
+    params.push(...filter.ids);
+  }
+  if (filter.authors && filter.authors.length > 0) {
+    conditions.push(`pubkey IN (${filter.authors.map(() => "?").join(",")})`);
+    params.push(...filter.authors);
+  }
+  if (filter.kinds && filter.kinds.length > 0) {
+    conditions.push(`kind IN (${filter.kinds.map(() => "?").join(",")})`);
+    params.push(...filter.kinds);
+  }
+  if (filter.since) {
+    conditions.push("created_at >= ?");
+    params.push(filter.since);
+  }
+  if (filter.until) {
+    conditions.push("created_at <= ?");
+    params.push(filter.until);
+  }
+  if (conditions.length > 0) {
+    sql += " WHERE " + conditions.join(" AND ");
+  }
+  return { sql, params };
+}
+__name(buildCountQuery, "buildCountQuery");
 function buildQuery(filter) {
   const params = [];
   const conditions = [];
@@ -3027,7 +3180,7 @@ function buildQuery(filter) {
     if (key.startsWith("#") && Array.isArray(values) && values.length > 0) {
       tagCount += values.length;
       const tagName = key.substring(1);
-      if (["p", "e", "a"].includes(tagName)) {
+      if (["p", "e", "a", "t", "d", "r"].includes(tagName)) {
         cacheableTags.push({ name: tagName, values });
       } else {
         otherTags.push({ name: tagName, values });
@@ -3216,18 +3369,18 @@ function buildQuery(filter) {
   const kindCount = filter.kinds?.length || 0;
   if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
     if (authorCount <= kindCount) {
-      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at_covering";
+      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
     } else {
-      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at_covering";
+      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
     }
   } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
     indexHint = " INDEXED BY idx_events_pubkey_created_at";
   } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
-    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
+    indexHint = " INDEXED BY idx_events_kind_created_at";
   } else if (hasAuthors && hasKinds && authorCount > 10) {
-    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
+    indexHint = " INDEXED BY idx_events_kind_created_at";
   } else if (!hasAuthors && !hasKinds && hasTimeRange) {
-    indexHint = " INDEXED BY idx_events_created_at_covering";
+    indexHint = " INDEXED BY idx_events_created_at";
   }
   let sql = `SELECT * FROM events${indexHint}`;
   if (filter.ids && filter.ids.length > 0) {
@@ -3393,12 +3546,9 @@ async function queryEvents(filters, bookmark, env) {
     console.log(`Processing query with ${filters.length} filters and bookmark: ${bookmark}`);
     const session = env.RELAY_DATABASE.withSession(bookmark);
     const eventSet = /* @__PURE__ */ new Map();
-    let totalEventsRead = 0;
+    const chunkedFilters = [];
+    const batchableFilters = [];
     for (const filter of filters) {
-      if (totalEventsRead >= GLOBAL_MAX_EVENTS) {
-        console.warn(`Global event limit reached (${GLOBAL_MAX_EVENTS}), stopping query`);
-        break;
-      }
       const complexity = calculateQueryComplexity(filter);
       if (complexity > MAX_QUERY_COMPLEXITY) {
         console.warn(`Query too complex (complexity: ${complexity}), skipping filter`);
@@ -3413,42 +3563,83 @@ async function queryEvents(filters, bookmark, env) {
         ([key, values]) => key.startsWith("#") && Array.isArray(values) && values.length > CHUNK_SIZE
       );
       if (needsChunking) {
-        console.log(`Filter has arrays >${CHUNK_SIZE} items, using chunked query...`);
-        const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
-        for (const event of chunkedResult.events) {
-          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
-          eventSet.set(event.id, event);
-          totalEventsRead++;
-        }
-        continue;
+        chunkedFilters.push(filter);
+      } else {
+        batchableFilters.push(filter);
       }
-      const query = buildQuery(filter);
-      try {
-        const result = await session.prepare(query.sql).bind(...query.params).all();
-        if (result.meta) {
-          console.log({
-            servedByRegion: result.meta.served_by_region ?? "",
-            servedByPrimary: result.meta.served_by_primary ?? false,
-            rowsRead: result.results.length
-          });
+    }
+    let totalEventsRead = 0;
+    for (const filter of chunkedFilters) {
+      if (totalEventsRead >= GLOBAL_MAX_EVENTS) {
+        console.warn(`Global event limit reached (${GLOBAL_MAX_EVENTS}), stopping query`);
+        break;
+      }
+      console.log(`Filter has arrays >${CHUNK_SIZE} items, using chunked query...`);
+      const chunkedResult = await queryDatabaseChunked(filter, bookmark, env);
+      for (const event of chunkedResult.events) {
+        if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+        eventSet.set(event.id, event);
+        totalEventsRead++;
+      }
+    }
+    if (batchableFilters.length > 0 && totalEventsRead < GLOBAL_MAX_EVENTS) {
+      const validFilters = [];
+      for (const filter of batchableFilters) {
+        const hasTagFilters = Object.keys(filter).some((key) => key.startsWith("#"));
+        if (hasTagFilters) {
+          const countQuery = buildCountQuery(filter);
+          const countResult = await session.prepare(countQuery.sql).bind(...countQuery.params).first();
+          const estimatedRows = countResult?.count || 0;
+          if (estimatedRows > 1e4) {
+            console.warn(`Query precheck: estimated ${estimatedRows} rows, skipping filter to prevent timeout`);
+            continue;
+          } else {
+            console.log(`Query precheck: estimated ${estimatedRows} rows, proceeding`);
+          }
         }
-        for (const row of result.results) {
-          if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
-          const event = {
-            id: row.id,
-            pubkey: row.pubkey,
-            created_at: row.created_at,
-            kind: row.kind,
-            tags: JSON.parse(row.tags),
-            content: row.content,
-            sig: row.sig
-          };
-          eventSet.set(event.id, event);
-          totalEventsRead++;
+        validFilters.push(filter);
+      }
+      if (validFilters.length === 0) {
+        console.warn("All filters were too expensive after COUNT precheck");
+      } else {
+        const queries = validFilters.map((filter) => {
+          const query = buildQuery(filter);
+          return session.prepare(query.sql).bind(...query.params);
+        });
+        try {
+          const results = await session.batch(queries);
+          for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            if (i === 0 && result.meta) {
+              console.log({
+                servedByRegion: result.meta.served_by_region ?? "",
+                servedByPrimary: result.meta.served_by_primary ?? false,
+                batchSize: results.length
+              });
+            }
+            if (result.success && result.results) {
+              for (const row of result.results) {
+                if (totalEventsRead >= GLOBAL_MAX_EVENTS) break;
+                const event = {
+                  id: row.id,
+                  pubkey: row.pubkey,
+                  created_at: row.created_at,
+                  kind: row.kind,
+                  tags: JSON.parse(row.tags),
+                  content: row.content,
+                  sig: row.sig
+                };
+                eventSet.set(event.id, event);
+                totalEventsRead++;
+              }
+            } else if (!result.success) {
+              console.error(`Batch query ${i} failed:`, result.error);
+            }
+          }
+        } catch (error) {
+          console.error(`Batch query execution error: ${error.message}`);
+          throw error;
         }
-      } catch (error) {
-        console.error(`Query execution error: ${error.message}`);
-        throw error;
       }
     }
     const events = Array.from(eventSet.values()).sort((a, b) => {
@@ -3512,7 +3703,7 @@ async function processEventsFromQueue(batch, env) {
           metadata.eventTagsCache.tag_a
         ).run();
       }
-      const cacheableTags = metadata.tags.filter((t) => ["p", "e", "a"].includes(t.name));
+      const cacheableTags = metadata.tags.filter((t) => ["p", "e", "a", "t", "d", "r"].includes(t.name));
       if (cacheableTags.length > 0) {
         const cacheBatch = cacheableTags.map(
           (t) => session.prepare(`
@@ -5210,6 +5401,8 @@ var _RelayWebSocket = class _RelayWebSocket {
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
       console.log("Returning cached query result");
+      cached.accessCount++;
+      cached.lastAccessed = Date.now();
       return cached.result;
     }
     const queryPromise = queryEventsWithArchive(filters, bookmark, this.env);
@@ -5218,7 +5411,9 @@ var _RelayWebSocket = class _RelayWebSocket {
       const result = await queryPromise;
       this.queryCache.set(cacheKey, {
         result,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        accessCount: 1,
+        lastAccessed: Date.now()
       });
       this.addToCacheIndex(cacheKey, filters);
       if (this.queryCache.size > this.MAX_CACHE_SIZE) {
@@ -5238,12 +5433,21 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
-      const sortedEntries = Array.from(this.queryCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const entries = Array.from(this.queryCache.entries());
+      const scoredEntries = entries.map(([key, entry]) => {
+        const recencyScore = (now - entry.lastAccessed) / 1e3;
+        const frequencyScore = entry.accessCount * 10;
+        const evictionScore = frequencyScore - recencyScore / 60;
+        return { key, score: evictionScore };
+      });
+      scoredEntries.sort((a, b) => a.score - b.score);
       const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
       for (let i = 0; i < toRemove; i++) {
-        this.queryCache.delete(sortedEntries[i][0]);
-        this.removeFromCacheIndex(sortedEntries[i][0]);
+        const key = scoredEntries[i].key;
+        this.queryCache.delete(key);
+        this.removeFromCacheIndex(key);
       }
+      console.log(`Evicted ${toRemove} low-scoring cache entries (LFU)`);
     }
   }
   // Add cache entry to index for efficient invalidation
