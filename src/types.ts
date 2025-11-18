@@ -16,6 +16,7 @@ export interface NostrFilter {
   since?: number;
   until?: number;
   limit?: number;
+  cursor?: string;
   [key: string]: any;
 }
 

@@ -46,6 +46,12 @@ export class RelayWebSocket implements DurableObject {
   private readonly QUERY_CACHE_TTL = 60000;
   private readonly MAX_CACHE_SIZE = 100;
 
+  // Query cache index for efficient invalidation (kind:X, author:Y, etc.)
+  private queryCacheIndex: Map<string, Set<string>> = new Map();
+
+  // Active queries for deduplication (prevent duplicate work)
+  private activeQueries: Map<string, Promise<QueryResult>> = new Map();
+
   // Payment status cache
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 60000;
@@ -89,6 +95,8 @@ export class RelayWebSocket implements DurableObject {
     this.doName = 'unknown';
     this.processedEvents = new Map();
     this.queryCache = new Map();
+    this.queryCacheIndex = new Map();
+    this.activeQueries = new Map();
     this.paymentCache = new Map();
     this.lastActivityTime = Date.now();
   }
@@ -126,6 +134,8 @@ export class RelayWebSocket implements DurableObject {
 
     // Clear in-memory caches
     this.queryCache.clear();
+    this.queryCacheIndex.clear();
+    this.activeQueries.clear();
     this.paymentCache.clear();
     this.processedEvents.clear();
 
@@ -237,10 +247,16 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  // Query cache methods
+  // Query cache methods with deduplication
   private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
     // Create cache key from filters and bookmark
     const cacheKey = JSON.stringify({ filters, bookmark });
+
+    // Check if identical query is in flight (deduplication)
+    if (this.activeQueries.has(cacheKey)) {
+      console.log('Returning in-flight query result (deduplication)');
+      return await this.activeQueries.get(cacheKey)!;
+    }
 
     // Check cache
     const cached = this.queryCache.get(cacheKey);
@@ -249,21 +265,32 @@ export class RelayWebSocket implements DurableObject {
       return cached.result;
     }
 
-    // Query database
-    const result = await queryEventsWithArchive(filters, bookmark, this.env);
+    // Execute query and track as active
+    const queryPromise = queryEventsWithArchive(filters, bookmark, this.env);
+    this.activeQueries.set(cacheKey, queryPromise);
 
-    // Cache the result
-    this.queryCache.set(cacheKey, {
-      result,
-      timestamp: Date.now()
-    });
+    try {
+      const result = await queryPromise;
 
-    // Clean up old cache entries if cache is too large
-    if (this.queryCache.size > this.MAX_CACHE_SIZE) {
-      this.cleanupQueryCache();
+      // Cache the result
+      this.queryCache.set(cacheKey, {
+        result,
+        timestamp: Date.now()
+      });
+
+      // Index this cache entry for efficient invalidation
+      this.addToCacheIndex(cacheKey, filters);
+
+      // Clean up old cache entries if cache is too large
+      if (this.queryCache.size > this.MAX_CACHE_SIZE) {
+        this.cleanupQueryCache();
+      }
+
+      return result;
+    } finally {
+      // Remove from active queries
+      this.activeQueries.delete(cacheKey);
     }
-
-    return result;
   }
 
   private cleanupQueryCache(): void {
@@ -272,6 +299,7 @@ export class RelayWebSocket implements DurableObject {
     for (const [key, entry] of this.queryCache.entries()) {
       if (now - entry.timestamp > this.QUERY_CACHE_TTL) {
         this.queryCache.delete(key);
+        this.removeFromCacheIndex(key);
       }
     }
 
@@ -283,35 +311,104 @@ export class RelayWebSocket implements DurableObject {
       const toRemove = Math.floor(this.MAX_CACHE_SIZE * 0.2);
       for (let i = 0; i < toRemove; i++) {
         this.queryCache.delete(sortedEntries[i][0]);
+        this.removeFromCacheIndex(sortedEntries[i][0]);
+      }
+    }
+  }
+
+  // Add cache entry to index for efficient invalidation
+  private addToCacheIndex(cacheKey: string, filters: NostrFilter[]): void {
+    for (const filter of filters) {
+      // Index by kinds
+      if (filter.kinds) {
+        for (const kind of filter.kinds) {
+          const indexKey = `kind:${kind}`;
+          if (!this.queryCacheIndex.has(indexKey)) {
+            this.queryCacheIndex.set(indexKey, new Set());
+          }
+          this.queryCacheIndex.get(indexKey)!.add(cacheKey);
+        }
+      }
+
+      // Index by authors
+      if (filter.authors) {
+        for (const author of filter.authors) {
+          const indexKey = `author:${author}`;
+          if (!this.queryCacheIndex.has(indexKey)) {
+            this.queryCacheIndex.set(indexKey, new Set());
+          }
+          this.queryCacheIndex.get(indexKey)!.add(cacheKey);
+        }
+      }
+
+      // Index by tag filters (#p, #e, #a, etc.)
+      for (const [key, values] of Object.entries(filter)) {
+        if (key.startsWith('#') && Array.isArray(values)) {
+          const tagName = key.substring(1);
+          for (const value of values) {
+            const indexKey = `tag:${tagName}:${value}`;
+            if (!this.queryCacheIndex.has(indexKey)) {
+              this.queryCacheIndex.set(indexKey, new Set());
+            }
+            this.queryCacheIndex.get(indexKey)!.add(cacheKey);
+          }
+        }
+      }
+    }
+  }
+
+  // Remove cache entry from index
+  private removeFromCacheIndex(cacheKey: string): void {
+    // Remove this cache key from all index entries
+    for (const [indexKey, cacheKeys] of this.queryCacheIndex.entries()) {
+      cacheKeys.delete(cacheKey);
+      // Clean up empty index entries
+      if (cacheKeys.size === 0) {
+        this.queryCacheIndex.delete(indexKey);
       }
     }
   }
 
   private invalidateRelevantCaches(event: NostrEvent): void {
-    // Invalidate query caches that might include this new event
-    let invalidated = 0;
+    // Optimized cache invalidation using index
+    const keysToInvalidate = new Set<string>();
 
-    for (const [cacheKey] of this.queryCache.entries()) {
-      try {
-        const { filters } = JSON.parse(cacheKey);
-
-        // Check if the new event matches any of the cached filters
-        const wouldMatch = filters.some((filter: NostrFilter) =>
-          this.matchesFilter(event, filter)
-        );
-
-        if (wouldMatch) {
-          this.queryCache.delete(cacheKey);
-          invalidated++;
-        }
-      } catch (error) {
-        // If we can't parse the key, remove it
-        this.queryCache.delete(cacheKey);
+    // O(1) lookup by kind
+    const kindKey = `kind:${event.kind}`;
+    if (this.queryCacheIndex.has(kindKey)) {
+      for (const cacheKey of this.queryCacheIndex.get(kindKey)!) {
+        keysToInvalidate.add(cacheKey);
       }
     }
 
-    if (invalidated > 0) {
-      console.log(`Invalidated ${invalidated} cache entries due to new event ${event.id}`);
+    // O(1) lookup by author
+    const authorKey = `author:${event.pubkey}`;
+    if (this.queryCacheIndex.has(authorKey)) {
+      for (const cacheKey of this.queryCacheIndex.get(authorKey)!) {
+        keysToInvalidate.add(cacheKey);
+      }
+    }
+
+    // O(1) lookup by tags (p, e, a, etc.)
+    for (const tag of event.tags) {
+      if (tag.length >= 2) {
+        const tagKey = `tag:${tag[0]}:${tag[1]}`;
+        if (this.queryCacheIndex.has(tagKey)) {
+          for (const cacheKey of this.queryCacheIndex.get(tagKey)!) {
+            keysToInvalidate.add(cacheKey);
+          }
+        }
+      }
+    }
+
+    // Invalidate collected keys
+    for (const key of keysToInvalidate) {
+      this.queryCache.delete(key);
+      this.removeFromCacheIndex(key);
+    }
+
+    if (keysToInvalidate.size > 0) {
+      console.log(`Invalidated ${keysToInvalidate.size} cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
     }
   }
 

@@ -1,3 +1,7 @@
+## v7.7.15 - 2025-11-18
+
+New: more indexes, better query handling, caching, and other database optimizations
+
 ## v7.6.15 - 2025-11-17
 
 New: uses Queues for all event messages

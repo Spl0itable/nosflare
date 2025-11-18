@@ -90,6 +90,12 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
 
+      // Covering indexes for common queries
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags)`,
+
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
@@ -132,7 +138,19 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         created_at INTEGER NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`
+      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`,
+
+      // Materialized view for recent popular content (kind 1 notes from last 24h)
+      `CREATE TABLE IF NOT EXISTS mv_recent_notes (
+        id TEXT PRIMARY KEY,
+        pubkey TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        kind INTEGER NOT NULL,
+        tags TEXT NOT NULL,
+        content TEXT NOT NULL,
+        sig TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC)`
     ];
 
     for (const statement of statements) {
@@ -144,7 +162,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('db_initialized', '1')"
     ).run();
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '2')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '4')"
     ).run();
 
     await session.prepare(`
@@ -737,6 +755,13 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
       params.push(filter.until);
     }
 
+    // Cursor-based pagination support
+    if (filter.cursor) {
+      const [timestamp, lastId] = filter.cursor.split(':');
+      whereConditions.push("(c.created_at < ? OR (c.created_at = ? AND e.id > ?))");
+      params.push(parseInt(timestamp), parseInt(timestamp), lastId);
+    }
+
     if (whereConditions.length > 0) {
       sql += " WHERE " + whereConditions.join(" AND ");
     }
@@ -748,26 +773,75 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     return { sql, params };
   }
 
-  // Has any non-cacheable tags - use CTE with tags table
+  // Has any non-cacheable tags - use optimized strategy
   if (tagCount > 0) {
-    const tagConditions: string[] = [];
-    const cteParams: any[] = [];
+    const allTags = [...cacheableTags, ...otherTags];
 
-    // Include ALL tags in the CTE (both cacheable and non-cacheable)
-    for (const tagFilter of [...cacheableTags, ...otherTags]) {
-      tagConditions.push(`(tag_name = ? AND tag_value IN (${tagFilter.values.map(() => '?').join(',')}))`);
-      cteParams.push(tagFilter.name, ...tagFilter.values);
+    // Single tag filter - use direct join
+    if (allTags.length === 1) {
+      const tagFilter = allTags[0];
+      let sql = `SELECT e.* FROM events e
+        INNER JOIN tags t ON e.id = t.event_id
+        WHERE t.tag_name = ? AND t.tag_value IN (${tagFilter.values.map(() => '?').join(',')})`;
+
+      params.push(tagFilter.name, ...tagFilter.values);
+
+      const whereConditions: string[] = [];
+
+      if (filter.ids && filter.ids.length > 0) {
+        whereConditions.push(`e.id IN (${filter.ids.map(() => '?').join(',')})`);
+        params.push(...filter.ids);
+      }
+
+      if (filter.authors && filter.authors.length > 0) {
+        whereConditions.push(`e.pubkey IN (${filter.authors.map(() => '?').join(',')})`);
+        params.push(...filter.authors);
+      }
+
+      if (filter.kinds && filter.kinds.length > 0) {
+        whereConditions.push(`e.kind IN (${filter.kinds.map(() => '?').join(',')})`);
+        params.push(...filter.kinds);
+      }
+
+      if (filter.since) {
+        whereConditions.push("e.created_at >= ?");
+        params.push(filter.since);
+      }
+
+      if (filter.until) {
+        whereConditions.push("e.created_at <= ?");
+        params.push(filter.until);
+      }
+
+      // Cursor-based pagination support
+      if (filter.cursor) {
+        const [timestamp, lastId] = filter.cursor.split(':');
+        whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
+        params.push(parseInt(timestamp), parseInt(timestamp), lastId);
+      }
+
+      if (whereConditions.length > 0) {
+        sql += " AND " + whereConditions.join(" AND ");
+      }
+
+      sql += " ORDER BY e.created_at DESC";
+      sql += " LIMIT ?";
+      params.push(Math.min(filter.limit || 1000, 5000));
+
+      return { sql, params };
     }
 
-    let sql = `WITH matching_events AS (
-      SELECT DISTINCT event_id 
-      FROM tags 
-      WHERE ${tagConditions.join(' OR ')}
-    )
-    SELECT e.* FROM events e
-    INNER JOIN matching_events m ON e.id = m.event_id`;
+    // Multiple tags - use INTERSECT strategy
+    const subqueries: string[] = [];
 
-    params.push(...cteParams);
+    for (const tagFilter of allTags) {
+      const tagParams = tagFilter.values.map(() => '?').join(',');
+      subqueries.push(`SELECT event_id FROM tags WHERE tag_name = ? AND tag_value IN (${tagParams})`);
+      params.push(tagFilter.name, ...tagFilter.values);
+    }
+
+    let sql = `SELECT e.* FROM events e
+      WHERE e.id IN (${subqueries.join(' INTERSECT ')})`;
 
     const whereConditions: string[] = [];
 
@@ -796,8 +870,15 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
       params.push(filter.until);
     }
 
+    // Cursor-based pagination support
+    if (filter.cursor) {
+      const [timestamp, lastId] = filter.cursor.split(':');
+      whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
+      params.push(parseInt(timestamp), parseInt(timestamp), lastId);
+    }
+
     if (whereConditions.length > 0) {
-      sql += " WHERE " + whereConditions.join(" AND ");
+      sql += " AND " + whereConditions.join(" AND ");
     }
 
     sql += " ORDER BY e.created_at DESC";
@@ -816,21 +897,22 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   const authorCount = filter.authors?.length || 0;
   const kindCount = filter.kinds?.length || 0;
 
-  // Choose index based on query pattern
+  // Choose covering index based on query pattern
   if (hasAuthors && hasKinds && authorCount <= 10 && kindCount <= 10) {
     if (authorCount <= kindCount) {
-      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at";
+      indexHint = " INDEXED BY idx_events_pubkey_kind_created_at_covering";
     } else {
-      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at";
+      indexHint = " INDEXED BY idx_events_kind_pubkey_created_at_covering";
     }
   } else if (hasAuthors && authorCount <= 5 && !hasKinds) {
+    // Use basic index for author-only queries as covering index may be too large
     indexHint = " INDEXED BY idx_events_pubkey_created_at";
   } else if (hasKinds && kindCount <= 5 && !hasAuthors) {
-    indexHint = " INDEXED BY idx_events_kind_created_at";
+    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
   } else if (hasAuthors && hasKinds && authorCount > 10) {
-    indexHint = " INDEXED BY idx_events_kind_created_at";
+    indexHint = " INDEXED BY idx_events_kind_created_at_covering";
   } else if (!hasAuthors && !hasKinds && hasTimeRange) {
-    indexHint = " INDEXED BY idx_events_created_at";
+    indexHint = " INDEXED BY idx_events_created_at_covering";
   }
 
   let sql = `SELECT * FROM events${indexHint}`;
@@ -858,6 +940,13 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
   if (filter.until) {
     conditions.push("created_at <= ?");
     params.push(filter.until);
+  }
+
+  // Cursor-based pagination support
+  if (filter.cursor) {
+    const [timestamp, lastId] = filter.cursor.split(':');
+    conditions.push("(created_at < ? OR (created_at = ? AND id > ?))");
+    params.push(parseInt(timestamp), parseInt(timestamp), lastId);
   }
 
   if (conditions.length > 0) {
@@ -2764,8 +2853,11 @@ export default {
     console.log('Running scheduled maintenance...');
 
     try {
+      const now = new Date();
+      const currentMinute = now.getMinutes();
+      const currentHour = now.getHours();
+
       // Run archive process and database optimization every 30 minutes
-      const currentMinute = new Date().getMinutes();
       if (currentMinute % 30 === 0) {
         console.log('Running archive and optimization (30-minute interval)...');
 
@@ -2776,6 +2868,40 @@ export default {
         const session = env.RELAY_DATABASE.withSession('first-primary');
         await session.prepare('PRAGMA optimize').run();
         console.log('Database optimization completed');
+      }
+
+      // Run ANALYZE daily at 3:00 AM to update query planner statistics
+      if (currentHour === 3 && currentMinute === 0) {
+        console.log('Running scheduled ANALYZE (daily maintenance)...');
+        const session = env.RELAY_DATABASE.withSession('first-primary');
+
+        await session.prepare('ANALYZE events').run();
+        await session.prepare('ANALYZE tags').run();
+        await session.prepare('ANALYZE event_tags_cache').run();
+
+        console.log('ANALYZE completed - query planner statistics updated');
+      }
+
+      // Refresh materialized view hourly (on the hour)
+      if (currentMinute === 0) {
+        console.log('Refreshing materialized view for recent notes...');
+        const session = env.RELAY_DATABASE.withSession('first-primary');
+
+        // Delete old data
+        await session.prepare('DELETE FROM mv_recent_notes').run();
+
+        // Refresh with last 24h of kind 1 notes (limit to 1000 most recent)
+        const oneDayAgo = Math.floor(Date.now() / 1000) - 86400;
+        await session.prepare(`
+          INSERT INTO mv_recent_notes (id, pubkey, created_at, kind, tags, content, sig)
+          SELECT id, pubkey, created_at, kind, tags, content, sig
+          FROM events
+          WHERE kind = 1 AND created_at > ?
+          ORDER BY created_at DESC
+          LIMIT 1000
+        `).bind(oneDayAgo).run();
+
+        console.log('Materialized view refresh completed');
       }
     } catch (error) {
       console.error('Scheduled maintenance failed:', error);
