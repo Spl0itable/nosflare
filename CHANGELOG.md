@@ -2,6 +2,32 @@
 
 New: more indexes, better query handling, caching, and other database optimizations
 
+*NOTE* this update includes is a small breaking change if database is already live. Please run the following from the Storage & Databases > D1 SQL database page in the Cloudflare dashboard and select your relay's database. Then click into console from the top menu. From there, run these commands:
+
+```
+CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags);
+CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags);
+CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags);
+CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at_covering ON events(kind, pubkey, created_at DESC, id, sig, content, tags);
+CREATE TABLE IF NOT EXISTS mv_recent_notes (
+  id TEXT PRIMARY KEY,
+  pubkey TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  kind INTEGER NOT NULL,
+  tags TEXT NOT NULL,
+  content TEXT NOT NULL,
+  sig TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC);
+INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '4');
+INSERT INTO mv_recent_notes (id, pubkey, created_at, kind, tags, content, sig)
+SELECT id, pubkey, created_at, kind, tags, content, sig
+FROM events
+WHERE kind = 1 AND created_at > (strftime('%s', 'now') - 86400)
+ORDER BY created_at DESC
+LIMIT 1000;
+```
+
 ## v7.6.15 - 2025-11-17
 
 New: uses Queues for all event messages

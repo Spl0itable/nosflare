@@ -90,7 +90,6 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
 
-      // Covering indexes for common queries
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at_covering ON events(kind, created_at DESC, id, pubkey, sig, content, tags)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at_covering ON events(pubkey, kind, created_at DESC, id, sig, content, tags)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at_covering ON events(created_at DESC, id, pubkey, kind, sig, content, tags)`,
@@ -140,7 +139,6 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`,
 
-      // Materialized view for recent popular content (kind 1 notes from last 24h)
       `CREATE TABLE IF NOT EXISTS mv_recent_notes (
         id TEXT PRIMARY KEY,
         pubkey TEXT NOT NULL,
