@@ -2,7 +2,7 @@
 node_modules/
 
 # Build output
-worker.js
+package-lock.json
 worker.js.map
 
 # TypeScript

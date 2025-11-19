@@ -1,3 +1,7 @@
+## v7.7.17 - 2025-11-19
+
+Hotfix: optimized tag handling
+
 ## v7.7.16 - 2025-11-18
 
 Hotfix: return up to 5000 events if value in REQ too high instead of immediate close
