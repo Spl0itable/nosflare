@@ -1,3 +1,7 @@
+## v7.7.18 - 2025-11-19
+
+Hotfix: possible infinite loop in DOs alarm
+
 ## v7.7.17 - 2025-11-19
 
 Hotfix: optimized tag handling

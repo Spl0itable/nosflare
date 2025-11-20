@@ -116,11 +116,11 @@ export class RelayWebSocket implements DurableObject {
 
     console.log(`DO ${this.doName} - Active WebSockets: ${activeCount}, Idle time: ${idleTime}ms`);
 
-    // If no active connections and idle timeout exceeded, clean up
-    if (activeCount === 0 && idleTime >= this.IDLE_TIMEOUT) {
-      console.log(`Cleaning up idle DO ${this.doName}`);
+    // If no active connections, clean up and don't reschedule
+    if (activeCount === 0) {
+      console.log(`Cleaning up DO ${this.doName} - no active connections`);
       await this.cleanup();
-      // Don't set another alarm - let the DO shut down
+      // Don't set another alarm - let the DO be evicted
       return;
     }
 
@@ -568,6 +568,13 @@ export class RelayWebSocket implements DurableObject {
 
       // Clean up stored subscriptions
       await this.deleteSubscriptions(attachment.sessionId);
+
+      // If no more active WebSockets, delete the alarm to allow DO eviction
+      const activeWebSockets = this.state.getWebSockets();
+      if (activeWebSockets.length === 0) {
+        await this.state.storage.deleteAlarm();
+        console.log(`Deleted alarm for DO ${this.doName} - no active connections remaining`);
+      }
     }
   }
 

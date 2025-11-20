@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.17",
+  version: "7.7.18",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -5302,8 +5302,8 @@ var _RelayWebSocket = class _RelayWebSocket {
     const activeWebSockets = this.state.getWebSockets();
     const activeCount = activeWebSockets.length;
     console.log(`DO ${this.doName} - Active WebSockets: ${activeCount}, Idle time: ${idleTime}ms`);
-    if (activeCount === 0 && idleTime >= this.IDLE_TIMEOUT) {
-      console.log(`Cleaning up idle DO ${this.doName}`);
+    if (activeCount === 0) {
+      console.log(`Cleaning up DO ${this.doName} - no active connections`);
       await this.cleanup();
       return;
     }
@@ -5630,6 +5630,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       console.log(`WebSocket closed: ${attachment.sessionId} on DO ${this.doName}`);
       this.sessions.delete(attachment.sessionId);
       await this.deleteSubscriptions(attachment.sessionId);
+      const activeWebSockets = this.state.getWebSockets();
+      if (activeWebSockets.length === 0) {
+        await this.state.storage.deleteAlarm();
+        console.log(`Deleted alarm for DO ${this.doName} - no active connections remaining`);
+      }
     }
   }
   async webSocketError(ws, error) {
