@@ -4,6 +4,7 @@ node_modules/
 # Build output
 worker.js
 worker.js.map
+dist/
 
 # TypeScript
 *.tsbuildinfo

@@ -1,4 +1,5 @@
-import { RelayInfo } from './types';
+import { z } from 'zod';
+import { RelayInfo, NostrEvent } from './types';
 
 // ***************************** //
 // ** BEGIN EDITABLE SETTINGS ** //
@@ -161,7 +162,6 @@ export const excludedRateLimitKinds = new Set<number>([
 // *************************** //
 
 // Helper validation functions
-import { NostrEvent } from './types';
 
 export function isPubkeyAllowed(pubkey: string): boolean {
   if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
@@ -198,4 +198,146 @@ export function isTagAllowed(tag: string): boolean {
     return false;
   }
   return !blockedTags.has(tag);
+}
+
+const relayInfoSchema = z.object({
+  name: z.string().min(1, "Relay name is required"),
+  description: z.string().min(1, "Relay description is required"),
+  pubkey: z.string().min(1, "Relay pubkey is required"),
+  contact: z.string().min(1, "Relay contact is required"),
+  supported_nips: z.array(z.number().int()),
+  software: z.string().min(1, "Relay software identifier is required"),
+  version: z.string().min(1, "Relay version is required"),
+  icon: z.string().min(1, "Relay icon is required"),
+  limitation: z
+    .object({
+      payment_required: z.boolean().optional(),
+      restricted_writes: z.boolean().optional(),
+    })
+    .catchall(z.any())
+    .optional(),
+  payments_url: z.string().url().optional(),
+  fees: z
+    .object({
+      admission: z.array(z.object({ amount: z.number(), unit: z.string() })).optional(),
+      subscription: z
+        .array(
+          z.object({ amount: z.number(), unit: z.string(), period: z.number().int() })
+        )
+        .optional(),
+      publication: z
+        .array(z.object({ kinds: z.array(z.number().int()), amount: z.number(), unit: z.string() }))
+        .optional(),
+    })
+    .optional(),
+});
+
+const rateLimiterSchema = z.object({
+  rate: z.number().nonnegative(),
+  capacity: z.number().int().nonnegative(),
+});
+
+export const ConfigSchema = z
+  .object({
+    relayInfo: relayInfoSchema,
+    PAY_TO_RELAY_ENABLED: z.boolean(),
+    RELAY_ACCESS_PRICE_SATS: z.number().int(),
+    relayNpub: z.string().min(1, "Pay-to-relay npub is required when payments are enabled"),
+    nip05Users: z.record(z.string()),
+    enableAntiSpam: z.boolean(),
+    enableGlobalDuplicateCheck: z.boolean(),
+    antiSpamKinds: z.set(z.number().int()),
+    checkValidNip05: z.boolean(),
+    blockedNip05Domains: z.set(z.string()),
+    allowedNip05Domains: z.set(z.string()),
+    blockedPubkeys: z.set(z.string()),
+    allowedPubkeys: z.set(z.string()),
+    blockedEventKinds: z.set(z.number().int()),
+    allowedEventKinds: z.set(z.number().int()),
+    blockedContent: z.set(z.string()),
+    blockedTags: z.set(z.string()),
+    allowedTags: z.set(z.string()),
+    PUBKEY_RATE_LIMIT: rateLimiterSchema,
+    REQ_RATE_LIMIT: rateLimiterSchema,
+    excludedRateLimitKinds: z.set(z.number().int()),
+  })
+  .superRefine((value, ctx) => {
+    if (value.PAY_TO_RELAY_ENABLED) {
+      if (value.RELAY_ACCESS_PRICE_SATS <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "RELAY_ACCESS_PRICE_SATS must be greater than zero when pay-to-relay is enabled",
+          path: ["RELAY_ACCESS_PRICE_SATS"],
+        });
+      }
+
+      if (!value.relayNpub.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "relayNpub must be set when pay-to-relay is enabled",
+          path: ["relayNpub"],
+        });
+      }
+    }
+
+    if (value.enableAntiSpam && value.antiSpamKinds.size === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "antiSpamKinds cannot be empty when anti-spam is enabled",
+        path: ["antiSpamKinds"],
+      });
+    }
+  });
+
+export type RuntimeConfig = z.infer<typeof ConfigSchema>;
+
+let cachedConfig: RuntimeConfig | null = null;
+
+function formatZodError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "config";
+      return `${path}: ${issue.message}`;
+    })
+    .join("\n");
+}
+
+export function getConfigSnapshot(): z.input<typeof ConfigSchema> {
+  return {
+    relayInfo,
+    PAY_TO_RELAY_ENABLED,
+    RELAY_ACCESS_PRICE_SATS,
+    relayNpub,
+    nip05Users: { ...nip05Users },
+    enableAntiSpam,
+    enableGlobalDuplicateCheck,
+    antiSpamKinds: new Set(antiSpamKinds),
+    checkValidNip05,
+    blockedNip05Domains: new Set(blockedNip05Domains),
+    allowedNip05Domains: new Set(allowedNip05Domains),
+    blockedPubkeys: new Set(blockedPubkeys),
+    allowedPubkeys: new Set(allowedPubkeys),
+    blockedEventKinds: new Set(blockedEventKinds),
+    allowedEventKinds: new Set(allowedEventKinds),
+    blockedContent: new Set(blockedContent),
+    blockedTags: new Set(blockedTags),
+    allowedTags: new Set(allowedTags),
+    PUBKEY_RATE_LIMIT: { ...PUBKEY_RATE_LIMIT },
+    REQ_RATE_LIMIT: { ...REQ_RATE_LIMIT },
+    excludedRateLimitKinds: new Set(excludedRateLimitKinds),
+  };
+}
+
+export function ensureValidConfig(): RuntimeConfig {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+
+  const result = ConfigSchema.safeParse(getConfigSnapshot());
+  if (!result.success) {
+    throw new Error(`Invalid configuration:\n${formatZodError(result.error)}`);
+  }
+
+  cachedConfig = result.data;
+  return cachedConfig;
 }
