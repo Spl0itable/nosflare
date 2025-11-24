@@ -1,3 +1,7 @@
+import { ensureValidConfig } from './config';
+
+ensureValidConfig();
+
 // Re-export the Durable Object class as a named export
 export { RelayWebSocket } from './durable-object';
 

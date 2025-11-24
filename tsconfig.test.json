@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "declaration": false,
+    "allowJs": true
+  },
+  "include": ["src/config.ts", "tests/**/*"],
+  "exclude": ["node_modules", "worker.js", "dist"]
+}

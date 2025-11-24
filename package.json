@@ -7,10 +7,12 @@
     "build": "esbuild src/index.ts --bundle --outfile=worker.js --platform=neutral --target=es2020 --format=esm --minify=false --keep-names --external:node:*",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --project tsconfig.test.json && node --test dist/tests/*.js"
   },
   "dependencies": {
-    "@noble/curves": "^1.0.0"
+    "@noble/curves": "^1.0.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "esbuild": "^0.19.0",

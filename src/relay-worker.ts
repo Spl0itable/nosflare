@@ -1,6 +1,6 @@
 import { schnorr } from "@noble/curves/secp256k1";
 import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response, PendingEventMetadata } from './types';
-import * as config from './config';
+import { ensureValidConfig } from './config';
 import { RelayWebSocket } from './durable-object';
 
 // Import config values
@@ -16,7 +16,7 @@ const {
   checkValidNip05,
   blockedNip05Domains,
   allowedNip05Domains,
-} = config;
+} = ensureValidConfig();
 
 // Archive configuration constants
 const ARCHIVE_RETENTION_DAYS = 90;
