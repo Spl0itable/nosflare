@@ -205,7 +205,9 @@ const relayInfoSchema = z.object({
   description: z.string().min(1, "Relay description is required"),
   pubkey: z.string().min(1, "Relay pubkey is required"),
   contact: z.string().min(1, "Relay contact is required"),
-  supported_nips: z.array(z.number().int()),
+  supported_nips: z
+    .array(z.number().int())
+    .min(1, "supported_nips must include at least one NIP number"),
   software: z.string().min(1, "Relay software identifier is required"),
   version: z.string().min(1, "Relay version is required"),
   icon: z.string().min(1, "Relay icon is required"),
@@ -278,6 +280,22 @@ export const ConfigSchema = z
           path: ["relayNpub"],
         });
       }
+
+      if (value.relayInfo.limitation?.payment_required === false) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "relayInfo.limitation.payment_required must be true when pay-to-relay is enabled",
+          path: ["relayInfo", "limitation", "payment_required"],
+        });
+      }
+
+      if (value.relayInfo.limitation?.restricted_writes === false) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "relayInfo.limitation.restricted_writes must be true when pay-to-relay is enabled",
+          path: ["relayInfo", "limitation", "restricted_writes"],
+        });
+      }
     }
 
     if (value.enableAntiSpam && value.antiSpamKinds.size === 0) {
@@ -285,6 +303,14 @@ export const ConfigSchema = z
         code: z.ZodIssueCode.custom,
         message: "antiSpamKinds cannot be empty when anti-spam is enabled",
         path: ["antiSpamKinds"],
+      });
+    }
+
+    if (!value.PAY_TO_RELAY_ENABLED && value.relayInfo.limitation?.payment_required) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "relayInfo.limitation.payment_required must be false when pay-to-relay is disabled",
+        path: ["relayInfo", "limitation", "payment_required"],
       });
     }
   });
