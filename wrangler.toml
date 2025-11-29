@@ -2745,28 +2745,3 @@ cpu_ms = 300000
 # Enable logs (disabled by default, but can enabled)
 [observability.logs]
 enabled = false
-
-[[migrations]]
-tag = "v9-payment-do"
-new_sqlite_classes = ["PaymentDO", "EventShardDO"]
-
-[[migrations]]
-tag = "v10-new-architecture"
-
-[[migrations]]
-tag = "v11-remove-legacy-relay-websocket"
-
-[[migrations]]
-tag = "v12-migrate-connection-dos-to-sqlite"
-
-[[migrations]]
-tag = "v13-create-sqlite-dos"
-new_sqlite_classes = ["ConnectionDO", "SessionManagerDO"]
-
-[[migrations]]
-tag = "v16-restore-session-manager-do"
-new_classes = ["SessionManagerDO"]
-
-[[migrations]]
-tag = "v17-restore-session-manager-do-sqlite"
-new_sqlite_classes = ["SessionManagerDO"]
