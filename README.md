@@ -2,226 +2,261 @@
 
 # Nosflare
 
-Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare D1](https://developers.cloudflare.com/d1/) database and [R2 Object Storage](https://developers.cloudflare.com/r2/) bucket. You can use a live, paid version of this relay implementation by adding it to your relay list: `wss://relay.nosflare.com`
+Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay built on Cloudflare's infrastructure using "CFNDB" a custom-built "Cloudflare Nostr Database", which comprises of [Workers](https://developers.cloudflare.com/workers/), [Durable Objects](https://developers.cloudflare.com/durable-objects/), [Queues](https://developers.cloudflare.com/queues/), and [R2 Object Storage](https://developers.cloudflare.com/r2/). This implementation uses a distributed, sharded Durable Objects architecture for event storage, subscription management, and broadcasting for maximum horizontal scaling. A live, paid instance is available at `wss://relay.nosflare.com`.
 
-Most applicable NIPs are supported along with support for "pay to relay", allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
+The relay supports pay-to-relay functionality, allowlisting and blocklisting of pubkeys, event kinds and tags, per-pubkey rate limiting, content filtering, and [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) verified Nostr addresses.
 
-This relay implementation is designed to be easy to deploy, scalable, and cost-effective, leveraging Cloudflare's edge computing infrastructure to provide a resilient relay for the Nostr decentralized social protocol.
-
-Nosflare uses the [Session API](https://developers.cloudflare.com/d1/worker-api/d1-database/#withsession), which enables Cloudflare's global read replication. This can lower latency for read queries and scale read throughput by adding read-only database copies, called read replicas, across regions globally closer to clients.
-
-This relay implementation also uses a multi-regional [Durable Objects](https://developers.cloudflare.com/durable-objects/) mesh network across 9 locations, which is used for long-lived websocket connections and broadcasting new events to all clients. This allows for real-time delivery of new events to all connected clients without the bottleneck of a single Durable Object location.
-
-It also uses the [Websocket Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocket-hibernation-api) in order to reduce costs for billable Duration (GB-s) charges with Durable Objects so the billable usage is not incurred during periods of inactivity, but where clients haven't disconnected.
-
-Additionally, the relay implementation uses [Queues](https://developers.cloudflare.com/queues/) to handle saving EVENT messages, which is capable of sustaining message bursts up to 5000/sec. Each message is then saved to the D1 database in batches of 100 messages.
+## Architecture
 
 ![Nosflare diagram](images/diagram.png)
 
-## One-click Deploy
+CFNDB replaces a traditional SQL database with co-located, in-memory indices stored directly within Durable Objects, and uses "NIN" for "Nostr Indexation Natively". Instead of storing events in database tables and running SQL queries, NIN maintains native index structures alongside events in each Durable Object. NIN is purpose-built for Nostr's specific query patterns (kinds, authors, tags, time ranges).
 
-Don't know how to code or operate a server but still want to run your own Nostr relay? Nosflare Deploy is the easiest, no-code, one-click deployment of your very own relay using your own Cloudflare account for a one-time setup fee of 21,420 sats!
+**Why It's Faster:**
+- No query parsing - Direct Map lookups instead of SQL parsing/planning
+- No disk I/O per query - Indices live in memory, lazy-loaded on demand
+- No JOINs - Set intersections on pre-built indices
+- Time-sorted by design - Binary search for time ranges
+- Co-located data - Events and indices in same Durable Object
 
-You can even make as many updates to your relay as you like after it has been deployed at no extra cost. This is truly democratizing relay ownership! [Deploy here](https://deploy.nosflare.com/)
+### Durable Objects
 
-Or, continue below to manually deploy Nosflare...
+**ConnectionDO** (One per WebSocket connection)
+- Handles individual client WebSocket connections using the [Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocket-hibernation-api)
+- Manages local subscription state and filter matching
+- Processes EVENT, REQ, CLOSE, and AUTH messages
+- Routes events to broadcast queues after validation
+
+**SessionManagerDO** (50 shards)
+- Centralized subscription tracking across all connections
+- In-memory indices for kind, author, tag, and global subscriptions
+- Sharded by kind (kind % 50) for parallel query execution
+- Provides O(1) subscription lookups during event broadcast
+
+**BroadcastShardDO** (Dynamic instances)
+- Distributes events to matching ConnectionDO instances
+- Groups sessions into batches of 900 to stay under Cloudflare's 1000 subrequest limit
+- Receives pre-serialized JSON to avoid redundant serialization
+
+**EventShardDO** (Time-based shards and read replicas)
+- 24-hour time windows for event storage
+- 4 read replicas per 24hr shard
+- In-memory indices: kind, author, tag, created_at, composite indices
+- Index limits: 100,000 per kind/author/tag index, 500,000 for global time-sorted index
+- Supports NIP-09 deletions, NIP-16 replaceable events, NIP-33 addressable events, NIP-50 search
+
+**PaymentDO**
+- Tracks paid pubkeys for pay-to-relay functionality
+
+### Queues
+
+**Broadcast Queues** (50 queues)
+- Sharded by event kind (kind % 50)
+- Enables targeted SessionManagerDO queries (only relevant shards)
+- Pre-serializes events once for all subscribers
+
+**Indexing Queues** (200 queues)
+- 50 queues per read replica type
+- Hash-based sharding by event ID
+- Batch processing up to 100 events per batch
+
+**R2 Archive Queue**
+- Rate-limited writes to R2 (respects ~1000 req/sec limit)
+- Decouples indexing latency from archive storage
+- Automatic retries via dead-letter queue
 
 ## Supported NIPs
 
-- Supports a range of [Nostr Improvement Proposals (NIPs)](https://github.com/fiatjaf/nostr/tree/master/nips), including NIPs 1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40.
+This relay implements the following [Nostr Improvement Proposals (NIPs)](https://github.com/nostr-protocol/nips):
+
+- NIP-01: Basic protocol flow
+- NIP-02: Contact List and Petnames
+- NIP-04: Encrypted Direct Messages
+- NIP-05: Mapping Nostr keys to DNS-based internet identifiers
+- NIP-09: Event Deletion
+- NIP-11: Relay Information Document
+- NIP-12: Generic Tag Queries
+- NIP-15: Marketplace
+- NIP-16: Event Treatment (Replaceable Events)
+- NIP-17: Private Direct Messages
+- NIP-20: Command Results
+- NIP-22: Event created_at Limits
+- NIP-23: Long-form Content
+- NIP-33: Parameterized Replaceable Events
+- NIP-40: Expiration Timestamp (with automatic cleanup)
+- NIP-42: Authentication of clients to relays
+- NIP-50: Search Capability
+- NIP-51: Lists
+- NIP-58: Badges
+- NIP-65: Relay List Metadata
+- NIP-71: Video Events
+- NIP-78: Application-specific data
+- NIP-89: Recommended Application Handlers
+- NIP-94: File Metadata
+
+## One-click Deploy
+
+Deploy your own Nostr relay using your Cloudflare account with [Nosflare Deploy](https://deploy.nosflare.com/) for a one-time setup fee. Updates to your relay configuration are included at no extra cost.
+
+For manual deployment, continue below.
 
 ## Getting Started
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database, Durable Objects, and R2 bucket.
-- [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
-- (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
+- A [Cloudflare](https://www.cloudflare.com/plans/) account with Workers paid plan (required for Durable Objects, Queues, and R2)
+- [Node.js](https://nodejs.org/) and npm
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
 
 ### Dependencies
 
-Nosflare requires the [@noble/curves](https://github.com/paulmillr/noble-curves) package for cryptographic operations, the [@evanw/esbuild](https://github.com/evanw/esbuild) bundler, and [TypeScript](https://www.typescriptlang.org):
+Install the required packages:
 
-```
-npm install @noble/curves
-npm install -g esbuild typescript wrangler
-npm install --save-dev @cloudflare/workers-types @types/node
+```bash
+npm install
 ```
 
-### Building
+Core dependencies include:
+- **@noble/curves**: Cryptographic operations for signature verification
+- **msgpackr**: Binary serialization for internal DO-to-DO communication
+- **esbuild**: Bundler for production builds
+- **wrangler**: Cloudflare Workers deployment tool
 
-Either fork this repo or clone it to your machine (but forking is recommended so you can deploy from your own git repo), then either open the project in your favorite text editor or `cd` into its directory, and open `src/config.ts` in a text editor. Edit the contents of `relayInfo` and enable any optional settings as desired by uncommenting them to customize the relay name, icon, limitations, etc.
- 
-*Optional:*
-- In the `src/config.ts` file: Edit the "Pay to relay" settings if you would like to charge people for access to the relay via payment in Bitcoin through a Nostr zap. This feature is enabled by default. You will want to set `PAY_TO_RELAY_ENABLED` to `false` value if you would like to disable it. Edit `relayNpub` with your own npub and enter the desired price in SATS in `RELAY_ACCESS_PRICE_SATS`, Edit `nip05Users` section to add usernames and their hex pubkey for NIP-05 verified Nostr address, Edit the `blockedPubkeys` or `allowedPubkeys ` and `blockedEventKinds` or `allowedEventKinds` to either blocklist or allowlist pubkeys and event kinds, Edit `blockedContent` to block specific words and/or phrases, Edit `excludedRateLimitKinds` to exclude event kinds from rate limiting, Edit the `blockedTags` or `allowedTags` to either blocklist or allowlist tags, and/or Edit the `blockedNip05Domains` or `allowedNip05Domains` to either blocklist or allowlist domains for the NIP-05 validation (see spam filtering note below).
+### Configuration
 
-You can find full list of event kinds [here](https://github.com/nostr-protocol/nips#event-kinds) and tags [here](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags).
+Fork or clone this repository. Edit `src/config.ts` to configure relay settings:
 
-How blocklisting and allowlisting works:
-> If pubkey(s) and event kind(s) and tag(s) are in blocklist, only that pubkey(s) and event kind(s) and tag(s) will be blocked and all others allowed. Conversely, if pubkey(s) and event kind(s) and tag(s) are in allowlist, only that pubkey(s) and event kind(s) and tag(s) will be allowed and all others blocked.
+**Required Configuration:**
+- `relayInfo`: Set relay name, description, pubkey, contact information, and supported features
+- `relayNpub`: Your npub for receiving payments (if pay-to-relay is enabled)
+- `auth_required`: By default, NIP-42 authentication is disabled. Choose whether to enable it
 
-*HTML landing page:*
+**Optional Settings:**
 
-Nosflare has a default static HTML page that renders when someone visits the relay URL from a browser instead of a Nostr client. This landing page is what's used to accept payments for access to the relay (if enabled) as well as show some data about the relay. Customize this as you please, adding your own logo, etc.
+*Pay-to-Relay:*
+- Set `PAY_TO_RELAY_ENABLED` to `false` to disable payment requirements
+- Configure `RELAY_ACCESS_PRICE_SATS` to set the relay access price in satoshis
 
-*Spam filtering:*
+*Access Control:*
+- `blockedPubkeys` / `allowedPubkeys`: Control which public keys can publish events
+- `blockedEventKinds` / `allowedEventKinds`: Filter event types ([event kinds reference](https://github.com/nostr-protocol/nips#event-kinds))
+- `blockedTags` / `allowedTags`: Filter by event tags ([tags reference](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags))
+- `blockedContent`: Block events containing specific words or phrases
 
-Nosflare has two optional robust spam filtering mechanisms: NIP-05 Nostr address validation and deriving hashes of event content. 
+*NIP-05 Verification:*
+- `nip05Users`: Map usernames to hex pubkeys for verified addresses
+- `checkValidNip05`: Require valid NIP-05 addresses for publishing (anti-spam)
+- `blockedNip05Domains` / `allowedNip05Domains`: Filter by NIP-05 domain
 
-The NIP-05 validation is disabled by default and must be set to `true` in `checkValidNip05` in the `src/config.ts` file and is handled within the `processEvent` function in the `src/relay-worker.ts` file. There you will see the code block for "NIP-05 validation". Furthermore, you can explicitly list domains you'd like to allow or block from publishing events.
+*Rate Limiting:*
+- `PUBKEY_RATE_LIMIT`: Limit EVENT messages per pubkey (default: 10/minute)
+- `REQ_RATE_LIMIT`: Limit REQ messages per connection (default: 100/minute)
+- `excludedRateLimitKinds`: Exempt specific event kinds from rate limiting
 
-Additionally, there's an optional setting `enableAntiSpam` that is disabled by default. Setting it to `true` subjects each event submitted to the relay to generate a hash based on the author's pubkey and the content of the event. A variety of kinds are included in the duplicate checker, but can be removed from the list to skip them. This means, someone could submit an event of a note that says "Hey whatsup" and that'd be the only time that particular pubkey could ever create a single note like that. This prevents someone from repeatedly publishing the exact same note.
+For blocklists and allowlists: if the allowlist is populated, only those items are permitted. If the blocklist is populated, only those items are denied. Both cannot be used simultaneously for the same category.
 
-As briefly mentioned above, you can change which event kinds are subjected to checking for duplicate hashes in the `antiSpamKinds` array. There you can have more granular control over what event kinds are subjected to the spam filtering. Similar allowlisting/blocklisting logic as explained further above is also relevant here. 
+**Build Command:**
 
-Even further, you can have even more granular control over the spam filtering by changing the value of `enableGlobalDuplicateCheck`. By default, this option is set to `false` value, which means each event submitted to the relay is hashed with the author's pubkey. If set to `true` value it globally hashes the event content. As with the example given earlier, if one person were to write "Hey whatsup" and the value of `enableGlobalDuplicateCheck` is set to `true` then no other person can also write a note with "Hey whatsup" as the hash will already exist and any subsequent events would be denied. This is particularly useful if your relay is under spam attack and the attackers are using disposable pubkeys, but the content of the spam notes are the same for each (such as the attack by "ReplyGuy").
+```bash
+npm run build
+```
+
+This bundles the TypeScript source into `worker.js` for deployment.
 
 ### Deployment
 
-Once you've made the desired edits, from the project's directory within CLI use the command `npm run build` to bundle the worker script. This will use the edited `src/config.ts` file to overwrite the `worker.js` file. You can then either copy the contens of the `worker.js` file and paste it directly into the Worker code editor in the Cloudflare dashboard. Or, if files are git pushed to a repo, you can link the repo to the Worker and it will automatically build using the `worker.js` script to the Worker. Thereafter, any changes saved to the git repo will be pushed to update the Worker automatically.
+Deploy using Wrangler CLI or the Cloudflare dashboard with git integration.
 
-You can deploy Nosflare using either the Wrangler CLI or directly through the Cloudflare dashboard. We'll focus on a mix of using the Cloudflare dashboard and connected git repo, but many steps for using Wrangler CLI is somewhat similar:
+#### Using Wrangler CLI
 
-#### Cloudflare Dashboard
+1. **Create R2 Bucket:**
+   ```bash
+   wrangler r2 bucket create nostr-archive
+   ```
 
-1. Log in to your Cloudflare dashboard.
-2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region. Go to R2 Object Storage and click "Create a bucket" and call this whatever you like and select region.
-3. In the newly created D1 database click Settings tab and click "Enable read replication". Ignore the warning, Nosflare has been extensively tested to support read replication. However, fallback support is included in case read replication is disabled.
-4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name. Additionally, in the `bucket_name` add the name of the R2 bucket created.
-5. Go to Queues and click Create Queue and call it "event-processing-queue"
-6. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
-7. If not using a connected git repo, then on the Bindings tab of the Worker, bind the `RELAY_DATABASE` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section, bind the `EVENT_QUEUE` variable to the Queue you created, and bind `EVENT_ARCHIVE` to the R2 bucket you created. These bindings will occur automatically and can be skipped if pushing from git to the worker.
-8. Depending what you picked in step 4, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
-9. Save and deploy the relay worker. Visit the relay URL through HTTP request (from browser) to the landing page. This will trigger the database initialization to build the necessary database tables.
-10. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
-11. (Optional) Use the `migrate.js` script to build a seperate worker to migrate from R2 bucket to D1 database if previous Nosflare-powered relay was deployed (see below).
+2. **Create Queues:**
+   ```bash
+   ./scripts/setup-queues.sh
+   ```
+   This creates all 254 queues: 50 broadcast, 200 indexing (4 replicas x 50), 3 dead-letter queues, and 1 R2 archive queue.
 
-## Cost Analysis & Pricing
+3. **Update wrangler.toml:**
+   - Set the `bucket_name` under `[[r2_buckets]]` to match your R2 bucket name
+   - Optionally change the worker `name`
 
-Nosflare is serverless and operates on Cloudflare's usage-based pricing model - **you only pay for what you use**. This makes it extremely cost-effective compared to traditional server-based relays that charge fixed monthly fees regardless of usage.
+4. **Deploy:**
+   ```bash
+   npm run deploy
+   ```
 
-**Base Requirements:**
-- Workers Paid Plan (recommended): **$5/month minimum**
-- Includes generous free tiers before any additional charges
+#### Using Cloudflare Dashboard
 
-**Included Monthly Allowances:**
-- 10 million Worker requests
-- 30 million CPU milliseconds 
-- 1 million Durable Object requests
-- 400,000 GB-seconds of Durable Object duration
-- 25 billion D1 database rows read
-- 50 million D1 database rows written
-- 5 GB D1 storage
-- 10 GB R2 storage (free tier)
-- 1 million R2 Class A operations
-- 10 million R2 Class B operations
+1. **Create R2 Bucket:**
+   - Navigate to R2 Object Storage
+   - Create a bucket (e.g., "nostr-archive")
+   - Note the bucket name
 
-### Real-World Cost Examples
+2. **Create Queues:**
+   Run `./scripts/setup-queues.sh` or manually create queues matching the bindings in `wrangler.toml`
 
-| Relay Size | Users/Concurrent | Events/Month | Nosflare Cost* | Traditional VPS | **You Save** |
-|------------|-------|--------------|----------------|-----------------|--------------|
-| **Small** | 100 | 1M | **$5/mo** | $20-40/mo | 75-87% |
-| **Medium** | 1,000 | 10M | **$16/mo** | $80-150/mo | 80-89% |
-| **Large** | 10,000 | 100M | **$88/mo** | $300-500/mo | 71-82% |
-| **Enterprise** | 100,000 | 1B | **$850/mo** | $3,000-5,000/mo | 72-83% |
+3. **Update wrangler.toml:**
+   - Set `bucket_name` to your R2 bucket name
+   - Optionally modify the worker name
 
-*_Costs include R2 storage for archiving. Actual costs may vary based on query patterns and storage retention._
+4. **Deploy Worker:**
+   - Create a new Worker in the Cloudflare dashboard
+   - Connect your git repository for automatic deployments, or manually paste `worker.js` contents
+   - Bindings defined in `wrangler.toml` will be automatically configured
 
-### Storage Cost Breakdown
+5. **Add Custom Domain:**
+   - Navigate to Settings > Domains & Routes
+   - Add your custom domain (e.g., `wss://relay.yourdomain.com`)
 
-**D1 Database (Hot Storage - Last 90 days):**
-- First 5 GB included free
-- Additional storage: $0.75/GB per month
+## Pricing
 
-**R2 Bucket (Archive Storage - After 90 days):**
-- First 10 GB included free
-- Additional storage: $0.015/GB per month
-- Write operations: $4.50 per million (archive runs every 30 minutes)
-- Read operations: $0.36 per million (only for archived event queries)
-- **No egress fees** when accessed through Workers
+CFNDB operates on Cloudflare's usage-based pricing model. The Workers Paid plan ($5/month minimum) is recommeneded for a production relay with Durable Objects, Queues, and R2 access.
 
-### Archive Storage Growth Examples
+Actual costs depend on relay traffic, event volume, query patterns, and storage requirements. Consult the official Cloudflare pricing documentation for current rates:
+- [Workers Pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+- [Durable Objects Pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+- [R2 Pricing](https://developers.cloudflare.com/r2/pricing/)
+- [Queues Pricing](https://developers.cloudflare.com/queues/platform/pricing/)
 
-| Relay Size | Monthly Archive Growth | Annual R2 Storage | Annual R2 Cost** |
-|------------|----------------------|-------------------|------------------|
-| **Small** | ~1 GB | 12 GB | $0.36/year |
-| **Medium** | ~10 GB | 120 GB | $16.20/year |
-| **Large** | ~100 GB | 1.2 TB | $194/year |
-| **Enterprise** | ~1 TB | 12 TB | $2,160/year |
+The Workers Free plan can be used for development and testing but does not support Durable Objects required for production relay operation.
 
-**_After first year. First 10GB free. Costs compound as storage accumulates._
+## Performance Characteristics
 
-### Start Free
+CFNDB's architecture is designed for high throughput:
 
-Test Nosflare extensively on the **Workers Free plan**:
-- 100,000 requests/day
-- 100,000 Durable Object requests/day
-- 5 million D1 rows read/day
-- 5 GB D1 storage
-- 10 GB R2 storage
-- Perfect for development and testing
+- **Write Throughput**: 50 broadcast queues x 5,000 msg/sec = 250,000 events/sec capacity
+- **Event Storage**: 1 24hr shard per day x 4 read replicas = 4 EventShardDO instances per day
+- **Index Capacity**: 100,000 entries per kind/author/tag index, 500,000 for global time-sorted queries
 
-Nosflare typically costs **75-90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
-
-View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/), [R2 storage](https://developers.cloudflare.com/r2/pricing/)
-
-## Hybrid Storage
-
-Nosflare uses an intelligent hybrid storage system that combines D1 database for hot data with R2 bucket for cost-effective archival:
-
-### How It Works
-
-- **Hot Storage (D1)**: Recent 90 days of events for fast queries
-- **Archive Storage (R2)**: Events older than 90 days, still fully queryable
-- **Automatic Migration**: Cron job runs every 30 minutes to archive old events
-- **Seamless Queries**: Clients can query both hot and archived data transparently
-- **Unlimited Capacity**: R2 has no storage limits, enabling infinite event retention
-
-### Benefits
-
-- **Cost Efficiency**: R2 storage costs 98% less than D1 ($0.015/GB vs $0.75/GB)
-- **Performance**: Recent events remain in fast D1 storage
-- **Scalability**: No 10GB D1 limit - store years of relay history
-- **Reliability**: Dual storage provides redundancy
-
-The archive system uses smart indexing with hourly partitions and secondary indices by author, kind, and tags for efficient querying of historical data.
-
-## Migration
-
-If you had previously deployed a Nosflare-powered relay that was ONLY based on an R2 bucket, there is a migration tool that can easily migrate all event data from the old R2 bucket to the new D1 database. Simply copy/paste the contents of `migrate.js` file to a new worker. On the Bindings tab, add a binding for the D1 database with variable `D1_DB` and create another binding for R2 bucket with the variable `R2_BUCKET` and then load the Worker (does not require a custom domain, the default Cloudflare "workers.dev" URL is fine to use). Click the Start Migration button and wait for it to complete.
-
-![Migrate from R2 bucket to D1 database](images/migration.png)
+Query performance depends on filter specificity. Queries with kind, author, or tag filters use O(1) index lookups. Global subscriptions (no filters) are capped at 500 sessions per event to prevent broadcast storms.
 
 ## Pay To Relay
 
-Nosflare allows for "pay to relay", which lets the relay operator accept Bitcoin lightning payments through Nostr zaps of SATS. The price can be whatever the relay operator chooses and sets detailed above in the optional settings section. This allows relay operators to turn their relay into a paid relay. Once enabled, every event sent to the relay will have its author's pubkey checked to see if they've paid for access.
+Nosflare supports pay-to-relay functionality, allowing relay operators to accept Bitcoin lightning payments through Nostr zaps. Configure the price in `src/config.ts`. When enabled, every event submission checks whether the author's pubkey has paid for access.
 
 ![Pay to relay](images/ptr.gif)
 
-## Roadmap
-
-The current release of Nosflare is primarily focused on [basic protocol flow](https://github.com/nostr-protocol/nips/blob/master/01.md) usage. This ensures events are stored and retrieved very quickly. However, the following is a non-exhaustive list of planned features:
-
-- [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) for full searchable text
-- [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) for replaceable events
-
 ## Recommended Cloudflare Settings
 
-Ensure optimal performance of the relay by changing "CPU time limit" in Worker settings to `30000` and creating a Page Rule for enforcing a high cache rate through a "cache everything" rule and lengthy Cloudflare edge TTL as well as enabling rate limiting in order to protect the relay from abuse.
+**Worker CPU Limits:**
+The default CPU time limit in `wrangler.toml` is set to `300000` milliseconds (5 minutes). Adjust this value based on your plan limits:
+- Workers Paid plan: Up to 300,000ms (5 minutes)
+- Workers Free plan: 10ms limit (not suitable for production relay use)
 
-Examples:
-
-![Cache Rule](images/cache-setting.jpeg)
-
-![Rate Limiting](images/rate-limit.jpeg)
+**Caching and Rate Limiting:**
+Configure cache rules and rate limiting to optimize performance and protect against abuse. Refer to Cloudflare documentation for Page Rules and Rate Limiting configuration appropriate for WebSocket-based applications.
 
 ## Send It "Blaster"
 
-Attached in this repo is the `send-it.js` file which includes the code for the `wss://sendit.nosflare.com` relay that "blasts" your note to as many online relays as possible, using [NIP-66](https://github.com/nostr-protocol/nips/blob/master/66.md).
+Included in this repo is `send-it.js`, the code for `wss://sendit.nosflare.com` that broadcasts notes to as many online relays as possible using [NIP-66](https://github.com/nostr-protocol/nips/blob/master/66.md).
 
 ## Contributing
 
-Contributions to Nosflare are welcome! Please submit issues, feature requests, or pull requests through the project's GitHub repo.
+Contributions to Nosflare are welcome. Please submit issues, feature requests, or pull requests through the project's GitHub repository.
 
 ## License
 
@@ -229,10 +264,10 @@ Nosflare is open-sourced software licensed under the MIT license.
 
 ## Contact
 
-For inquiries related to Nosflare, you can start a discussion on the GitHub repo or reach out on Nostr:    
+For inquiries related to Nosflare, start a discussion on the GitHub repo or reach out on Nostr:
 
- <img src="https://github.com/user-attachments/assets/a6fa97ed-f855-409f-b356-583ad0728160" alt="npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" width="200px" height="auto"></img>    
- 
+ <img src="https://github.com/user-attachments/assets/a6fa97ed-f855-409f-b356-583ad0728160" alt="npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv" width="200px" height="auto"></img>
+
 `npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv`
 
 ## Changelog

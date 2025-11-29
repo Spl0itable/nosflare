@@ -1,18 +1,26 @@
 {
   "name": "nosflare",
-  "version": "7.7.18",
+  "version": "8.7.16",
   "main": "worker.js",
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --outfile=worker.js --platform=neutral --target=es2020 --format=esm --minify=false --keep-names --external:node:*",
+    "postbuild": "bash scripts/setup-queues.sh",
+    "setup": "bash scripts/setup-queues.sh",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "deploy": "bash scripts/deploy-with-retry.sh",
+    "deploy:direct": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "migrate:deploy": "wrangler deploy --config wrangler.migrate.toml",
+    "migrate:dev": "wrangler dev --config wrangler.migrate.toml",
+    "migrate:tail": "wrangler tail --config wrangler.migrate.toml"
   },
   "dependencies": {
-    "@noble/curves": "^1.0.0"
+    "@noble/curves": "^1.0.0",
+    "msgpackr": "^1.11.5"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251119.0",
     "esbuild": "^0.19.0",
     "wrangler": "^3.0.0"
   }

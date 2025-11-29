@@ -1,4 +1,3 @@
-// Nostr protocol types
 export interface NostrEvent {
   id: string;
   pubkey: string;
@@ -17,6 +16,7 @@ export interface NostrFilter {
   until?: number;
   limit?: number;
   cursor?: string;
+  search?: string;
   [key: string]: any;
 }
 
@@ -32,6 +32,9 @@ export interface RelayInfo {
   limitation?: {
     payment_required?: boolean;
     restricted_writes?: boolean;
+    auth_required?: boolean;
+    created_at_lower_limit?: number;
+    created_at_upper_limit?: number;
     [key: string]: any;
   };
   payments_url?: string;
@@ -42,51 +45,209 @@ export interface RelayInfo {
   };
 }
 
-export interface Subscription {
-  id: string;
-  filters: NostrFilter[];
-}
-
 export interface QueryResult {
   events: NostrEvent[];
   bookmark: string | null;
 }
 
-// Queue event metadata
-export interface PendingEventMetadata {
+export interface EventToIndex {
   event: NostrEvent;
   timestamp: number;
-  tags: Array<{ name: string; value: string }>;
-  eventTagsCache: {
-    tag_p: string | null;
-    tag_e: string | null;
-    tag_a: string | null;
+}
+
+export interface ShardQueryRequest {
+  kinds?: number[];
+  authors?: string[];
+  ids?: string[];
+  tags?: Record<string, string[]>;
+  since?: number;
+  until?: number;
+  limit?: number;
+  search?: string;
+}
+
+export interface ShardInfo {
+  startTime: number;
+  endTime: number;
+  eventCount: number;
+  isStale: boolean;
+}
+
+export interface ShardQueryResponse {
+  eventIds: string[];
+  events?: NostrEvent[];
+  count: number;
+  latencyMs: number;
+  shardInfo: ShardInfo;
+}
+
+export interface ShardInsertResponse {
+  inserted: number;
+  eventCount: number;
+  isStale: boolean;
+}
+
+export interface ShardGetEventsRequest {
+  eventIds: string[];
+}
+
+export interface ShardGetEventsResponse {
+  events: NostrEvent[];
+  count: number;
+  missing?: string[];
+}
+
+export interface ShardStatsResponse {
+  shardInfo: {
+    startTime: number;
+    endTime: number;
+    windowMs: number;
+    isStale: boolean;
   };
-  contentHash: string | null;
+  eventCount: number;
+  indices: {
+    kinds: number;
+    authors: number;
+    tags: number;
+  };
+  indexSizes: {
+    kinds: Array<{ kind: number; count: number }>;
+    topAuthors: Array<{ author: string; count: number }>;
+  };
+  config: {
+    maxEventsPerShard: number;
+    maxIndexSize: number;
+    shardWindowMs: number;
+  };
 }
 
-// Worker environment type
+export interface IndexEntry {
+  eventId: string;
+  created_at: number;
+  kind: number;
+  pubkey: string;
+}
+
+export interface SortedIndex {
+  entries: IndexEntry[];
+  eventIdSet: Set<string>;
+  count: number;
+  minTime: number;
+  maxTime: number;
+  lastUpdate: number;
+}
+
+export interface PaymentRecord {
+  pubkey: string;
+  paidAt: number;
+  amountSats: number;
+  expiresAt?: number;
+}
+
+export interface PaymentCheckRequest {
+  pubkey: string;
+}
+
+export interface PaymentCheckResponse {
+  hasPaid: boolean;
+  reason?: string;
+  record?: {
+    paidAt: number;
+    amountSats: number;
+    expiresAt?: number;
+  };
+}
+
+export interface PaymentAddResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface PaymentRemoveRequest {
+  pubkey: string;
+}
+
+export interface PaymentRemoveResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface ErrorResponse {
+  error: string;
+}
+
 export interface Env {
-  RELAY_DATABASE: D1Database;
-  RELAY_WEBSOCKET: DurableObjectNamespace;
-  EVENT_ARCHIVE: R2Bucket;
-  EVENT_QUEUE: Queue<PendingEventMetadata>;
+  CONNECTION_DO: DurableObjectNamespace;
+
+  SESSION_MANAGER_DO: DurableObjectNamespace;
+
+  EVENT_SHARD_DO: DurableObjectNamespace;
+
+  PAYMENT_DO: DurableObjectNamespace;
+
+  NOSTR_ARCHIVE: R2Bucket;
+
+  BROADCAST_QUEUE_0: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_1: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_2: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_3: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_4: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_5: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_6: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_7: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_8: Queue<BroadcastQueueMessage>;
+  BROADCAST_QUEUE_9: Queue<BroadcastQueueMessage>;
+
+  INDEXING_QUEUE_PRIMARY_0: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_1: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_2: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_3: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_4: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_5: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_6: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_7: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_8: Queue<EventToIndex>;
+  INDEXING_QUEUE_PRIMARY_9: Queue<EventToIndex>;
+
+  INDEXING_QUEUE_REPLICA_ENAM_0: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_1: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_2: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_3: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_4: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_5: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_6: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_7: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_8: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_ENAM_9: Queue<EventToIndex>;
+
+  INDEXING_QUEUE_REPLICA_WEUR_0: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_1: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_2: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_3: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_4: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_5: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_6: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_7: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_8: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_WEUR_9: Queue<EventToIndex>;
+
+  INDEXING_QUEUE_REPLICA_APAC_0: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_1: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_2: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_3: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_4: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_5: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_6: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_7: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_8: Queue<EventToIndex>;
+  INDEXING_QUEUE_REPLICA_APAC_9: Queue<EventToIndex>;
+
+  R2_ARCHIVE_QUEUE: Queue<R2ArchiveQueueMessage>;
 }
 
-// Durable Object types
 export interface RateLimiterConfig {
   rate: number;
   capacity: number;
-}
-
-export interface WebSocketSession {
-  id: string;
-  webSocket: WebSocket;
-  subscriptions: Map<string, NostrFilter[]>;
-  pubkeyRateLimiter: RateLimiter;
-  reqRateLimiter: RateLimiter;
-  bookmark: string;
-  host: string;
 }
 
 export class RateLimiter {
@@ -120,66 +281,55 @@ export class RateLimiter {
   }
 }
 
-// NIP-05 response type
 export interface Nip05Response {
   names: Record<string, string>;
   relays?: Record<string, string[]>;
 }
 
-// WebSocket message types for Nostr protocol
-export type NostrMessage = 
+export type NostrMessage =
   | ["EVENT", string, NostrEvent]
   | ["EOSE", string]
   | ["OK", string, boolean, string]
   | ["NOTICE", string]
   | ["REQ", string, ...NostrFilter[]]
   | ["CLOSE", string]
-  | ["CLOSED", string, string];
+  | ["CLOSED", string, string]
+  | ["AUTH", string | NostrEvent];
 
-// WebSocket event types for Cloudflare Workers
-export interface WebSocketEventMap {
-  "close": CloseEvent;
-  "error": Event;
-  "message": MessageEvent;
-  "open": Event;
-}
-
-// Request body types for internal RPC calls
-export interface BroadcastEventRequest {
+export interface BroadcastQueueMessage {
   event: NostrEvent;
+  timestamp: number;
 }
 
-// Simplified DO-to-DO broadcast request
-export interface DOBroadcastRequest {
+export interface R2ArchiveQueueMessage {
   event: NostrEvent;
-  sourceDoId: string;
+  timestamp: number;
 }
 
-// Health check response
-export interface HealthCheckResponse {
-  status: string;
-  doName: string;
-  sessions: number;
-  activeWebSockets: number;
+export interface PreSerializedEvent {
+  event: NostrEvent;
+  serializedJson: string;
 }
 
-// Durable Object interface with hibernation support
+export interface ConnectionBroadcastRequest {
+  events: PreSerializedEvent[];
+}
+
 export interface DurableObject {
   fetch(request: Request): Promise<Response>;
-  // WebSocket hibernation handlers (optional)
   webSocketMessage?(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void>;
   webSocketClose?(ws: WebSocket, code: number, reason: string, wasClean: boolean): void | Promise<void>;
   webSocketError?(ws: WebSocket, error: any): void | Promise<void>;
 }
 
-// Durable Object stub with location hint support
 export interface DurableObjectStub {
-  fetch(request: Request): Promise<Response>;
+  fetch(input: Request | string, init?: RequestInit): Promise<Response>;
 }
 
-// Extended Durable Object namespace with location hints
 export interface DurableObjectNamespace {
   idFromName(name: string): DurableObjectId;
+  idFromString(id: string): DurableObjectId;
+  newUniqueId(options?: { jurisdiction?: string }): DurableObjectId;
   get(id: DurableObjectId, options?: { locationHint?: string }): DurableObjectStub;
 }
 
@@ -188,11 +338,10 @@ export interface DurableObjectId {
   equals(other: DurableObjectId): boolean;
 }
 
-// Extended DurableObjectState with hibernation support
 export interface DurableObjectState {
+  id: DurableObjectId;
   storage: DurableObjectStorage;
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
-  // WebSocket hibernation methods
   acceptWebSocket(ws: WebSocket): void;
   getWebSockets(): WebSocket[];
 }
@@ -200,6 +349,7 @@ export interface DurableObjectState {
 export interface DurableObjectStorage {
   get<T = any>(key: string): Promise<T | undefined>;
   get<T = any>(keys: string[]): Promise<Map<string, T>>;
+  list<T = any>(options?: { start?: string; end?: string; reverse?: boolean; limit?: number; prefix?: string }): Promise<Map<string, T>>;
   put<T = any>(key: string, value: T): Promise<void>;
   put(entries: Record<string, any>): Promise<void>;
   delete(key: string): Promise<boolean>;
@@ -209,7 +359,6 @@ export interface DurableObjectStorage {
   deleteAlarm(): Promise<void>;
 }
 
-// Extended WebSocket interface with hibernation attachment methods
 declare global {
   interface WebSocket {
     serializeAttachment(value: any): void;

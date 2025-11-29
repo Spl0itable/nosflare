@@ -3,49 +3,2778 @@ name = "nosflare"
 compatibility_date = "2025-01-04"
 main = "worker.js"
 
-# Durable Objects binding
+# NEW ARCHITECTURE: One Durable Object per WebSocket connection
 [[durable_objects.bindings]]
-name = "RELAY_WEBSOCKET"
-class_name = "RelayWebSocket"
+name = "CONNECTION_DO"
+class_name = "ConnectionDO"
 
-# D1 Database binding
-# Important! Change name and id settings to your own
-[[d1_databases]]
-binding = "RELAY_DATABASE"
-database_name = "nostr-relay"
-database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
-read_replicas = ["auto"]
+# Session management (centralized subscription tracking)
+[[durable_objects.bindings]]
+name = "SESSION_MANAGER_DO"
+class_name = "SessionManagerDO"
 
-# R2 bucket binding for event archive
+# CFNDB (CloudFlare Nostr Database) - Sharded architecture
+[[durable_objects.bindings]]
+name = "EVENT_SHARD_DO"
+class_name = "EventShardDO"
+
+# Payment tracking with Durable Objects
+[[durable_objects.bindings]]
+name = "PAYMENT_DO"
+class_name = "PaymentDO"
+
+# R2 bucket binding for backup
 [[r2_buckets]]
-binding = "EVENT_ARCHIVE"
-bucket_name = "nostr-event-archive"
+binding = "NOSTR_ARCHIVE"
+bucket_name = "nostr-archive"
 
-# Queue binding for event processing
 [[queues.producers]]
-binding = "EVENT_QUEUE"
-queue = "event-processing-queue"
-
+binding = "BROADCAST_QUEUE_0"
+queue = "event-broadcast-queue-0"
 [[queues.consumers]]
-queue = "event-processing-queue"
+queue = "event-broadcast-queue-0"
 max_batch_size = 100
-max_batch_timeout = 5
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_1"
+queue = "event-broadcast-queue-1"
+[[queues.consumers]]
+queue = "event-broadcast-queue-1"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_2"
+queue = "event-broadcast-queue-2"
+[[queues.consumers]]
+queue = "event-broadcast-queue-2"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_3"
+queue = "event-broadcast-queue-3"
+[[queues.consumers]]
+queue = "event-broadcast-queue-3"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_4"
+queue = "event-broadcast-queue-4"
+[[queues.consumers]]
+queue = "event-broadcast-queue-4"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_5"
+queue = "event-broadcast-queue-5"
+[[queues.consumers]]
+queue = "event-broadcast-queue-5"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_6"
+queue = "event-broadcast-queue-6"
+[[queues.consumers]]
+queue = "event-broadcast-queue-6"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_7"
+queue = "event-broadcast-queue-7"
+[[queues.consumers]]
+queue = "event-broadcast-queue-7"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_8"
+queue = "event-broadcast-queue-8"
+[[queues.consumers]]
+queue = "event-broadcast-queue-8"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_9"
+queue = "event-broadcast-queue-9"
+[[queues.consumers]]
+queue = "event-broadcast-queue-9"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_10"
+queue = "event-broadcast-queue-10"
+[[queues.consumers]]
+queue = "event-broadcast-queue-10"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_11"
+queue = "event-broadcast-queue-11"
+[[queues.consumers]]
+queue = "event-broadcast-queue-11"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_12"
+queue = "event-broadcast-queue-12"
+[[queues.consumers]]
+queue = "event-broadcast-queue-12"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_13"
+queue = "event-broadcast-queue-13"
+[[queues.consumers]]
+queue = "event-broadcast-queue-13"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_14"
+queue = "event-broadcast-queue-14"
+[[queues.consumers]]
+queue = "event-broadcast-queue-14"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_15"
+queue = "event-broadcast-queue-15"
+[[queues.consumers]]
+queue = "event-broadcast-queue-15"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_16"
+queue = "event-broadcast-queue-16"
+[[queues.consumers]]
+queue = "event-broadcast-queue-16"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_17"
+queue = "event-broadcast-queue-17"
+[[queues.consumers]]
+queue = "event-broadcast-queue-17"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_18"
+queue = "event-broadcast-queue-18"
+[[queues.consumers]]
+queue = "event-broadcast-queue-18"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_19"
+queue = "event-broadcast-queue-19"
+[[queues.consumers]]
+queue = "event-broadcast-queue-19"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_20"
+queue = "event-broadcast-queue-20"
+[[queues.consumers]]
+queue = "event-broadcast-queue-20"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_21"
+queue = "event-broadcast-queue-21"
+[[queues.consumers]]
+queue = "event-broadcast-queue-21"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_22"
+queue = "event-broadcast-queue-22"
+[[queues.consumers]]
+queue = "event-broadcast-queue-22"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_23"
+queue = "event-broadcast-queue-23"
+[[queues.consumers]]
+queue = "event-broadcast-queue-23"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_24"
+queue = "event-broadcast-queue-24"
+[[queues.consumers]]
+queue = "event-broadcast-queue-24"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_25"
+queue = "event-broadcast-queue-25"
+[[queues.consumers]]
+queue = "event-broadcast-queue-25"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_26"
+queue = "event-broadcast-queue-26"
+[[queues.consumers]]
+queue = "event-broadcast-queue-26"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_27"
+queue = "event-broadcast-queue-27"
+[[queues.consumers]]
+queue = "event-broadcast-queue-27"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_28"
+queue = "event-broadcast-queue-28"
+[[queues.consumers]]
+queue = "event-broadcast-queue-28"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_29"
+queue = "event-broadcast-queue-29"
+[[queues.consumers]]
+queue = "event-broadcast-queue-29"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_30"
+queue = "event-broadcast-queue-30"
+[[queues.consumers]]
+queue = "event-broadcast-queue-30"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_31"
+queue = "event-broadcast-queue-31"
+[[queues.consumers]]
+queue = "event-broadcast-queue-31"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_32"
+queue = "event-broadcast-queue-32"
+[[queues.consumers]]
+queue = "event-broadcast-queue-32"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_33"
+queue = "event-broadcast-queue-33"
+[[queues.consumers]]
+queue = "event-broadcast-queue-33"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_34"
+queue = "event-broadcast-queue-34"
+[[queues.consumers]]
+queue = "event-broadcast-queue-34"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_35"
+queue = "event-broadcast-queue-35"
+[[queues.consumers]]
+queue = "event-broadcast-queue-35"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_36"
+queue = "event-broadcast-queue-36"
+[[queues.consumers]]
+queue = "event-broadcast-queue-36"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_37"
+queue = "event-broadcast-queue-37"
+[[queues.consumers]]
+queue = "event-broadcast-queue-37"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_38"
+queue = "event-broadcast-queue-38"
+[[queues.consumers]]
+queue = "event-broadcast-queue-38"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_39"
+queue = "event-broadcast-queue-39"
+[[queues.consumers]]
+queue = "event-broadcast-queue-39"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_40"
+queue = "event-broadcast-queue-40"
+[[queues.consumers]]
+queue = "event-broadcast-queue-40"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_41"
+queue = "event-broadcast-queue-41"
+[[queues.consumers]]
+queue = "event-broadcast-queue-41"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_42"
+queue = "event-broadcast-queue-42"
+[[queues.consumers]]
+queue = "event-broadcast-queue-42"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_43"
+queue = "event-broadcast-queue-43"
+[[queues.consumers]]
+queue = "event-broadcast-queue-43"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_44"
+queue = "event-broadcast-queue-44"
+[[queues.consumers]]
+queue = "event-broadcast-queue-44"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_45"
+queue = "event-broadcast-queue-45"
+[[queues.consumers]]
+queue = "event-broadcast-queue-45"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_46"
+queue = "event-broadcast-queue-46"
+[[queues.consumers]]
+queue = "event-broadcast-queue-46"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_47"
+queue = "event-broadcast-queue-47"
+[[queues.consumers]]
+queue = "event-broadcast-queue-47"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_48"
+queue = "event-broadcast-queue-48"
+[[queues.consumers]]
+queue = "event-broadcast-queue-48"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "BROADCAST_QUEUE_49"
+queue = "event-broadcast-queue-49"
+[[queues.consumers]]
+queue = "event-broadcast-queue-49"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 2
+dead_letter_queue = "event-broadcast-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_0"
+queue = "event-indexing-primary-0"
+[[queues.consumers]]
+queue = "event-indexing-primary-0"
+max_batch_size = 100
+max_batch_timeout = 1
 max_retries = 3
-dead_letter_queue = "event-dlq"
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_1"
+queue = "event-indexing-primary-1"
+[[queues.consumers]]
+queue = "event-indexing-primary-1"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_2"
+queue = "event-indexing-primary-2"
+[[queues.consumers]]
+queue = "event-indexing-primary-2"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_3"
+queue = "event-indexing-primary-3"
+[[queues.consumers]]
+queue = "event-indexing-primary-3"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_4"
+queue = "event-indexing-primary-4"
+[[queues.consumers]]
+queue = "event-indexing-primary-4"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_5"
+queue = "event-indexing-primary-5"
+[[queues.consumers]]
+queue = "event-indexing-primary-5"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_6"
+queue = "event-indexing-primary-6"
+[[queues.consumers]]
+queue = "event-indexing-primary-6"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_7"
+queue = "event-indexing-primary-7"
+[[queues.consumers]]
+queue = "event-indexing-primary-7"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_8"
+queue = "event-indexing-primary-8"
+[[queues.consumers]]
+queue = "event-indexing-primary-8"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_9"
+queue = "event-indexing-primary-9"
+[[queues.consumers]]
+queue = "event-indexing-primary-9"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_0"
+queue = "event-indexing-replica-enam-0"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-0"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_1"
+queue = "event-indexing-replica-enam-1"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-1"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_2"
+queue = "event-indexing-replica-enam-2"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-2"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_3"
+queue = "event-indexing-replica-enam-3"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-3"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_4"
+queue = "event-indexing-replica-enam-4"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-4"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_5"
+queue = "event-indexing-replica-enam-5"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-5"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_6"
+queue = "event-indexing-replica-enam-6"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-6"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_7"
+queue = "event-indexing-replica-enam-7"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-7"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_8"
+queue = "event-indexing-replica-enam-8"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-8"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_9"
+queue = "event-indexing-replica-enam-9"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-9"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_0"
+queue = "event-indexing-replica-weur-0"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-0"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_1"
+queue = "event-indexing-replica-weur-1"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-1"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_2"
+queue = "event-indexing-replica-weur-2"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-2"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_3"
+queue = "event-indexing-replica-weur-3"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-3"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_4"
+queue = "event-indexing-replica-weur-4"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-4"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_5"
+queue = "event-indexing-replica-weur-5"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-5"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_6"
+queue = "event-indexing-replica-weur-6"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-6"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_7"
+queue = "event-indexing-replica-weur-7"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-7"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_8"
+queue = "event-indexing-replica-weur-8"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-8"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_9"
+queue = "event-indexing-replica-weur-9"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-9"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_0"
+queue = "event-indexing-replica-apac-0"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-0"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_1"
+queue = "event-indexing-replica-apac-1"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-1"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_2"
+queue = "event-indexing-replica-apac-2"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-2"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_3"
+queue = "event-indexing-replica-apac-3"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-3"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_4"
+queue = "event-indexing-replica-apac-4"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-4"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_5"
+queue = "event-indexing-replica-apac-5"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-5"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_6"
+queue = "event-indexing-replica-apac-6"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-6"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_7"
+queue = "event-indexing-replica-apac-7"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-7"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_8"
+queue = "event-indexing-replica-apac-8"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-8"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_9"
+queue = "event-indexing-replica-apac-9"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-9"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_10"
+queue = "event-indexing-primary-10"
+[[queues.consumers]]
+queue = "event-indexing-primary-10"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_11"
+queue = "event-indexing-primary-11"
+[[queues.consumers]]
+queue = "event-indexing-primary-11"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_12"
+queue = "event-indexing-primary-12"
+[[queues.consumers]]
+queue = "event-indexing-primary-12"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_13"
+queue = "event-indexing-primary-13"
+[[queues.consumers]]
+queue = "event-indexing-primary-13"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_14"
+queue = "event-indexing-primary-14"
+[[queues.consumers]]
+queue = "event-indexing-primary-14"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_15"
+queue = "event-indexing-primary-15"
+[[queues.consumers]]
+queue = "event-indexing-primary-15"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_16"
+queue = "event-indexing-primary-16"
+[[queues.consumers]]
+queue = "event-indexing-primary-16"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_17"
+queue = "event-indexing-primary-17"
+[[queues.consumers]]
+queue = "event-indexing-primary-17"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_18"
+queue = "event-indexing-primary-18"
+[[queues.consumers]]
+queue = "event-indexing-primary-18"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_19"
+queue = "event-indexing-primary-19"
+[[queues.consumers]]
+queue = "event-indexing-primary-19"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_20"
+queue = "event-indexing-primary-20"
+[[queues.consumers]]
+queue = "event-indexing-primary-20"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_21"
+queue = "event-indexing-primary-21"
+[[queues.consumers]]
+queue = "event-indexing-primary-21"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_22"
+queue = "event-indexing-primary-22"
+[[queues.consumers]]
+queue = "event-indexing-primary-22"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_23"
+queue = "event-indexing-primary-23"
+[[queues.consumers]]
+queue = "event-indexing-primary-23"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_24"
+queue = "event-indexing-primary-24"
+[[queues.consumers]]
+queue = "event-indexing-primary-24"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_25"
+queue = "event-indexing-primary-25"
+[[queues.consumers]]
+queue = "event-indexing-primary-25"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_26"
+queue = "event-indexing-primary-26"
+[[queues.consumers]]
+queue = "event-indexing-primary-26"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_27"
+queue = "event-indexing-primary-27"
+[[queues.consumers]]
+queue = "event-indexing-primary-27"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_28"
+queue = "event-indexing-primary-28"
+[[queues.consumers]]
+queue = "event-indexing-primary-28"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_29"
+queue = "event-indexing-primary-29"
+[[queues.consumers]]
+queue = "event-indexing-primary-29"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_30"
+queue = "event-indexing-primary-30"
+[[queues.consumers]]
+queue = "event-indexing-primary-30"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_31"
+queue = "event-indexing-primary-31"
+[[queues.consumers]]
+queue = "event-indexing-primary-31"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_32"
+queue = "event-indexing-primary-32"
+[[queues.consumers]]
+queue = "event-indexing-primary-32"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_33"
+queue = "event-indexing-primary-33"
+[[queues.consumers]]
+queue = "event-indexing-primary-33"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_34"
+queue = "event-indexing-primary-34"
+[[queues.consumers]]
+queue = "event-indexing-primary-34"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_35"
+queue = "event-indexing-primary-35"
+[[queues.consumers]]
+queue = "event-indexing-primary-35"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_36"
+queue = "event-indexing-primary-36"
+[[queues.consumers]]
+queue = "event-indexing-primary-36"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_37"
+queue = "event-indexing-primary-37"
+[[queues.consumers]]
+queue = "event-indexing-primary-37"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_38"
+queue = "event-indexing-primary-38"
+[[queues.consumers]]
+queue = "event-indexing-primary-38"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_39"
+queue = "event-indexing-primary-39"
+[[queues.consumers]]
+queue = "event-indexing-primary-39"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_40"
+queue = "event-indexing-primary-40"
+[[queues.consumers]]
+queue = "event-indexing-primary-40"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_41"
+queue = "event-indexing-primary-41"
+[[queues.consumers]]
+queue = "event-indexing-primary-41"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_42"
+queue = "event-indexing-primary-42"
+[[queues.consumers]]
+queue = "event-indexing-primary-42"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_43"
+queue = "event-indexing-primary-43"
+[[queues.consumers]]
+queue = "event-indexing-primary-43"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_44"
+queue = "event-indexing-primary-44"
+[[queues.consumers]]
+queue = "event-indexing-primary-44"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_45"
+queue = "event-indexing-primary-45"
+[[queues.consumers]]
+queue = "event-indexing-primary-45"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_46"
+queue = "event-indexing-primary-46"
+[[queues.consumers]]
+queue = "event-indexing-primary-46"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_47"
+queue = "event-indexing-primary-47"
+[[queues.consumers]]
+queue = "event-indexing-primary-47"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_48"
+queue = "event-indexing-primary-48"
+[[queues.consumers]]
+queue = "event-indexing-primary-48"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_PRIMARY_49"
+queue = "event-indexing-primary-49"
+[[queues.consumers]]
+queue = "event-indexing-primary-49"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_10"
+queue = "event-indexing-replica-enam-10"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-10"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_11"
+queue = "event-indexing-replica-enam-11"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-11"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_12"
+queue = "event-indexing-replica-enam-12"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-12"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_13"
+queue = "event-indexing-replica-enam-13"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-13"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_14"
+queue = "event-indexing-replica-enam-14"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-14"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_15"
+queue = "event-indexing-replica-enam-15"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-15"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_16"
+queue = "event-indexing-replica-enam-16"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-16"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_17"
+queue = "event-indexing-replica-enam-17"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-17"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_18"
+queue = "event-indexing-replica-enam-18"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-18"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_19"
+queue = "event-indexing-replica-enam-19"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-19"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_20"
+queue = "event-indexing-replica-enam-20"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-20"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_21"
+queue = "event-indexing-replica-enam-21"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-21"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_22"
+queue = "event-indexing-replica-enam-22"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-22"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_23"
+queue = "event-indexing-replica-enam-23"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-23"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_24"
+queue = "event-indexing-replica-enam-24"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-24"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_25"
+queue = "event-indexing-replica-enam-25"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-25"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_26"
+queue = "event-indexing-replica-enam-26"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-26"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_27"
+queue = "event-indexing-replica-enam-27"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-27"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_28"
+queue = "event-indexing-replica-enam-28"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-28"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_29"
+queue = "event-indexing-replica-enam-29"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-29"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_30"
+queue = "event-indexing-replica-enam-30"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-30"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_31"
+queue = "event-indexing-replica-enam-31"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-31"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_32"
+queue = "event-indexing-replica-enam-32"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-32"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_33"
+queue = "event-indexing-replica-enam-33"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-33"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_34"
+queue = "event-indexing-replica-enam-34"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-34"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_35"
+queue = "event-indexing-replica-enam-35"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-35"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_36"
+queue = "event-indexing-replica-enam-36"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-36"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_37"
+queue = "event-indexing-replica-enam-37"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-37"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_38"
+queue = "event-indexing-replica-enam-38"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-38"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_39"
+queue = "event-indexing-replica-enam-39"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-39"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_40"
+queue = "event-indexing-replica-enam-40"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-40"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_41"
+queue = "event-indexing-replica-enam-41"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-41"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_42"
+queue = "event-indexing-replica-enam-42"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-42"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_43"
+queue = "event-indexing-replica-enam-43"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-43"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_44"
+queue = "event-indexing-replica-enam-44"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-44"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_45"
+queue = "event-indexing-replica-enam-45"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-45"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_46"
+queue = "event-indexing-replica-enam-46"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-46"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_47"
+queue = "event-indexing-replica-enam-47"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-47"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_48"
+queue = "event-indexing-replica-enam-48"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-48"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_ENAM_49"
+queue = "event-indexing-replica-enam-49"
+[[queues.consumers]]
+queue = "event-indexing-replica-enam-49"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_10"
+queue = "event-indexing-replica-weur-10"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-10"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_11"
+queue = "event-indexing-replica-weur-11"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-11"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_12"
+queue = "event-indexing-replica-weur-12"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-12"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_13"
+queue = "event-indexing-replica-weur-13"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-13"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_14"
+queue = "event-indexing-replica-weur-14"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-14"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_15"
+queue = "event-indexing-replica-weur-15"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-15"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_16"
+queue = "event-indexing-replica-weur-16"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-16"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_17"
+queue = "event-indexing-replica-weur-17"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-17"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_18"
+queue = "event-indexing-replica-weur-18"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-18"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_19"
+queue = "event-indexing-replica-weur-19"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-19"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_20"
+queue = "event-indexing-replica-weur-20"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-20"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_21"
+queue = "event-indexing-replica-weur-21"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-21"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_22"
+queue = "event-indexing-replica-weur-22"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-22"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_23"
+queue = "event-indexing-replica-weur-23"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-23"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_24"
+queue = "event-indexing-replica-weur-24"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-24"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_25"
+queue = "event-indexing-replica-weur-25"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-25"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_26"
+queue = "event-indexing-replica-weur-26"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-26"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_27"
+queue = "event-indexing-replica-weur-27"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-27"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_28"
+queue = "event-indexing-replica-weur-28"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-28"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_29"
+queue = "event-indexing-replica-weur-29"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-29"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_30"
+queue = "event-indexing-replica-weur-30"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-30"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_31"
+queue = "event-indexing-replica-weur-31"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-31"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_32"
+queue = "event-indexing-replica-weur-32"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-32"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_33"
+queue = "event-indexing-replica-weur-33"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-33"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_34"
+queue = "event-indexing-replica-weur-34"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-34"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_35"
+queue = "event-indexing-replica-weur-35"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-35"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_36"
+queue = "event-indexing-replica-weur-36"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-36"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_37"
+queue = "event-indexing-replica-weur-37"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-37"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_38"
+queue = "event-indexing-replica-weur-38"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-38"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_39"
+queue = "event-indexing-replica-weur-39"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-39"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_40"
+queue = "event-indexing-replica-weur-40"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-40"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_41"
+queue = "event-indexing-replica-weur-41"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-41"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_42"
+queue = "event-indexing-replica-weur-42"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-42"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_43"
+queue = "event-indexing-replica-weur-43"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-43"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_44"
+queue = "event-indexing-replica-weur-44"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-44"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_45"
+queue = "event-indexing-replica-weur-45"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-45"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_46"
+queue = "event-indexing-replica-weur-46"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-46"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_47"
+queue = "event-indexing-replica-weur-47"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-47"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_48"
+queue = "event-indexing-replica-weur-48"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-48"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_WEUR_49"
+queue = "event-indexing-replica-weur-49"
+[[queues.consumers]]
+queue = "event-indexing-replica-weur-49"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_10"
+queue = "event-indexing-replica-apac-10"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-10"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_11"
+queue = "event-indexing-replica-apac-11"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-11"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_12"
+queue = "event-indexing-replica-apac-12"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-12"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_13"
+queue = "event-indexing-replica-apac-13"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-13"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_14"
+queue = "event-indexing-replica-apac-14"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-14"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_15"
+queue = "event-indexing-replica-apac-15"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-15"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_16"
+queue = "event-indexing-replica-apac-16"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-16"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_17"
+queue = "event-indexing-replica-apac-17"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-17"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_18"
+queue = "event-indexing-replica-apac-18"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-18"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_19"
+queue = "event-indexing-replica-apac-19"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-19"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_20"
+queue = "event-indexing-replica-apac-20"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-20"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_21"
+queue = "event-indexing-replica-apac-21"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-21"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_22"
+queue = "event-indexing-replica-apac-22"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-22"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_23"
+queue = "event-indexing-replica-apac-23"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-23"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_24"
+queue = "event-indexing-replica-apac-24"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-24"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_25"
+queue = "event-indexing-replica-apac-25"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-25"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_26"
+queue = "event-indexing-replica-apac-26"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-26"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_27"
+queue = "event-indexing-replica-apac-27"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-27"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_28"
+queue = "event-indexing-replica-apac-28"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-28"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_29"
+queue = "event-indexing-replica-apac-29"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-29"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_30"
+queue = "event-indexing-replica-apac-30"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-30"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_31"
+queue = "event-indexing-replica-apac-31"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-31"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_32"
+queue = "event-indexing-replica-apac-32"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-32"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_33"
+queue = "event-indexing-replica-apac-33"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-33"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_34"
+queue = "event-indexing-replica-apac-34"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-34"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_35"
+queue = "event-indexing-replica-apac-35"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-35"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_36"
+queue = "event-indexing-replica-apac-36"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-36"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_37"
+queue = "event-indexing-replica-apac-37"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-37"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_38"
+queue = "event-indexing-replica-apac-38"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-38"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_39"
+queue = "event-indexing-replica-apac-39"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-39"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_40"
+queue = "event-indexing-replica-apac-40"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-40"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_41"
+queue = "event-indexing-replica-apac-41"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-41"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_42"
+queue = "event-indexing-replica-apac-42"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-42"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_43"
+queue = "event-indexing-replica-apac-43"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-43"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_44"
+queue = "event-indexing-replica-apac-44"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-44"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_45"
+queue = "event-indexing-replica-apac-45"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-45"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_46"
+queue = "event-indexing-replica-apac-46"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-46"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_47"
+queue = "event-indexing-replica-apac-47"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-47"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_48"
+queue = "event-indexing-replica-apac-48"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-48"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "INDEXING_QUEUE_REPLICA_APAC_49"
+queue = "event-indexing-replica-apac-49"
+[[queues.consumers]]
+queue = "event-indexing-replica-apac-49"
+max_batch_size = 100
+max_batch_timeout = 1
+max_retries = 3
+max_concurrency = 5
+dead_letter_queue = "event-indexing-dlq"
+
+[[queues.producers]]
+binding = "R2_ARCHIVE_QUEUE"
+queue = "r2-archive-queue"
+[[queues.consumers]]
+queue = "r2-archive-queue"
+max_batch_size = 100
+max_batch_timeout = 2
+max_retries = 3
+dead_letter_queue = "r2-archive-dlq"
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]
 cpu_ms = 300000
 
-# Enable logs (on by default, but can disable)
+# Enable logs (disabled by default, but can enabled)
 [observability.logs]
-enabled = true
+enabled = false
 
-# Durable Object migration with SQLite storage backend
 [[migrations]]
-tag = "v4"
-new_sqlite_classes = ["RelayWebSocket"]
+tag = "v9-payment-do"
+new_sqlite_classes = ["PaymentDO", "EventShardDO"]
 
-# Scheduled cron for event archiving
-[triggers]
-crons = ["* * * * *"]
+[[migrations]]
+tag = "v10-new-architecture"
+
+[[migrations]]
+tag = "v11-remove-legacy-relay-websocket"
+
+[[migrations]]
+tag = "v12-migrate-connection-dos-to-sqlite"
+
+[[migrations]]
+tag = "v13-create-sqlite-dos"
+new_sqlite_classes = ["ConnectionDO", "SessionManagerDO"]
+
+[[migrations]]
+tag = "v14-remove-broadcast-shard-do"
+deleted_classes = ["BroadcastShardDO"]
+
+[[migrations]]
+tag = "v15-remove-session-manager-do"
+deleted_classes = ["SessionManagerDO"]
+
+[[migrations]]
+tag = "v16-restore-session-manager-do"
+new_classes = ["SessionManagerDO"]
+
+[[migrations]]
+tag = "v17-restore-session-manager-do-sqlite"
+new_sqlite_classes = ["SessionManagerDO"]

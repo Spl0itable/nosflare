@@ -1,3 +1,7 @@
+/**
+ * Configuration - Change optional relay settings
+ */
+
 import { RelayInfo } from './types';
 
 // ***************************** //
@@ -9,17 +13,17 @@ import { RelayInfo } from './types';
 // Pay to relay
 export const relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv"; // Use your own npub
 export const PAY_TO_RELAY_ENABLED = true; // Set to false to disable pay to relay
-export const RELAY_ACCESS_PRICE_SATS = 2121; // Price in SATS for relay access
+export const RELAY_ACCESS_PRICE_SATS = 212121; // Price in SATS for relay access
 
 // Relay info
 export const relayInfo: RelayInfo = {
   name: "Nosflare",
-  description: "A serverless Nostr relay through Cloudflare Worker and D1 database",
+  description: "A serverless Nostr relay using Cloudflare Workers and Durable Objects",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lux@fed.wtf",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.18",
+  version: "8.7.16",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -36,11 +40,11 @@ export const relayInfo: RelayInfo = {
     // max_event_tags: 2000,
     // max_content_length: 70000,
     // min_pow_difficulty: 0,
-    // auth_required: false,
+    auth_required: false, // Set to true to enable NIP-42 authentication
     payment_required: PAY_TO_RELAY_ENABLED,
     restricted_writes: PAY_TO_RELAY_ENABLED,
-    // created_at_lower_limit: 0,
-    // created_at_upper_limit: 2147483647,
+    created_at_lower_limit: 946684800, // January 1, 2000
+    created_at_upper_limit: 2147483647, // Max unix timestamp (year 2038)
     // default_limit: 10000
   },
 
@@ -74,16 +78,6 @@ export const nip05Users: Record<string, string> = {
   "Luxas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   // ... more NIP-05 verified users
 };
-
-// Anti-spam settings
-export const enableAntiSpam = false; // Set to true to enable hashing and duplicate content checking
-export const enableGlobalDuplicateCheck = false; // When anti-spam is enabled, set to true for global hash (across all pubkeys and not individually)
-
-// Kinds subjected to duplicate checks (only when anti-spam is enabled)
-export const antiSpamKinds = new Set([
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 40, 41, 42, 43, 44, 64, 818, 1021, 1022, 1040, 1059, 1063, 1311, 1617, 1621, 1622, 1630, 1633, 1971, 1984, 1985, 1986, 1987, 2003, 2004, 2022, 4550, 5000, 5999, 6000, 6999, 7000, 9000, 9030, 9041, 9467, 9734, 9735, 9802, 10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10009, 10015, 10030, 10050, 10063, 10096, 13194, 21000, 22242, 23194, 23195, 24133, 24242, 27235, 30000, 30001, 30002, 30003, 30004, 30005, 30007, 30008, 30009, 30015, 30017, 30018, 30019, 30020, 30023, 30024, 30030, 30040, 30041, 30063, 30078, 30311, 30315, 30402, 30403, 30617, 30618, 30818, 30819, 31890, 31922, 31923, 31924, 31925, 31989, 31990, 34235, 34236, 34237, 34550, 39000, 39001, 39002, 39003, 39004, 39005, 39006, 39007, 39008, 39009
-  // Add other kinds you want to check for duplicates
-]);
 
 // Blocked pubkeys
 // Add pubkeys in hex format to block write access
@@ -150,17 +144,23 @@ export const allowedTags = new Set<string>([
 
 // Rate limit thresholds
 export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min
-export const REQ_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 50 REQ messages per min
+export const REQ_RATE_LIMIT = { rate: 100 / 60000, capacity: 100 }; // 100 REQ messages per min
 export const excludedRateLimitKinds = new Set<number>([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
 
+// NIP-22: Event created_at limits
+export const CREATED_AT_LOWER_LIMIT = relayInfo.limitation?.created_at_lower_limit ?? 0;
+export const CREATED_AT_UPPER_LIMIT = relayInfo.limitation?.created_at_upper_limit ?? 2147483647;
+
+// NIP-42: Authentication requirement
+export const AUTH_REQUIRED = relayInfo.limitation?.auth_required ?? false;
+
 // *************************** //
 // ** END EDITABLE SETTINGS ** //
 // *************************** //
 
-// Helper validation functions
 import { NostrEvent } from './types';
 
 export function isPubkeyAllowed(pubkey: string): boolean {
@@ -182,7 +182,7 @@ export function containsBlockedContent(event: NostrEvent): boolean {
   const lowercaseTags = event.tags.map(tag => tag.join("").toLowerCase());
 
   for (const blocked of blockedContent) {
-    const blockedLower = blocked.toLowerCase(); // Checks case-insensitively
+    const blockedLower = blocked.toLowerCase();
     if (
       lowercaseContent.includes(blockedLower) ||
       lowercaseTags.some(tag => tag.includes(blockedLower))
@@ -198,4 +198,49 @@ export function isTagAllowed(tag: string): boolean {
     return false;
   }
   return !blockedTags.has(tag);
+}
+
+export function validateGroupEvent(event: NostrEvent): { valid: boolean; reason?: string } {
+  const kind = event.kind;
+
+  const isGroupModerationKind = kind >= 9000 && kind <= 9020;
+  const isGroupUserActionKind = kind === 9021 || kind === 9022;
+  const isGroupMetadataKind = kind >= 39000 && kind <= 39003;
+
+  if (isGroupModerationKind || isGroupUserActionKind || isGroupMetadataKind) {
+    const hasHTag = event.tags.some(tag => tag[0] === 'h' && tag.length >= 2 && tag[1]);
+
+    if (!hasHTag) {
+      return {
+        valid: false,
+        reason: `NIP-29: kind ${kind} requires an 'h' tag with group ID`
+      };
+    }
+
+    if (isGroupMetadataKind) {
+      const hasDTag = event.tags.some(tag => tag[0] === 'd' && tag.length >= 2);
+
+      if (!hasDTag) {
+        return {
+          valid: false,
+          reason: `NIP-29: kind ${kind} requires a 'd' tag for addressable events`
+        };
+      }
+    }
+
+    const hTag = event.tags.find(tag => tag[0] === 'h');
+    if (hTag && hTag[1]) {
+      const groupId = hTag[1];
+      const groupIdPattern = /^[a-z0-9._'-]+$/i;
+
+      if (!groupIdPattern.test(groupId)) {
+        return {
+          valid: false,
+          reason: `NIP-29: invalid group ID format '${groupId}' (must contain only a-z0-9-_.')`
+        };
+      }
+    }
+  }
+
+  return { valid: true };
 }
