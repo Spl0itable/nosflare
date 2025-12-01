@@ -15,7 +15,6 @@ import { pack, unpack } from 'msgpackr';
 
 const DEBUG = false;
 
-const MAX_GLOBAL_SESSIONS_PER_EVENT = 500;
 const MAX_BROADCAST_BATCH_SIZE = 900;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -35,7 +34,6 @@ export class SessionManagerDO implements DurableObject {
 
   private kindIndex: Map<number, Set<string>> = new Map();
   private authorIndex: Map<string, Set<string>> = new Map();
-  private globalSessions: Set<string> = new Set();
   private tagIndex: Map<string, Set<string>> = new Map();
 
   constructor(state: DurableObjectState, env: Env) {
@@ -111,8 +109,6 @@ export class SessionManagerDO implements DurableObject {
             }
             this.kindIndex.get(kind)!.add(sessionId);
           }
-        } else {
-          this.globalSessions.add(sessionId);
         }
 
         if (filter.authors) {
@@ -122,8 +118,6 @@ export class SessionManagerDO implements DurableObject {
             }
             this.authorIndex.get(author)!.add(sessionId);
           }
-        } else if (!filter.kinds) {
-          this.globalSessions.add(sessionId);
         }
 
         for (const [key, values] of Object.entries(filter)) {
@@ -207,8 +201,6 @@ export class SessionManagerDO implements DurableObject {
             }
           }
         }
-
-        this.globalSessions.delete(sessionId);
 
         for (const [key, values] of Object.entries(filter)) {
           if (key.startsWith('#') && Array.isArray(values)) {
@@ -306,18 +298,6 @@ export class SessionManagerDO implements DurableObject {
           if (sessionData) {
             matchingConnectionIds.add(sessionData.connectionDoId);
           }
-        }
-      }
-
-      let globalCount = 0;
-      for (const sessionId of this.globalSessions) {
-        if (globalCount >= MAX_GLOBAL_SESSIONS_PER_EVENT) {
-          break;
-        }
-        const sessionData = this.sessions.get(sessionId);
-        if (sessionData) {
-          matchingConnectionIds.add(sessionData.connectionDoId);
-          globalCount++;
         }
       }
 

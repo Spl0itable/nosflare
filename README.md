@@ -27,20 +27,22 @@ CFNDB replaces a traditional SQL database with co-located, in-memory indices sto
 - Processes EVENT, REQ, CLOSE, and AUTH messages
 - Routes events to broadcast queues after validation
 
-**SessionManagerDO** (50 shards)
+**SessionManagerDO** (configurable shards, default 50)
 - Centralized subscription tracking across all connections
-- In-memory indices for kind, author, tag, and global subscriptions
-- Sharded by kind (kind % 50) for parallel query execution
+- In-memory indices for kind, author, and tag subscriptions
+- Sharded by kind (`kind % SESSION_MANAGER_SHARD_COUNT`) for parallel query execution
 - Provides O(1) subscription lookups during event broadcast
+- Requires `kinds` filter in all subscriptions to enable targeted sharding
 
 **BroadcastShardDO** (Dynamic instances)
 - Distributes events to matching ConnectionDO instances
 - Groups sessions into batches of 900 to stay under Cloudflare's 1000 subrequest limit
 - Receives pre-serialized JSON to avoid redundant serialization
 
-**EventShardDO** (Time-based shards and read replicas)
+**EventShardDO** (Time-based shards with configurable replicas)
 - 24-hour time windows for event storage
-- 4 read replicas per 24hr shard
+- Configurable read replicas per shard (`READ_REPLICAS_PER_SHARD`, default 4)
+- Configurable query time range (`MAX_TIME_WINDOWS_PER_QUERY`, default 7 days)
 - In-memory indices: kind, author, tag, created_at, composite indices
 - Index limits: 100,000 per kind/author/tag index, 500,000 for global time-sorted index
 - Supports NIP-09 deletions, NIP-16 replaceable events, NIP-33 addressable events, NIP-50 search
@@ -51,7 +53,7 @@ CFNDB replaces a traditional SQL database with co-located, in-memory indices sto
 ### Queues
 
 **Broadcast Queues** (50 queues)
-- Sharded by event kind (kind % 50)
+- Sharded by event kind (`kind % SESSION_MANAGER_SHARD_COUNT`)
 - Enables targeted SessionManagerDO queries (only relevant shards)
 - Pre-serializes events once for all subscribers
 
@@ -143,6 +145,8 @@ Fork or clone this repository. Edit `src/config.ts` to configure relay settings:
 - `blockedTags` / `allowedTags`: Filter by event tags ([tags reference](https://github.com/nostr-protocol/nips?tab=readme-ov-file#standardized-tags))
 - `blockedContent`: Block events containing specific words or phrases
 
+For blocklists and allowlists: if the allowlist is populated, only those items are permitted. If the blocklist is populated, only those items are denied. Both cannot be used simultaneously for the same category.
+
 *NIP-05 Verification:*
 - `nip05Users`: Map usernames to hex pubkeys for verified addresses
 - `checkValidNip05`: Require valid NIP-05 addresses for publishing (anti-spam)
@@ -153,7 +157,23 @@ Fork or clone this repository. Edit `src/config.ts` to configure relay settings:
 - `REQ_RATE_LIMIT`: Limit REQ messages per connection (default: 100/minute)
 - `excludedRateLimitKinds`: Exempt specific event kinds from rate limiting
 
-For blocklists and allowlists: if the allowlist is populated, only those items are permitted. If the blocklist is populated, only those items are denied. Both cannot be used simultaneously for the same category.
+*Horizontal Scaling:*
+
+These settings control how the relay distributes work across Durable Objects. Lower values reduce DO requests (lower cost) but reduce parallelism. Higher values increase parallelism but generate more internal requests.
+
+| Setting | Location | Default | Description |
+|---------|----------|---------|-------------|
+| `SESSION_MANAGER_SHARD_COUNT` | `src/config.ts` | 50 | Number of SessionManagerDO shards. Events are assigned using `kind % count`. Range: 1-50. |
+| `MAX_TIME_WINDOWS_PER_QUERY` | `src/shard-router.ts` | 7 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
+| `READ_REPLICAS_PER_SHARD` | `src/shard-router.ts` | 4 | Number of EventShardDO replicas per time shard. Each event write goes to all replicas. |
+
+**Tuning Guidelines:**
+
+- **Low traffic relay**: Set `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2
+- **High traffic relay**: Use defaults (50, 7, 4) for maximum parallelism
+- **Cost optimization**: Reducing these values significantly decreases Durable Object requests
+
+**Note:** All REQ subscriptions must include a `kinds` filter. Subscriptions without kinds are rejected to prevent broadcast fan-out to all shards.
 
 **Build Command:**
 
@@ -232,7 +252,7 @@ CFNDB's architecture is designed for high throughput:
 - **Event Storage**: 1 24hr shard per day x 4 read replicas = 4 EventShardDO instances per day
 - **Index Capacity**: 100,000 entries per kind/author/tag index, 500,000 for global time-sorted queries
 
-Query performance depends on filter specificity. Queries with kind, author, or tag filters use O(1) index lookups. Global subscriptions (no filters) are capped at 500 sessions per event to prevent broadcast storms.
+Query performance depends on filter specificity. Queries with kind, author, or tag filters use O(1) index lookups. All subscriptions must specify a `kinds` filter to enable efficient shard-targeted broadcasting.
 
 ## Pay To Relay
 
