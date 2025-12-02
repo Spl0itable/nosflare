@@ -2302,7 +2302,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.7.19",
+      version: "8.7.20",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2752,13 +2752,13 @@ async function retryWithBackoff(fn, context, maxAttempts = MAX_RETRY_ATTEMPTS) {
   }
   return null;
 }
-async function insertEventsIntoShard(env, events) {
+async function insertEventsIntoShard(env, events, replicaNum) {
   if (events.length === 0) {
     return true;
   }
   try {
     const baseShardId = getEventShardId(events[0]);
-    const replicaShardIds = getAllReplicaShardIds(baseShardId);
+    const replicaShardIds = replicaNum !== void 0 ? [getReplicaShardId(baseShardId, replicaNum)] : getAllReplicaShardIds(baseShardId);
     const insertPromises = replicaShardIds.map(async (replicaShardId) => {
       const result = await retryWithBackoff(async () => {
         const stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(replicaShardId));
@@ -5590,7 +5590,8 @@ var {
   blockedNip05Domains: blockedNip05Domains2,
   allowedNip05Domains: allowedNip05Domains2,
   MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2,
-  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2
+  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2,
+  READ_REPLICAS_PER_SHARD: READ_REPLICAS_PER_SHARD2
 } = config_exports;
 var GLOBAL_MAX_EVENTS = 1e3;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -5871,12 +5872,13 @@ async function queueEvent(event, env) {
     };
     const shardNum = Math.abs(hashCode(event.id)) % 50;
     const queueStartTime = Date.now();
-    const queuePromises = [
-      env[`INDEXING_QUEUE_PRIMARY_${shardNum}`].send(eventData),
-      env[`INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`].send(eventData),
-      env[`INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`].send(eventData),
-      env[`INDEXING_QUEUE_REPLICA_APAC_${shardNum}`].send(eventData)
+    const replicaQueues = [
+      `INDEXING_QUEUE_PRIMARY_${shardNum}`,
+      `INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`,
+      `INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`,
+      `INDEXING_QUEUE_REPLICA_APAC_${shardNum}`
     ];
+    const queuePromises = replicaQueues.slice(0, READ_REPLICAS_PER_SHARD2).map((queueName) => env[queueName].send(eventData));
     try {
       await Promise.all(queuePromises);
       const queueLatency = Date.now() - queueStartTime;
@@ -6090,12 +6092,21 @@ async function processIndexingQueue(batch, env) {
     console.log(`Processing indexing queue batch: ${batch.messages.length} events`);
   const startTime = Date.now();
   const events = batch.messages.map((m) => m.body.event);
+  const queueName = batch.queue;
+  let replicaNum = 0;
+  if (queueName.includes("REPLICA_ENAM")) {
+    replicaNum = 1;
+  } else if (queueName.includes("REPLICA_WEUR")) {
+    replicaNum = 2;
+  } else if (queueName.includes("REPLICA_APAC")) {
+    replicaNum = 3;
+  }
   try {
-    await indexEventsInCFNDB(env, events);
+    await indexEventsInCFNDB(env, events, replicaNum);
     batch.messages.forEach((m) => m.ack());
     const duration = Date.now() - startTime;
     if (DEBUG2)
-      console.log(`Indexing queue batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
+      console.log(`Indexing queue batch completed: ${events.length} events indexed in replica ${replicaNum} in ${duration}ms (batched)`);
   } catch (error) {
     console.error(`Failed to index batch:`, error.message);
     batch.messages.forEach((m) => m.retry());
@@ -6153,7 +6164,7 @@ var relay_worker_default = {
     }
   }
 };
-async function indexEventsInCFNDB(env, events) {
+async function indexEventsInCFNDB(env, events, replicaNum) {
   if (!env.EVENT_SHARD_DO) {
     throw new Error("EVENT_SHARD_DO not configured");
   }
@@ -6181,7 +6192,7 @@ async function indexEventsInCFNDB(env, events) {
   }
   const indexPromises = [];
   for (const [shardId, shardEvents] of eventsByShardId) {
-    indexPromises.push(insertEventsIntoShard2(env, shardEvents));
+    indexPromises.push(insertEventsIntoShard2(env, shardEvents, replicaNum));
   }
   const results = await Promise.all(indexPromises);
   const failedCount = results.filter((r) => r === false).length;

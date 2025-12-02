@@ -1,3 +1,7 @@
+## v8.7.20 - 2025-12-02
+
+Hotfix: bug where writes weren't respecting number of read replicas
+
 ## v8.7.19 - 2025-12-02
 
 Hotfix: ability to not shard the PaymentDO for smaller relays
