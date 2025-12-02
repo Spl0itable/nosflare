@@ -1,3 +1,7 @@
+## v8.7.19 - 2025-12-02
+
+Hotfix: ability to not shard the PaymentDO for smaller relays
+
 ## v8.7.18 - 2025-12-02
 
 Hotfix: bug with read replicas not retrying failed event saves
