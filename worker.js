@@ -2194,7 +2194,6 @@ __export(config_exports, {
   AUTH_REQUIRED: () => AUTH_REQUIRED,
   CREATED_AT_LOWER_LIMIT: () => CREATED_AT_LOWER_LIMIT,
   CREATED_AT_UPPER_LIMIT: () => CREATED_AT_UPPER_LIMIT,
-  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: () => DEFAULT_UNFILTERED_TIME_WINDOW_DAYS,
   MAX_TIME_WINDOWS_PER_QUERY: () => MAX_TIME_WINDOWS_PER_QUERY,
   PAYMENT_DO_SHARDING_ENABLED: () => PAYMENT_DO_SHARDING_ENABLED,
   PAY_TO_RELAY_ENABLED: () => PAY_TO_RELAY_ENABLED,
@@ -2288,7 +2287,7 @@ function validateGroupEvent(event) {
   }
   return { valid: true };
 }
-var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, DEFAULT_UNFILTERED_TIME_WINDOW_DAYS, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
+var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -2302,7 +2301,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.8.21",
+      version: "8.8.22",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2392,7 +2391,6 @@ var init_config = __esm({
     MAX_TIME_WINDOWS_PER_QUERY = 7;
     READ_REPLICAS_PER_SHARD = 4;
     PAYMENT_DO_SHARDING_ENABLED = true;
-    DEFAULT_UNFILTERED_TIME_WINDOW_DAYS = 3;
     PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
     REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
     excludedRateLimitKinds = /* @__PURE__ */ new Set([
@@ -5631,8 +5629,7 @@ var {
   checkValidNip05: checkValidNip052,
   blockedNip05Domains: blockedNip05Domains2,
   allowedNip05Domains: allowedNip05Domains2,
-  MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2,
-  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2
+  MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2
 } = config_exports;
 var GLOBAL_MAX_EVENTS = 1e3;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -6055,11 +6052,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
       let since = filter.since;
       let until = filter.until || now;
       if (!since) {
-        const hasKinds = filter.kinds && filter.kinds.length > 0;
-        const hasAuthors = filter.authors && filter.authors.length > 0;
-        const hasTags = Object.keys(filter).some((k) => k.startsWith("#"));
-        const isUnfiltered = !hasKinds && !hasAuthors && !hasTags;
-        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2 : MAX_TIME_WINDOWS_PER_QUERY2;
+        const defaultDays = MAX_TIME_WINDOWS_PER_QUERY2;
         since = now - defaultDays * 24 * 60 * 60;
       }
       const requestedRange = until - since;
