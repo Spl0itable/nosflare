@@ -29,7 +29,7 @@ export default {
       }
 
       if (DEBUG) console.log(`BroadcastConsumer: ${events.length} unique events after deduplication`);
-      
+
       const shardToEvents = new Map<number, NostrEvent[]>();
 
       for (const event of events) {

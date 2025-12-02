@@ -23,7 +23,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.7.17",
+  version: "8.7.18",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -149,6 +149,22 @@ export const allowedTags = new Set<string>([
 // Higher values = more shards = more horizontal scaling but more DO requests
 // Recommended: 1 (all kinds in one shard) to 50 (maximum distribution)
 export const SESSION_MANAGER_SHARD_COUNT = 50;
+
+// EventShardDO time windows
+// Controls how many days of EventShardDO shards are queried per REQ.
+// Each day = 1 time shard. Lower values = fewer DO requests but less historical data.
+// This is used for: max query time range, default time window when filter has no 'since', and shard fan-out limit.
+export const MAX_TIME_WINDOWS_PER_QUERY = 7;
+
+// EventShardDO read replicas
+// Number of replicas per time shard. Each event write goes to all replicas.
+// Higher values = more read parallelism but more write overhead.
+// Recommended: 2 (low traffic) to 4 (high traffic)
+export const READ_REPLICAS_PER_SHARD = 4;
+
+// Default time window for unfiltered queries (no kinds/authors/tags)
+// Shorter window to limit resource usage for broad queries
+export const DEFAULT_UNFILTERED_TIME_WINDOW_DAYS = 3;
 
 // Rate limit thresholds
 export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min

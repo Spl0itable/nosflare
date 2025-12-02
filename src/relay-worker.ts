@@ -18,12 +18,11 @@ const {
   checkValidNip05,
   blockedNip05Domains,
   allowedNip05Domains,
+  MAX_TIME_WINDOWS_PER_QUERY,
+  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS,
 } = config;
 
 const GLOBAL_MAX_EVENTS = 1000;
-const DEFAULT_TIME_WINDOW_DAYS = 7;
-const DEFAULT_UNFILTERED_TIME_WINDOW_DAYS = 3;
-const MAX_TIME_RANGE_DAYS = 7;
 const MAX_QUERY_COMPLEXITY = 1000;
 
 function hashCode(str: string): number {
@@ -512,7 +511,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env, s
         return null;
       }
 
-      const maxTimeRangeSeconds = MAX_TIME_RANGE_DAYS * 24 * 60 * 60;
+      const maxTimeRangeSeconds = MAX_TIME_WINDOWS_PER_QUERY * 24 * 60 * 60;
       const now = Math.floor(Date.now() / 1000);
 
       let since = filter.since;
@@ -524,7 +523,7 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env, s
         const hasTags = Object.keys(filter).some(k => k.startsWith('#'));
         const isUnfiltered = !hasKinds && !hasAuthors && !hasTags;
 
-        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS : DEFAULT_TIME_WINDOW_DAYS;
+        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS : MAX_TIME_WINDOWS_PER_QUERY;
         since = now - (defaultDays * 24 * 60 * 60);
       }
 
