@@ -86,6 +86,7 @@ function hashString(str: string): number {
 }
 
 export function selectReadReplica(baseShardId: string, subscriptionId?: string): string {
+
   if (!subscriptionId) {
     const replicaNum = Math.floor(Math.random() * READ_REPLICAS_PER_SHARD);
     return getReplicaShardId(baseShardId, replicaNum);
@@ -163,6 +164,27 @@ export function getShardsForFilter(filter: NostrFilter): string[] {
   return getTimeRangeShards(since, until, singleAuthor);
 }
 
+async function triggerBackfill(env: Env, events: any[], targetReplicaId: string): Promise<void> {
+  try {
+    const stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(targetReplicaId));
+
+    const response = await stub.fetch('https://internal/insert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/msgpack' },
+      body: pack(events)
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const result = unpack(new Uint8Array(await response.arrayBuffer())) as ShardInsertResponse;
+    console.log(`Backfilled ${result.inserted} events to ${targetReplicaId}`);
+  } catch (error: any) {
+    throw new Error(`Backfill to ${targetReplicaId} failed: ${error.message}`);
+  }
+}
+
 export async function queryEventShard(
   env: Env,
   shardId: string,
@@ -207,6 +229,37 @@ export async function queryEventShard(
 
       if (latency > 5000) {
         console.warn(`Slow query for ${replicaShardId}: ${latency}ms (returned ${result.eventIds?.length || 0} events)`);
+      }
+
+      if (result.eventIds.length === 0 && !replicaShardId.endsWith('-r0')) {
+        const replica0Id = getReplicaShardId(shardId, 0);
+        const replica0Stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(replica0Id));
+
+        try {
+          const replica0Response = await replica0Stub.fetch('https://internal/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/msgpack' },
+            body: pack(shardFilter),
+            signal: controller.signal
+          });
+
+          if (replica0Response.ok) {
+            const replica0Result = unpack(new Uint8Array(await replica0Response.arrayBuffer())) as ShardQueryResponse;
+
+            if (replica0Result.eventIds.length > 0 && replica0Result.events) {
+              console.log(`Lazy backfill: ${replicaShardId} empty, found ${replica0Result.eventIds.length} events in ${replica0Id}`);
+
+              triggerBackfill(env, replica0Result.events, replicaShardId).catch(err =>
+
+                console.error(`Background backfill failed for ${replicaShardId}:`, err.message)
+              );
+
+              return replica0Result;
+            }
+          }
+        } catch (error: any) {
+          console.warn(`Replica 0 fallback failed for ${shardId}:`, error.message);
+        }
       }
 
       return result;
@@ -350,8 +403,7 @@ async function retryWithBackoff<T>(
 
 export async function insertEventsIntoShard(
   env: Env,
-  events: NostrEvent[],
-  queueIndex?: number
+  events: NostrEvent[]
 ): Promise<boolean> {
   if (events.length === 0) {
     return true;
@@ -360,15 +412,7 @@ export async function insertEventsIntoShard(
   try {
     const baseShardId = getEventShardId(events[0]);
 
-    let replicaShardIds: string[];
-    if (queueIndex !== undefined) {
-      replicaShardIds = [];
-      for (let i = queueIndex; i < READ_REPLICAS_PER_SHARD; i += 4) {
-        replicaShardIds.push(getReplicaShardId(baseShardId, i));
-      }
-    } else {
-      replicaShardIds = getAllReplicaShardIds(baseShardId);
-    }
+    const replicaShardIds = getAllReplicaShardIds(baseShardId);
 
     const insertPromises = replicaShardIds.map(async (replicaShardId) => {
       const result = await retryWithBackoff(async () => {

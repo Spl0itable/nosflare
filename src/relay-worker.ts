@@ -346,15 +346,13 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
 
     const queueStartTime = Date.now();
 
-    const queuePromises = [
-      (env as any)[`INDEXING_QUEUE_PRIMARY_${shardNum}`].send(eventData),
-      (env as any)[`INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`].send(eventData),
-      (env as any)[`INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`].send(eventData),
-      (env as any)[`INDEXING_QUEUE_REPLICA_APAC_${shardNum}`].send(eventData)
-    ];
+    const queueReplicas = ['PRIMARY', 'REPLICA_ENAM', 'REPLICA_WEUR', 'REPLICA_APAC'];
+    const selectedQueueIndex = Math.abs(hashCode(event.id + 'queue')) % 4;
+    const selectedQueue = queueReplicas[selectedQueueIndex];
+    const queueName = `INDEXING_QUEUE_${selectedQueue}_${shardNum}`;
 
     try {
-      await Promise.all(queuePromises);
+      await (env as any)[queueName].send(eventData);
       const queueLatency = Date.now() - queueStartTime;
 
       queueLatencySum += queueLatency;
@@ -612,23 +610,13 @@ async function processIndexingQueue(batch: MessageBatch<EventToIndex>, env: Env)
 
   const events = batch.messages.map(m => m.body.event);
 
-  const queueName = batch.queue;
-  let queueIndex = 0; // Default to PRIMARY (index 0)
-  if (queueName.includes('REPLICA_ENAM')) {
-    queueIndex = 1;
-  } else if (queueName.includes('REPLICA_WEUR')) {
-    queueIndex = 2;
-  } else if (queueName.includes('REPLICA_APAC')) {
-    queueIndex = 3;
-  }
-
   try {
-    await indexEventsInCFNDB(env, events, queueIndex);
+    await indexEventsInCFNDB(env, events);
 
     batch.messages.forEach(m => m.ack());
 
     const duration = Date.now() - startTime;
-    if (DEBUG) console.log(`Indexing queue ${queueIndex} batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
+    if (DEBUG) console.log(`Indexing queue batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
   } catch (error: any) {
     console.error(`Failed to index batch:`, error.message);
     batch.messages.forEach(m => m.retry());
@@ -699,7 +687,7 @@ export default {
   }
 };
 
-async function indexEventsInCFNDB(env: Env, events: NostrEvent[], queueIndex?: number): Promise<void> {
+async function indexEventsInCFNDB(env: Env, events: NostrEvent[]): Promise<void> {
   if (!env.EVENT_SHARD_DO) {
     throw new Error('EVENT_SHARD_DO not configured');
   }
@@ -735,7 +723,7 @@ async function indexEventsInCFNDB(env: Env, events: NostrEvent[], queueIndex?: n
   const indexPromises: Promise<any>[] = [];
 
   for (const [shardId, shardEvents] of eventsByShardId) {
-    indexPromises.push(insertEventsIntoShard(env, shardEvents, queueIndex));
+    indexPromises.push(insertEventsIntoShard(env, shardEvents));
   }
 
   const results = await Promise.all(indexPromises);

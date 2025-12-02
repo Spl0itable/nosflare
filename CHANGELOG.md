@@ -1,3 +1,7 @@
+## v8.8.21 - 2025-12-02
+
+New: automatic self-healing read replica DOs when horizontal scaling increased
+
 ## v8.7.21 - 2025-12-02
 
 Hotfix: bug with parallel queues for 4 or more read replicas
