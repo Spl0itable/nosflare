@@ -20,7 +20,6 @@ const {
   allowedNip05Domains,
   MAX_TIME_WINDOWS_PER_QUERY,
   DEFAULT_UNFILTERED_TIME_WINDOW_DAYS,
-  READ_REPLICAS_PER_SHARD,
 } = config;
 
 const GLOBAL_MAX_EVENTS = 1000;
@@ -347,16 +346,12 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
 
     const queueStartTime = Date.now();
 
-    const replicaQueues = [
-      `INDEXING_QUEUE_PRIMARY_${shardNum}`,
-      `INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`,
-      `INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`,
-      `INDEXING_QUEUE_REPLICA_APAC_${shardNum}`
+    const queuePromises = [
+      (env as any)[`INDEXING_QUEUE_PRIMARY_${shardNum}`].send(eventData),
+      (env as any)[`INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`].send(eventData),
+      (env as any)[`INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`].send(eventData),
+      (env as any)[`INDEXING_QUEUE_REPLICA_APAC_${shardNum}`].send(eventData)
     ];
-
-    const queuePromises = replicaQueues
-      .slice(0, READ_REPLICAS_PER_SHARD)
-      .map(queueName => (env as any)[queueName].send(eventData));
 
     try {
       await Promise.all(queuePromises);
@@ -618,22 +613,22 @@ async function processIndexingQueue(batch: MessageBatch<EventToIndex>, env: Env)
   const events = batch.messages.map(m => m.body.event);
 
   const queueName = batch.queue;
-  let replicaNum = 0;
+  let queueIndex = 0; // Default to PRIMARY (index 0)
   if (queueName.includes('REPLICA_ENAM')) {
-    replicaNum = 1;
+    queueIndex = 1;
   } else if (queueName.includes('REPLICA_WEUR')) {
-    replicaNum = 2;
+    queueIndex = 2;
   } else if (queueName.includes('REPLICA_APAC')) {
-    replicaNum = 3;
+    queueIndex = 3;
   }
 
   try {
-    await indexEventsInCFNDB(env, events, replicaNum);
+    await indexEventsInCFNDB(env, events, queueIndex);
 
     batch.messages.forEach(m => m.ack());
 
     const duration = Date.now() - startTime;
-    if (DEBUG) console.log(`Indexing queue batch completed: ${events.length} events indexed in replica ${replicaNum} in ${duration}ms (batched)`);
+    if (DEBUG) console.log(`Indexing queue ${queueIndex} batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
   } catch (error: any) {
     console.error(`Failed to index batch:`, error.message);
     batch.messages.forEach(m => m.retry());
@@ -704,7 +699,7 @@ export default {
   }
 };
 
-async function indexEventsInCFNDB(env: Env, events: NostrEvent[], replicaNum?: number): Promise<void> {
+async function indexEventsInCFNDB(env: Env, events: NostrEvent[], queueIndex?: number): Promise<void> {
   if (!env.EVENT_SHARD_DO) {
     throw new Error('EVENT_SHARD_DO not configured');
   }
@@ -740,7 +735,7 @@ async function indexEventsInCFNDB(env: Env, events: NostrEvent[], replicaNum?: n
   const indexPromises: Promise<any>[] = [];
 
   for (const [shardId, shardEvents] of eventsByShardId) {
-    indexPromises.push(insertEventsIntoShard(env, shardEvents, replicaNum));
+    indexPromises.push(insertEventsIntoShard(env, shardEvents, queueIndex));
   }
 
   const results = await Promise.all(indexPromises);

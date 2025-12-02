@@ -1,3 +1,7 @@
+## v8.7.21 - 2025-12-02
+
+Hotfix: bug with parallel queues for 4 or more read replicas
+
 ## v8.7.20 - 2025-12-02
 
 Hotfix: bug where writes weren't respecting number of read replicas
