@@ -161,8 +161,10 @@ export class ConnectionDO implements DurableObject {
 
     await this.state.storage.put('sessionId', this.sessionId);
 
-    this.challenge = crypto.randomUUID();
-    this.sendAuth(server, this.challenge);
+    if (AUTH_REQUIRED) {
+      this.challenge = crypto.randomUUID();
+      this.sendAuth(server, this.challenge);
+    }
 
     if (DEBUG) console.log(`ConnectionDO: New session ${this.sessionId}`);
 

@@ -738,9 +738,12 @@ async function indexEventsInCFNDB(env: Env, events: NostrEvent[]): Promise<void>
       });
     });
 
-    Promise.all(archivePromises).catch(err =>
-      console.error(`Failed to queue ${persistentEvents.length} events for R2 archival:`, err)
-    );
+    try {
+      await Promise.all(archivePromises);
+      if (DEBUG) console.log(`Queued ${persistentEvents.length} events for R2 archival`);
+    } catch (err) {
+      console.error(`Failed to queue ${persistentEvents.length} events for R2 archival:`, err);
+    }
   }
 
   if (DEBUG) console.log(`Batch: ${persistentEvents.length} events indexed across ${eventsByShardId.size} time shards (R2 archival queued)`);
