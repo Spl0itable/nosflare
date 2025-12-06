@@ -1,6 +1,6 @@
 {
   "name": "nosflare",
-  "version": "8.9.24",
+  "version": "8.9.25",
   "main": "worker.js",
   "type": "module",
   "scripts": {

@@ -22,7 +22,6 @@ import {
   containsBlockedContent,
   isTagAllowed,
   excludedRateLimitKinds,
-  validateGroupEvent,
   CREATED_AT_LOWER_LIMIT,
   CREATED_AT_UPPER_LIMIT,
   AUTH_REQUIRED,
@@ -634,13 +633,6 @@ export class ConnectionDO implements DurableObject {
           this.sendOK(ws, event.id, false, `blocked: tag '${tag[0]}' not allowed`);
           return;
         }
-      }
-
-      const groupValidation = validateGroupEvent(event);
-      if (!groupValidation.valid) {
-        console.error(`Event denied. ${groupValidation.reason}`);
-        this.sendOK(ws, event.id, false, `invalid: ${groupValidation.reason}`);
-        return;
       }
 
       if (event.kind === 22242) {

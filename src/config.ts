@@ -21,7 +21,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.9.24",
+  version: "8.9.25",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -159,7 +159,7 @@ export const SESSION_MANAGER_SHARD_COUNT = 50;
 // Controls how many days of EventShardDO shards are queried per REQ.
 // Each day = 1 time shard. Lower values = fewer DO requests but less historical data.
 // This is used for: max query time range, default time window when filter has no 'since', and shard fan-out limit.
-export const MAX_TIME_WINDOWS_PER_QUERY = 7;
+export const MAX_TIME_WINDOWS_PER_QUERY = 30;
 
 // EventShardDO read replicas
 // Number of replicas per time shard. Each event write goes to all replicas.
@@ -230,49 +230,4 @@ export function isTagAllowed(tag: string): boolean {
     return false;
   }
   return !blockedTags.has(tag);
-}
-
-export function validateGroupEvent(event: NostrEvent): { valid: boolean; reason?: string } {
-  const kind = event.kind;
-
-  const isGroupModerationKind = kind >= 9000 && kind <= 9020;
-  const isGroupUserActionKind = kind === 9021 || kind === 9022;
-  const isGroupMetadataKind = kind >= 39000 && kind <= 39003;
-
-  if (isGroupModerationKind || isGroupUserActionKind || isGroupMetadataKind) {
-    const hasHTag = event.tags.some(tag => tag[0] === 'h' && tag.length >= 2 && tag[1]);
-
-    if (!hasHTag) {
-      return {
-        valid: false,
-        reason: `NIP-29: kind ${kind} requires an 'h' tag with group ID`
-      };
-    }
-
-    if (isGroupMetadataKind) {
-      const hasDTag = event.tags.some(tag => tag[0] === 'd' && tag.length >= 2);
-
-      if (!hasDTag) {
-        return {
-          valid: false,
-          reason: `NIP-29: kind ${kind} requires a 'd' tag for addressable events`
-        };
-      }
-    }
-
-    const hTag = event.tags.find(tag => tag[0] === 'h');
-    if (hTag && hTag[1]) {
-      const groupId = hTag[1];
-      const groupIdPattern = /^[a-z0-9._'-]+$/i;
-
-      if (!groupIdPattern.test(groupId)) {
-        return {
-          valid: false,
-          reason: `NIP-29: invalid group ID format '${groupId}' (must contain only a-z0-9-_.')`
-        };
-      }
-    }
-  }
-
-  return { valid: true };
 }
