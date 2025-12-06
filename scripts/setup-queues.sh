@@ -9,10 +9,6 @@ if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
   exit 0
 fi
 
-# Sentinel queue - the last queue created in the setup process
-# If this exists, we assume all 254 queues are already set up
-SENTINEL_QUEUE="event-indexing-replica-apac-49"
-
 # Check for --force flag to bypass sentinel check
 FORCE_SETUP=false
 if [ "$1" = "--force" ] || [ "$SKIP_QUEUE_SENTINEL_CHECK" = "true" ]; then
@@ -20,10 +16,40 @@ if [ "$1" = "--force" ] || [ "$SKIP_QUEUE_SENTINEL_CHECK" = "true" ]; then
   echo "🔄 Force mode enabled - running full queue check..."
 fi
 
-# Sentinel check: skip setup if the last queue already exists
+# Get list of existing queues using Cloudflare API directly
+echo "📋 Fetching existing queues..."
+echo "   Account ID: ${CLOUDFLARE_ACCOUNT_ID:0:8}..."
+
+# Parse JSON using node via stdin
+EXISTING_QUEUES=$(curl -s "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues?per_page=1000" \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  -H "Content-Type: application/json" | node -e "
+    let data = '';
+    process.stdin.on('data', chunk => data += chunk);
+    process.stdin.on('end', () => {
+      try {
+        const json = JSON.parse(data);
+        if (json.success === false) {
+          console.error('API error:', JSON.stringify(json.errors));
+        } else if (json.result && Array.isArray(json.result)) {
+          json.result.forEach(q => console.log(q.queue_name));
+        }
+      } catch (e) {
+        console.error('JSON parse error:', e.message);
+      }
+    });
+  " 2>&1)
+
+QUEUE_COUNT=$(echo "$EXISTING_QUEUES" | grep -cv "^API error\|^JSON parse error" || echo "0")
+echo "   Found $QUEUE_COUNT existing queues"
+
+# Sentinel queue - the last queue created in the setup process
+SENTINEL_QUEUE="event-indexing-replica-apac-49"
+
+# Sentinel check - skip setup if the last queue already exists (unless --force)
 if [ "$FORCE_SETUP" = "false" ]; then
   echo "🔍 Checking sentinel queue ($SENTINEL_QUEUE)..."
-  if npx wrangler queues list 2>/dev/null | grep -q "$SENTINEL_QUEUE"; then
+  if echo "$EXISTING_QUEUES" | grep -qx "$SENTINEL_QUEUE"; then
     echo "✅ Sentinel queue exists - all 254 queues already set up"
     echo "   (Use --force or SKIP_QUEUE_SENTINEL_CHECK=true to run full check)"
     exit 0
@@ -31,15 +57,11 @@ if [ "$FORCE_SETUP" = "false" ]; then
   echo "📋 Sentinel queue not found - running full setup..."
 fi
 
-# Get list of existing queues once
-echo "📋 Checking existing queues..."
-EXISTING_QUEUES=$(npx wrangler queues list 2>/dev/null || echo "")
-
 # Function to create queue if it doesn't exist
 create_queue_if_missing() {
   local queue_name=$1
 
-  if echo "$EXISTING_QUEUES" | grep -q "$queue_name"; then
+  if echo "$EXISTING_QUEUES" | grep -qx "$queue_name"; then
     echo "✓ $queue_name (exists)"
   else
     echo "⚙️  Creating $queue_name..."
