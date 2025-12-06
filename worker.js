@@ -2302,7 +2302,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.9.23",
+      version: "8.9.24",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2722,42 +2722,50 @@ function transformNostrFilterToShardFormat(filter) {
   return shardFilter;
 }
 async function queryShards(env, filter, subscriptionId) {
-  const shards = getShardsForFilter(filter);
+  const allShards = getShardsForFilter(filter);
   const queryStartTime = Date.now();
   const requestedLimit = filter.limit ?? 1e3;
   const perShardLimit = Math.min(requestedLimit * 3, 5e3);
   const expandedFilter = { ...filter, limit: perShardLimit };
-  const promises = shards.map((shardId) => queryEventShard(env, shardId, expandedFilter, subscriptionId));
-  const results = await Promise.all(promises);
-  const totalLatency = Date.now() - queryStartTime;
-  if (totalLatency > 1e4) {
-    console.warn(`Parallel query of ${shards.length} shards took ${totalLatency}ms total`);
-  }
   const seen = /* @__PURE__ */ new Set();
   const merged = [];
   const allEvents = [];
   const shardMapping = /* @__PURE__ */ new Map();
-  for (let i = 0; i < results.length; i++) {
-    const shardId = shards[i];
-    const shardResults = results[i];
-    const shardEventIds = [];
-    for (const eventId of shardResults.eventIds || []) {
-      if (!seen.has(eventId)) {
-        seen.add(eventId);
-        merged.push(eventId);
-      }
-      shardEventIds.push(eventId);
+  const shards = [...allShards].reverse();
+  const batchSize = requestedLimit <= 10 ? 2 : requestedLimit <= 100 ? 5 : shards.length;
+  for (let batchStart = 0; batchStart < shards.length; batchStart += batchSize) {
+    if (merged.length >= requestedLimit) {
+      break;
     }
-    if (shardResults.events) {
-      for (const event of shardResults.events) {
-        if (event && !allEvents.find((e) => e.id === event.id)) {
-          allEvents.push(event);
+    const batchShards = shards.slice(batchStart, batchStart + batchSize);
+    const promises = batchShards.map((shardId) => queryEventShard(env, shardId, expandedFilter, subscriptionId));
+    const results = await Promise.all(promises);
+    for (let i = 0; i < results.length; i++) {
+      const shardId = batchShards[i];
+      const shardResults = results[i];
+      const shardEventIds = [];
+      for (const eventId of shardResults.eventIds || []) {
+        if (!seen.has(eventId)) {
+          seen.add(eventId);
+          merged.push(eventId);
+        }
+        shardEventIds.push(eventId);
+      }
+      if (shardResults.events) {
+        for (const event of shardResults.events) {
+          if (event && !allEvents.find((e) => e.id === event.id)) {
+            allEvents.push(event);
+          }
         }
       }
+      if (shardEventIds.length > 0) {
+        shardMapping.set(shardId, shardEventIds);
+      }
     }
-    if (shardEventIds.length > 0) {
-      shardMapping.set(shardId, shardEventIds);
-    }
+  }
+  const totalLatency = Date.now() - queryStartTime;
+  if (totalLatency > 1e4) {
+    console.warn(`Parallel query of ${shards.length} shards took ${totalLatency}ms total`);
   }
   const safetyCap = 1e4;
   const cappedEventIds = merged.slice(0, safetyCap);
@@ -7849,6 +7857,8 @@ var _EventShardDO = class _EventShardDO {
     this.deletedEvents = /* @__PURE__ */ new Set();
     this.expirationIndex = /* @__PURE__ */ new Map();
     this.trimmedIndices = /* @__PURE__ */ new Set();
+    this.eventCache = /* @__PURE__ */ new Map();
+    this.MAX_EVENT_CACHE_SIZE = 1e4;
     this.shardStartTime = 0;
     this.shardEndTime = 0;
     this.eventCount = 0;
@@ -8027,7 +8037,8 @@ var _EventShardDO = class _EventShardDO {
       replaceableData,
       addressableData,
       channelMetadataData,
-      expirationData
+      expirationData,
+      kindIndicesData
     ] = await Promise.all([
       this.state.storage.get("metadata"),
       this.state.storage.get("deleted_events"),
@@ -8035,7 +8046,8 @@ var _EventShardDO = class _EventShardDO {
       this.state.storage.list({ prefix: "replaceable:" }),
       this.state.storage.list({ prefix: "addressable:" }),
       this.state.storage.list({ prefix: "channelmeta:" }),
-      this.state.storage.get("expiration_index")
+      this.state.storage.get("expiration_index"),
+      this.state.storage.list({ prefix: "kind:" })
     ]);
     if (metadata) {
       this.shardStartTime = metadata.shardStartTime;
@@ -8064,8 +8076,14 @@ var _EventShardDO = class _EventShardDO {
     if (expirationData) {
       this.expirationIndex = new Map(expirationData);
     }
+    for (const [key, indexData] of kindIndicesData) {
+      const kind = parseInt(key.replace("kind:", ""), 10);
+      if (!isNaN(kind) && indexData) {
+        this.kindIndex.set(kind, this.deserializeIndex(indexData));
+      }
+    }
     console.log(
-      `EventShardDO loaded (lazy mode): ${this.eventCount} events, ${this.deletedEvents.size} deletions, ${this.replaceableIndex.size} replaceable, ${this.addressableIndex.size} addressable, ${this.channelMetadataIndex.size} channel metadata, ${this.expirationIndex.size} expiring in ${Date.now() - startTime}ms (other indices load on-demand)`
+      `EventShardDO loaded: ${this.eventCount} events, ${this.kindIndex.size} kind indices, ${this.deletedEvents.size} deletions, ${this.replaceableIndex.size} replaceable, ${this.addressableIndex.size} addressable, ${this.channelMetadataIndex.size} channel metadata, ${this.expirationIndex.size} expiring in ${Date.now() - startTime}ms`
     );
   }
   deserializeIndex(stored) {
@@ -8341,6 +8359,7 @@ var _EventShardDO = class _EventShardDO {
       const eventData = pack(event);
       storageBatch[`event:${event.id}`] = eventData;
       this.indexEventInBatch(event, storageBatch);
+      this.addToEventCache(event);
       this.eventCount++;
       if (!this.shardStartTime || event.created_at * 1e3 < this.shardStartTime) {
         this.shardStartTime = event.created_at * 1e3;
@@ -8632,17 +8651,36 @@ var _EventShardDO = class _EventShardDO {
     const eventIds = await this.executeQuery(filter);
     const events = [];
     if (eventIds.length > 0) {
-      const storageKeys = eventIds.map((id) => `event:${id}`);
-      const eventDataMap = await this.state.storage.get(storageKeys);
+      const eventMap = /* @__PURE__ */ new Map();
+      const missingIds = [];
       for (const id of eventIds) {
-        const eventData = eventDataMap.get(`event:${id}`);
-        if (eventData) {
-          try {
-            const event = unpack(eventData);
-            events.push(event);
-          } catch (err) {
-            console.warn(`Failed to unpack event ${id}:`, err);
+        const cached = this.eventCache.get(id);
+        if (cached) {
+          eventMap.set(id, cached);
+        } else {
+          missingIds.push(id);
+        }
+      }
+      if (missingIds.length > 0) {
+        const storageKeys = missingIds.map((id) => `event:${id}`);
+        const eventDataMap = await this.state.storage.get(storageKeys);
+        for (const id of missingIds) {
+          const eventData = eventDataMap.get(`event:${id}`);
+          if (eventData) {
+            try {
+              const event = unpack(eventData);
+              eventMap.set(id, event);
+              this.addToEventCache(event);
+            } catch (err) {
+              console.warn(`Failed to unpack event ${id}:`, err);
+            }
           }
+        }
+      }
+      for (const id of eventIds) {
+        const event = eventMap.get(id);
+        if (event) {
+          events.push(event);
         }
       }
     }
@@ -8661,6 +8699,15 @@ var _EventShardDO = class _EventShardDO {
     return new Response(pack(response), {
       headers: { "Content-Type": "application/msgpack" }
     });
+  }
+  addToEventCache(event) {
+    if (this.eventCache.size >= this.MAX_EVENT_CACHE_SIZE) {
+      const firstKey = this.eventCache.keys().next().value;
+      if (firstKey) {
+        this.eventCache.delete(firstKey);
+      }
+    }
+    this.eventCache.set(event.id, event);
   }
   async executeQuery(filter) {
     const since = filter.since ?? 0;

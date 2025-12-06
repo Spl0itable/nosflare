@@ -309,50 +309,61 @@ export async function queryShards(
   filter: NostrFilter,
   subscriptionId?: string
 ): Promise<{ eventIds: string[], events: any[], shardMapping: Map<string, string[]> }> {
-  const shards = getShardsForFilter(filter);
+  const allShards = getShardsForFilter(filter);
   const queryStartTime = Date.now();
 
   const requestedLimit = filter.limit ?? 1000;
   const perShardLimit = Math.min(requestedLimit * 3, 5000);
   const expandedFilter = { ...filter, limit: perShardLimit };
 
-  const promises = shards.map(shardId => queryEventShard(env, shardId, expandedFilter, subscriptionId));
-  const results = await Promise.all(promises);
-
-  const totalLatency = Date.now() - queryStartTime;
-  if (totalLatency > 10000) {
-    console.warn(`Parallel query of ${shards.length} shards took ${totalLatency}ms total`);
-  }
-
   const seen = new Set<string>();
   const merged: string[] = [];
   const allEvents: any[] = [];
   const shardMapping = new Map<string, string[]>();
 
-  for (let i = 0; i < results.length; i++) {
-    const shardId = shards[i];
-    const shardResults = results[i];
-    const shardEventIds: string[] = [];
+  const shards = [...allShards].reverse();
 
-    for (const eventId of shardResults.eventIds || []) {
-      if (!seen.has(eventId)) {
-        seen.add(eventId);
-        merged.push(eventId);
-      }
-      shardEventIds.push(eventId);
+  const batchSize = requestedLimit <= 10 ? 2 : requestedLimit <= 100 ? 5 : shards.length;
+
+  for (let batchStart = 0; batchStart < shards.length; batchStart += batchSize) {
+    if (merged.length >= requestedLimit) {
+      break;
     }
 
-    if (shardResults.events) {
-      for (const event of shardResults.events) {
-        if (event && !allEvents.find(e => e.id === event.id)) {
-          allEvents.push(event);
+    const batchShards = shards.slice(batchStart, batchStart + batchSize);
+    const promises = batchShards.map(shardId => queryEventShard(env, shardId, expandedFilter, subscriptionId));
+    const results = await Promise.all(promises);
+
+    for (let i = 0; i < results.length; i++) {
+      const shardId = batchShards[i];
+      const shardResults = results[i];
+      const shardEventIds: string[] = [];
+
+      for (const eventId of shardResults.eventIds || []) {
+        if (!seen.has(eventId)) {
+          seen.add(eventId);
+          merged.push(eventId);
+        }
+        shardEventIds.push(eventId);
+      }
+
+      if (shardResults.events) {
+        for (const event of shardResults.events) {
+          if (event && !allEvents.find(e => e.id === event.id)) {
+            allEvents.push(event);
+          }
         }
       }
-    }
 
-    if (shardEventIds.length > 0) {
-      shardMapping.set(shardId, shardEventIds);
+      if (shardEventIds.length > 0) {
+        shardMapping.set(shardId, shardEventIds);
+      }
     }
+  }
+
+  const totalLatency = Date.now() - queryStartTime;
+  if (totalLatency > 10000) {
+    console.warn(`Parallel query of ${shards.length} shards took ${totalLatency}ms total`);
   }
 
   const safetyCap = 10000;

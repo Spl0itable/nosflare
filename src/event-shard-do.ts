@@ -44,6 +44,9 @@ export class EventShardDO implements DurableObject {
 
   private trimmedIndices: Set<string> = new Set();
 
+  private eventCache: Map<string, NostrEvent> = new Map();
+  private readonly MAX_EVENT_CACHE_SIZE = 10_000;
+
   private shardStartTime: number = 0;
   private shardEndTime: number = 0;
   private eventCount: number = 0;
@@ -220,7 +223,8 @@ export class EventShardDO implements DurableObject {
       replaceableData,
       addressableData,
       channelMetadataData,
-      expirationData
+      expirationData,
+      kindIndicesData
     ] = await Promise.all([
       this.state.storage.get<{
         shardStartTime: number;
@@ -233,7 +237,8 @@ export class EventShardDO implements DurableObject {
       this.state.storage.list<string>({ prefix: 'replaceable:' }),
       this.state.storage.list<string>({ prefix: 'addressable:' }),
       this.state.storage.list<string>({ prefix: 'channelmeta:' }),
-      this.state.storage.get<[string, number][]>('expiration_index')
+      this.state.storage.get<[string, number][]>('expiration_index'),
+      this.state.storage.list<SortedIndex>({ prefix: 'kind:' })
     ]);
 
     if (metadata) {
@@ -270,12 +275,20 @@ export class EventShardDO implements DurableObject {
       this.expirationIndex = new Map(expirationData);
     }
 
+    for (const [key, indexData] of kindIndicesData) {
+      const kind = parseInt(key.replace('kind:', ''), 10);
+      if (!isNaN(kind) && indexData) {
+        this.kindIndex.set(kind, this.deserializeIndex(indexData));
+      }
+    }
+
     console.log(
-      `EventShardDO loaded (lazy mode): ${this.eventCount} events, ` +
+      `EventShardDO loaded: ${this.eventCount} events, ` +
+      `${this.kindIndex.size} kind indices, ` +
       `${this.deletedEvents.size} deletions, ` +
       `${this.replaceableIndex.size} replaceable, ${this.addressableIndex.size} addressable, ` +
       `${this.channelMetadataIndex.size} channel metadata, ${this.expirationIndex.size} expiring ` +
-      `in ${Date.now() - startTime}ms (other indices load on-demand)`
+      `in ${Date.now() - startTime}ms`
     );
   }
 
@@ -616,6 +629,8 @@ export class EventShardDO implements DurableObject {
       storageBatch[`event:${event.id}`] = eventData;
 
       this.indexEventInBatch(event, storageBatch);
+
+      this.addToEventCache(event);
 
       this.eventCount++;
       if (!this.shardStartTime || event.created_at * 1000 < this.shardStartTime) {
@@ -988,18 +1003,40 @@ export class EventShardDO implements DurableObject {
     const events: NostrEvent[] = [];
 
     if (eventIds.length > 0) {
-      const storageKeys = eventIds.map(id => `event:${id}`);
-      const eventDataMap = await this.state.storage.get<Uint8Array>(storageKeys);
+      const eventMap = new Map<string, NostrEvent>();
+      const missingIds: string[] = [];
 
       for (const id of eventIds) {
-        const eventData = eventDataMap.get(`event:${id}`);
-        if (eventData) {
-          try {
-            const event = unpack(eventData) as NostrEvent;
-            events.push(event);
-          } catch (err) {
-            console.warn(`Failed to unpack event ${id}:`, err);
+        const cached = this.eventCache.get(id);
+        if (cached) {
+          eventMap.set(id, cached);
+        } else {
+          missingIds.push(id);
+        }
+      }
+
+      if (missingIds.length > 0) {
+        const storageKeys = missingIds.map(id => `event:${id}`);
+        const eventDataMap = await this.state.storage.get<Uint8Array>(storageKeys);
+
+        for (const id of missingIds) {
+          const eventData = eventDataMap.get(`event:${id}`);
+          if (eventData) {
+            try {
+              const event = unpack(eventData) as NostrEvent;
+              eventMap.set(id, event);
+              this.addToEventCache(event);
+            } catch (err) {
+              console.warn(`Failed to unpack event ${id}:`, err);
+            }
           }
+        }
+      }
+
+      for (const id of eventIds) {
+        const event = eventMap.get(id);
+        if (event) {
+          events.push(event);
         }
       }
     }
@@ -1020,6 +1057,16 @@ export class EventShardDO implements DurableObject {
     return new Response(pack(response), {
       headers: { 'Content-Type': 'application/msgpack' }
     });
+  }
+
+  private addToEventCache(event: NostrEvent): void {
+    if (this.eventCache.size >= this.MAX_EVENT_CACHE_SIZE) {
+      const firstKey = this.eventCache.keys().next().value;
+      if (firstKey) {
+        this.eventCache.delete(firstKey);
+      }
+    }
+    this.eventCache.set(event.id, event);
   }
 
   private async executeQuery(filter: ShardQueryRequest): Promise<string[]> {

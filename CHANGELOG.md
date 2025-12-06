@@ -1,3 +1,7 @@
+## v8.9.24 - 2025-12-06
+
+Hotfix: improved event querying
+
 ## v8.9.23 - 2025-12-06
 
 Hotfix: removed legacy D1 code
