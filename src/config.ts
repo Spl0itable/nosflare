@@ -2,8 +2,6 @@
  * Configuration - Change optional relay settings
  */
 
-import { RelayInfo } from './types';
-
 // ***************************** //
 // ** BEGIN EDITABLE SETTINGS ** //
 // ***************************** //
@@ -23,7 +21,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.8.23",
+  version: "8.9.23",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -171,6 +169,13 @@ export const READ_REPLICAS_PER_SHARD = 4;
 // Recommended: true for high traffic relays, false for smaller relays
 export const PAYMENT_DO_SHARDING_ENABLED = true;
 
+// ConnectionDO sharding
+// When true, each WebSocket connection gets its own ConnectionDO instance (unique ID per connection).
+// When false, all connections share a single ConnectionDO instance.
+// Disabling sharding reduces Durable Object instance count but increases per-DO resource usage.
+// Recommended: true for high traffic relays, false for smaller relays to reduce DO instance count
+export const CONNECTION_DO_SHARDING_ENABLED = true;
+
 // Rate limit thresholds
 export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min
 export const REQ_RATE_LIMIT = { rate: 100 / 60000, capacity: 100 }; // 100 REQ messages per min
@@ -179,18 +184,16 @@ export const excludedRateLimitKinds = new Set<number>([
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
 ]);
 
-// NIP-22: Event created_at limits
-export const CREATED_AT_LOWER_LIMIT = relayInfo.limitation?.created_at_lower_limit ?? 0;
-export const CREATED_AT_UPPER_LIMIT = relayInfo.limitation?.created_at_upper_limit ?? 2147483647;
-
-// NIP-42: Authentication requirement
-export const AUTH_REQUIRED = relayInfo.limitation?.auth_required ?? false;
-
 // *************************** //
 // ** END EDITABLE SETTINGS ** //
 // *************************** //
 
+import { RelayInfo } from './types';
 import { NostrEvent } from './types';
+
+export const CREATED_AT_LOWER_LIMIT = relayInfo.limitation?.created_at_lower_limit ?? 0;
+export const CREATED_AT_UPPER_LIMIT = relayInfo.limitation?.created_at_upper_limit ?? 2147483647;
+export const AUTH_REQUIRED = relayInfo.limitation?.auth_required ?? false;
 
 export function isPubkeyAllowed(pubkey: string): boolean {
   if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {

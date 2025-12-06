@@ -161,8 +161,21 @@ For blocklists and allowlists: if the allowlist is populated, only those items a
 
 These settings control how the relay distributes work across Durable Objects. Lower values reduce DO requests (lower cost) but reduce parallelism. Higher values increase parallelism but generate more internal requests.
 
+**What is Sharding?**
+
+Sharding is a database architecture pattern that partitions data across multiple independent instances (shards) to distribute load and enable horizontal scaling. In Nosflare, sharding is applied to Durable Objects:
+
+- **ConnectionDO sharding**: When enabled (default), each WebSocket connection gets its own Durable Object instance. This provides complete isolation between connections but creates many DO instances. When disabled, all connections share a single DO instance, reducing instance count but increasing per-instance resource usage.
+
+- **SessionManagerDO sharding**: Events are distributed across shards using `kind % SESSION_MANAGER_SHARD_COUNT`. This enables parallel subscription matching across event kinds.
+
+- **EventShardDO sharding**: Events are stored in 24-hour time-based shards with configurable read replicas. This enables parallel querying across time ranges and provides redundancy.
+
+- **PaymentDO sharding**: When enabled, paid pubkeys are distributed across shards based on the first 4 characters of the pubkey. When disabled, all payment records go to a single DO instance.
+
 | Setting | Location | Default | Description |
 |---------|----------|---------|-------------|
+| `CONNECTION_DO_SHARDING_ENABLED` | `src/config.ts` | true | When true, each WebSocket connection gets its own ConnectionDO. When false, all connections share a single ConnectionDO. |
 | `SESSION_MANAGER_SHARD_COUNT` | `src/config.ts` | 50 | Number of SessionManagerDO shards. Events are assigned using `kind % count`. Range: 1-50. |
 | `MAX_TIME_WINDOWS_PER_QUERY` | `src/config.ts` | 7 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
 | `READ_REPLICAS_PER_SHARD` | `src/config.ts` | 4 | Number of EventShardDO replicas per time shard. Each event write goes to all replicas. |
@@ -170,8 +183,8 @@ These settings control how the relay distributes work across Durable Objects. Lo
 
 **Tuning Guidelines:**
 
-- **Low traffic relay**: Set `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2, `PAYMENT_DO_SHARDING_ENABLED` to false
-- **High traffic relay**: Use defaults (50, 7, 4, true) for maximum parallelism
+- **Low traffic relay**: Set `CONNECTION_DO_SHARDING_ENABLED` to false, `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2, `PAYMENT_DO_SHARDING_ENABLED` to false
+- **High traffic relay**: Use defaults (true, 50, 7, 4, true) for maximum parallelism
 - **Cost optimization**: Reducing these values significantly decreases Durable Object requests
 
 **Note:** All REQ subscriptions must include a `kinds` filter. Subscriptions without kinds are rejected to prevent broadcast fan-out to all shards.

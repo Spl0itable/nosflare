@@ -68,7 +68,6 @@ function shouldFilterForPrivacy(event: NostrEvent, authenticatedPubkeys: Set<str
 
 interface ConnectionAttachment {
   sessionId: string;
-  bookmark: string;
   host: string;
   connectedAt: number;
 }
@@ -78,58 +77,80 @@ interface PaymentCacheEntry {
   timestamp: number;
 }
 
+interface SessionState {
+  subscriptions: Map<string, NostrFilter[]>;
+  registeredShards: Set<number>;
+  pubkeyRateLimiter: RateLimiter;
+  reqRateLimiter: RateLimiter;
+  authenticatedPubkeys: Set<string>;
+  challenge?: string;
+  host: string;
+}
+
 export class ConnectionDO implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
-  private sessionId: string;
 
-  private subscriptions: Map<string, NostrFilter[]> = new Map();
-
-  private registeredShards: Set<number> = new Set();
-
-  private pubkeyRateLimiter: RateLimiter;
-  private reqRateLimiter: RateLimiter;
+  private sessions: Map<string, SessionState> = new Map();
 
   private paymentCache: Map<string, PaymentCacheEntry> = new Map();
   private readonly PAYMENT_CACHE_TTL = 10000;
 
-  private bookmark: string = 'first-unconstrained';
-  private host: string = '';
-
-  private challenge?: string;
-  private authenticatedPubkeys: Set<string> = new Set();
-
-  private subscriptionsDirty: boolean = false;
-  private pendingSubscriptionWrite: ReturnType<typeof setTimeout> | null = null;
-  private pendingSubscriptionUpdate: ReturnType<typeof setTimeout> | null = null;
+  private sessionsDirty: Set<string> = new Set();
+  private pendingSubscriptionWrites: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private pendingSubscriptionUpdates: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private readonly SUBSCRIPTION_WRITE_DELAY_MS = 500;
   private readonly SUBSCRIPTION_UPDATE_DELAY_MS = 500;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
-    this.sessionId = crypto.randomUUID();
-    this.pubkeyRateLimiter = new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
-    this.reqRateLimiter = new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
 
     this.state.blockConcurrencyWhile(async () => {
-      const stored = await this.state.storage.get<any>(['subscriptions', 'sessionId', 'authenticatedPubkeys']);
-      if (stored.get('subscriptions')) {
-        this.subscriptions = new Map(stored.get('subscriptions') as Array<[string, NostrFilter[]]>);
-      }
-      if (stored.get('sessionId')) {
-        this.sessionId = stored.get('sessionId') as string;
-      }
-      if (stored.get('authenticatedPubkeys')) {
-        this.authenticatedPubkeys = new Set(stored.get('authenticatedPubkeys') as string[]);
+      const storedSessions = await this.state.storage.get<any>('sessions');
+      if (storedSessions) {
+        for (const [sessionId, sessionData] of storedSessions as Array<[string, any]>) {
+          this.sessions.set(sessionId, {
+            subscriptions: new Map(sessionData.subscriptions as Array<[string, NostrFilter[]]>),
+            registeredShards: new Set(sessionData.registeredShards as number[]),
+            pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+            reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+            authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys as string[]),
+            challenge: sessionData.challenge,
+            host: sessionData.host || ''
+          });
+        }
       }
 
-      if (this.subscriptions.size > 0) {
-        this.updateSubscriptions().catch(err =>
-          console.error('Failed to re-sync subscriptions on wake:', err)
-        );
+      for (const [sessionId, session] of this.sessions) {
+        if (session.subscriptions.size > 0) {
+          this.updateSubscriptionsForSession(sessionId).catch(err =>
+            console.error(`Failed to re-sync subscriptions for session ${sessionId} on wake:`, err)
+          );
+        }
       }
     });
+  }
+
+  private getOrCreateSession(sessionId: string, host: string = ''): SessionState {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = {
+        subscriptions: new Map(),
+        registeredShards: new Set(),
+        pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+        reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+        authenticatedPubkeys: new Set(),
+        challenge: undefined,
+        host
+      };
+      this.sessions.set(sessionId, session);
+    }
+    return session;
+  }
+
+  private getSession(sessionId: string): SessionState | undefined {
+    return this.sessions.get(sessionId);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -144,34 +165,51 @@ export class ConnectionDO implements DurableObject {
       return new Response('Expected Upgrade: websocket', { status: 426 });
     }
 
-    this.host = request.headers.get('host') || url.host;
+    const host = request.headers.get('host') || url.host;
+
+    const sessionId = crypto.randomUUID();
+
+    const session = this.getOrCreateSession(sessionId, host);
 
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
 
     const attachment: ConnectionAttachment = {
-      sessionId: this.sessionId,
-      bookmark: this.bookmark,
-      host: this.host,
+      sessionId,
+      host,
       connectedAt: Date.now()
     };
     server.serializeAttachment(attachment);
 
     this.state.acceptWebSocket(server);
 
-    await this.state.storage.put('sessionId', this.sessionId);
+    await this.persistSessions();
 
     if (AUTH_REQUIRED) {
-      this.challenge = crypto.randomUUID();
-      this.sendAuth(server, this.challenge);
+      session.challenge = crypto.randomUUID();
+      this.sendAuth(server, session.challenge);
     }
 
-    if (DEBUG) console.log(`ConnectionDO: New session ${this.sessionId}`);
+    if (DEBUG) console.log(`ConnectionDO: New session ${sessionId}`);
 
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
+  }
+
+  private async persistSessions(): Promise<void> {
+    const sessionsData: Array<[string, any]> = [];
+    for (const [sessionId, session] of this.sessions) {
+      sessionsData.push([sessionId, {
+        subscriptions: Array.from(session.subscriptions.entries()),
+        registeredShards: Array.from(session.registeredShards),
+        authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
+        challenge: session.challenge,
+        host: session.host
+      }]);
+    }
+    await this.state.storage.put('sessions', sessionsData);
   }
 
   async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string): Promise<void> {
@@ -195,14 +233,6 @@ export class ConnectionDO implements DurableObject {
 
       await this.handleMessage(ws, parsedMessage);
 
-      const updatedAttachment: ConnectionAttachment = {
-        sessionId: attachment.sessionId,
-        bookmark: this.bookmark,
-        host: this.host,
-        connectedAt: attachment.connectedAt
-      };
-      ws.serializeAttachment(updatedAttachment);
-
     } catch (error) {
       console.error('Error handling message:', error);
       if (error instanceof SyntaxError) {
@@ -216,21 +246,30 @@ export class ConnectionDO implements DurableObject {
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
     if (attachment) {
-      if (DEBUG) console.log(`ConnectionDO: Session ${attachment.sessionId} closed`);
+      const { sessionId } = attachment;
+      if (DEBUG) console.log(`ConnectionDO: Session ${sessionId} closed`);
 
-      if (this.pendingSubscriptionWrite) {
-        clearTimeout(this.pendingSubscriptionWrite);
-        this.pendingSubscriptionWrite = null;
+      const pendingWrite = this.pendingSubscriptionWrites.get(sessionId);
+      if (pendingWrite) {
+        clearTimeout(pendingWrite);
+        this.pendingSubscriptionWrites.delete(sessionId);
       }
-      if (this.pendingSubscriptionUpdate) {
-        clearTimeout(this.pendingSubscriptionUpdate);
-        this.pendingSubscriptionUpdate = null;
+      const pendingUpdate = this.pendingSubscriptionUpdates.get(sessionId);
+      if (pendingUpdate) {
+        clearTimeout(pendingUpdate);
+        this.pendingSubscriptionUpdates.delete(sessionId);
       }
-      await this.flushSubscriptionWrite();
 
-      this.unregisterSession().catch(err =>
-        console.error('Failed to unregister session:', err)
+      await this.flushSubscriptionWriteForSession(sessionId);
+
+      await this.unregisterSessionFromShards(sessionId).catch(err =>
+        console.error(`Failed to unregister session ${sessionId}:`, err)
       );
+
+      this.sessions.delete(sessionId);
+      this.sessionsDirty.delete(sessionId);
+
+      await this.persistSessions();
     }
   }
 
@@ -238,50 +277,54 @@ export class ConnectionDO implements DurableObject {
     console.error('WebSocket error:', error);
   }
 
-  private scheduleSubscriptionWrite(): void {
-    this.subscriptionsDirty = true;
+  private scheduleSubscriptionWriteForSession(sessionId: string): void {
+    this.sessionsDirty.add(sessionId);
 
-    if (this.pendingSubscriptionWrite) {
+    if (this.pendingSubscriptionWrites.has(sessionId)) {
       return;
     }
 
-    this.pendingSubscriptionWrite = setTimeout(async () => {
-      this.pendingSubscriptionWrite = null;
-      await this.flushSubscriptionWrite();
+    const timer = setTimeout(async () => {
+      this.pendingSubscriptionWrites.delete(sessionId);
+      await this.flushSubscriptionWriteForSession(sessionId);
     }, this.SUBSCRIPTION_WRITE_DELAY_MS);
+    this.pendingSubscriptionWrites.set(sessionId, timer);
   }
 
-  private async flushSubscriptionWrite(): Promise<void> {
-    if (!this.subscriptionsDirty) {
+  private async flushSubscriptionWriteForSession(sessionId: string): Promise<void> {
+    if (!this.sessionsDirty.has(sessionId)) {
       return;
     }
 
-    this.subscriptionsDirty = false;
+    this.sessionsDirty.delete(sessionId);
     try {
-      await this.state.storage.put('subscriptions', Array.from(this.subscriptions.entries()));
+      await this.persistSessions();
     } catch (err) {
-      console.error('Failed to persist subscriptions to storage:', err);
-      this.subscriptionsDirty = true;
+      console.error(`Failed to persist sessions to storage:`, err);
+      this.sessionsDirty.add(sessionId);
     }
   }
 
-  private scheduleSubscriptionUpdate(): void {
-    if (this.pendingSubscriptionUpdate) {
+  private scheduleSubscriptionUpdateForSession(sessionId: string): void {
+    if (this.pendingSubscriptionUpdates.has(sessionId)) {
       return;
     }
 
-    this.pendingSubscriptionUpdate = setTimeout(async () => {
-      this.pendingSubscriptionUpdate = null;
-      await this.updateSubscriptions().catch(err =>
-        console.error('Failed to update subscriptions:', err)
+    const timer = setTimeout(async () => {
+      this.pendingSubscriptionUpdates.delete(sessionId);
+      await this.updateSubscriptionsForSession(sessionId).catch(err =>
+        console.error(`Failed to update subscriptions for session ${sessionId}:`, err)
       );
     }, this.SUBSCRIPTION_UPDATE_DELAY_MS);
+    this.pendingSubscriptionUpdates.set(sessionId, timer);
   }
 
-  private getRequiredShards(): Set<number> {
+  private getRequiredShardsForSession(sessionId: string): Set<number> {
     const requiredShards = new Set<number>();
+    const session = this.getSession(sessionId);
+    if (!session) return requiredShards;
 
-    for (const [subscriptionId, filters] of this.subscriptions) {
+    for (const [subscriptionId, filters] of session.subscriptions) {
       for (const filter of filters) {
         if (filter.kinds && filter.kinds.length > 0) {
           for (const kind of filter.kinds) {
@@ -294,8 +337,11 @@ export class ConnectionDO implements DurableObject {
     return requiredShards;
   }
 
-  private async unregisterSession(): Promise<void> {
-    const unregisterPromises = Array.from(this.registeredShards).map(async (shardNum) => {
+  private async unregisterSessionFromShards(sessionId: string): Promise<void> {
+    const session = this.getSession(sessionId);
+    if (!session) return;
+
+    const unregisterPromises = Array.from(session.registeredShards).map(async (shardNum) => {
       try {
         const id = this.env.SESSION_MANAGER_DO.idFromName(`manager-${shardNum}`);
         const stub = this.env.SESSION_MANAGER_DO.get(id);
@@ -304,24 +350,27 @@ export class ConnectionDO implements DurableObject {
           method: 'POST',
           headers: { 'Content-Type': 'application/msgpack' },
           body: pack({
-            sessionId: this.sessionId
+            sessionId
           })
         });
       } catch (error) {
-        console.error(`Failed to unregister from shard ${shardNum}:`, error);
+        console.error(`Failed to unregister session ${sessionId} from shard ${shardNum}:`, error);
       }
     });
 
     await Promise.all(unregisterPromises);
-    this.registeredShards.clear();
+    session.registeredShards.clear();
   }
 
-  private async updateSubscriptions(): Promise<void> {
-    const requiredShards = this.getRequiredShards();
+  private async updateSubscriptionsForSession(sessionId: string): Promise<void> {
+    const session = this.getSession(sessionId);
+    if (!session) return;
+
+    const requiredShards = this.getRequiredShardsForSession(sessionId);
 
     const shardToSubscriptions = new Map<number, Array<[string, NostrFilter[]]>>();
 
-    for (const [subscriptionId, filters] of this.subscriptions) {
+    for (const [subscriptionId, filters] of session.subscriptions) {
       for (const filter of filters) {
         if (filter.kinds && filter.kinds.length > 0) {
           for (const kind of filter.kinds) {
@@ -349,19 +398,19 @@ export class ConnectionDO implements DurableObject {
           method: 'POST',
           headers: { 'Content-Type': 'application/msgpack' },
           body: pack({
-            sessionId: this.sessionId,
+            sessionId,
             connectionDoId: this.state.id.toString(),
             subscriptions: relevantSubs
           })
         });
 
-        this.registeredShards.add(shardNum);
+        session.registeredShards.add(shardNum);
       } catch (error) {
-        console.error(`Failed to update subscriptions on shard ${shardNum}:`, error);
+        console.error(`Failed to update subscriptions for session ${sessionId} on shard ${shardNum}:`, error);
       }
     });
 
-    const shardsToUnregister = Array.from(this.registeredShards).filter(
+    const shardsToUnregister = Array.from(session.registeredShards).filter(
       shard => !requiredShards.has(shard)
     );
 
@@ -374,20 +423,20 @@ export class ConnectionDO implements DurableObject {
           method: 'POST',
           headers: { 'Content-Type': 'application/msgpack' },
           body: pack({
-            sessionId: this.sessionId
+            sessionId
           })
         });
 
-        this.registeredShards.delete(shardNum);
+        session.registeredShards.delete(shardNum);
       } catch (error) {
-        console.error(`Failed to unregister from shard ${shardNum}:`, error);
+        console.error(`Failed to unregister session ${sessionId} from shard ${shardNum}:`, error);
       }
     });
 
     await Promise.all([...updatePromises, ...unregisterPromises]);
 
     if (DEBUG) console.log(
-      `Session ${this.sessionId} registered with shards: [${Array.from(this.registeredShards).sort().join(', ')}]`
+      `Session ${sessionId} registered with shards: [${Array.from(session.registeredShards).sort().join(', ')}]`
     );
   }
 
@@ -405,23 +454,29 @@ export class ConnectionDO implements DurableObject {
         });
       }
 
-      const ws = webSockets[0];
-
       let sentCount = 0;
 
-      for (const preSerializedEvent of events) {
-        if (isEventExpired(preSerializedEvent.event)) {
-          continue;
-        }
+      for (const ws of webSockets) {
+        const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
+        if (!attachment) continue;
 
-        if (shouldFilterForPrivacy(preSerializedEvent.event, this.authenticatedPubkeys)) {
-          continue;
-        }
+        const session = this.getSession(attachment.sessionId);
+        if (!session) continue;
 
-        for (const [subscriptionId, filters] of this.subscriptions) {
-          if (this.matchesFilters(preSerializedEvent.event, filters)) {
-            this.sendPreSerializedEvent(ws, subscriptionId, preSerializedEvent.serializedJson);
-            sentCount++;
+        for (const preSerializedEvent of events) {
+          if (isEventExpired(preSerializedEvent.event)) {
+            continue;
+          }
+
+          if (shouldFilterForPrivacy(preSerializedEvent.event, session.authenticatedPubkeys)) {
+            continue;
+          }
+
+          for (const [subscriptionId, filters] of session.subscriptions) {
+            if (this.matchesFilters(preSerializedEvent.event, filters)) {
+              this.sendPreSerializedEvent(ws, subscriptionId, preSerializedEvent.serializedJson);
+              sentCount++;
+            }
           }
         }
       }
@@ -470,6 +525,18 @@ export class ConnectionDO implements DurableObject {
   }
 
   private async handleEvent(ws: WebSocket, event: NostrEvent): Promise<void> {
+    const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
+    if (!attachment) {
+      this.sendOK(ws, '', false, 'error: session not found');
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendOK(ws, '', false, 'error: session not found');
+      return;
+    }
+
     try {
       if (!event || typeof event !== 'object') {
         this.sendOK(ws, '', false, 'invalid: event object required');
@@ -483,13 +550,13 @@ export class ConnectionDO implements DurableObject {
         return;
       }
 
-      if (AUTH_REQUIRED && !this.authenticatedPubkeys.has(event.pubkey)) {
+      if (AUTH_REQUIRED && !session.authenticatedPubkeys.has(event.pubkey)) {
         this.sendOK(ws, event.id, false, 'auth-required: please AUTH to publish events');
         return;
       }
 
       if (!excludedRateLimitKinds.has(event.kind)) {
-        if (!this.pubkeyRateLimiter.removeToken()) {
+        if (!session.pubkeyRateLimiter.removeToken()) {
           if (DEBUG) console.log(`Rate limit exceeded for pubkey ${event.pubkey}`);
           this.sendOK(ws, event.id, false, 'rate-limited: slow down there chief');
           return;
@@ -534,7 +601,7 @@ export class ConnectionDO implements DurableObject {
 
         if (!hasPaid) {
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
-          const host = this.host;
+          const host = session.host;
           const message = host
             ? `blocked: payment required. Visit https://${host} to pay for relay access.`
             : 'blocked: payment required. Please visit the relay website to pay for access.';
@@ -582,7 +649,7 @@ export class ConnectionDO implements DurableObject {
         return;
       }
 
-      const result = await processEvent(event, this.sessionId, this.env);
+      const result = await processEvent(event, sessionId, this.env);
 
       if (result.success) {
         this.sendOK(ws, event.id, true, result.message);
@@ -603,6 +670,18 @@ export class ConnectionDO implements DurableObject {
   }
 
   private async handleReq(ws: WebSocket, message: any[]): Promise<void> {
+    const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
+    if (!attachment) {
+      this.sendError(ws, 'Session not found');
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, 'Session not found');
+      return;
+    }
+
     const [_, subscriptionId, ...filters] = message;
 
     if (!subscriptionId || typeof subscriptionId !== 'string' || subscriptionId === '' || subscriptionId.length > 64) {
@@ -610,12 +689,12 @@ export class ConnectionDO implements DurableObject {
       return;
     }
 
-    if (AUTH_REQUIRED && this.authenticatedPubkeys.size === 0) {
+    if (AUTH_REQUIRED && session.authenticatedPubkeys.size === 0) {
       this.sendClosed(ws, subscriptionId, 'auth-required: please AUTH to subscribe');
       return;
     }
 
-    if (!this.reqRateLimiter.removeToken()) {
+    if (!session.reqRateLimiter.removeToken()) {
       console.error(`REQ rate limit exceeded for subscription: ${subscriptionId}`);
       this.sendClosed(ws, subscriptionId, 'rate-limited: slow down there chief');
       return;
@@ -676,22 +755,18 @@ export class ConnectionDO implements DurableObject {
       }
     }
 
-    this.subscriptions.set(subscriptionId, filters);
+    session.subscriptions.set(subscriptionId, filters);
 
-    this.scheduleSubscriptionWrite();
-    this.scheduleSubscriptionUpdate();
+    this.scheduleSubscriptionWriteForSession(sessionId);
+    this.scheduleSubscriptionUpdateForSession(sessionId);
 
-    if (DEBUG) console.log(`New subscription ${subscriptionId} for session ${this.sessionId}`);
+    if (DEBUG) console.log(`New subscription ${subscriptionId} for session ${sessionId}`);
 
     try {
       const result = await this.getCachedOrQuery(filters, subscriptionId);
 
-      if (result.bookmark) {
-        this.bookmark = result.bookmark;
-      }
-
       for (const event of result.events) {
-        if (!isEventExpired(event) && !shouldFilterForPrivacy(event, this.authenticatedPubkeys)) {
+        if (!isEventExpired(event) && !shouldFilterForPrivacy(event, session.authenticatedPubkeys)) {
           this.sendEvent(ws, subscriptionId, event);
         }
       }
@@ -700,22 +775,34 @@ export class ConnectionDO implements DurableObject {
 
     } catch (error: any) {
       console.error(`Error processing REQ for subscription ${subscriptionId}:`, error);
-      this.sendClosed(ws, subscriptionId, 'error: could not connect to the database');
+      this.sendClosed(ws, subscriptionId, 'error: could not query events');
     }
   }
 
   private async handleCloseSubscription(ws: WebSocket, subscriptionId: string): Promise<void> {
+    const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
+    if (!attachment) {
+      this.sendError(ws, 'Session not found');
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, 'Session not found');
+      return;
+    }
+
     if (!subscriptionId) {
       this.sendError(ws, 'Invalid subscription ID for CLOSE');
       return;
     }
 
-    const deleted = this.subscriptions.delete(subscriptionId);
+    const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
-      this.scheduleSubscriptionWrite();
-      this.scheduleSubscriptionUpdate();
+      this.scheduleSubscriptionWriteForSession(sessionId);
+      this.scheduleSubscriptionUpdateForSession(sessionId);
 
-      if (DEBUG) console.log(`Closed subscription ${subscriptionId} for session ${this.sessionId}`);
+      if (DEBUG) console.log(`Closed subscription ${subscriptionId} for session ${sessionId}`);
       this.sendClosed(ws, subscriptionId, 'Subscription closed');
     } else {
       this.sendClosed(ws, subscriptionId, 'Subscription not found');
@@ -723,6 +810,18 @@ export class ConnectionDO implements DurableObject {
   }
 
   private async handleAuth(ws: WebSocket, event: NostrEvent): Promise<void> {
+    const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
+    if (!attachment) {
+      this.sendOK(ws, '', false, 'error: session not found');
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendOK(ws, '', false, 'error: session not found');
+      return;
+    }
+
     try {
       if (!event || typeof event !== 'object') {
         this.sendOK(ws, '', false, 'invalid: auth event object required');
@@ -753,12 +852,12 @@ export class ConnectionDO implements DurableObject {
         return;
       }
 
-      if (!this.challenge) {
+      if (!session.challenge) {
         this.sendOK(ws, event.id, false, 'invalid: no challenge was issued');
         return;
       }
 
-      if (challengeTag[1] !== this.challenge) {
+      if (challengeTag[1] !== session.challenge) {
         this.sendOK(ws, event.id, false, 'invalid: challenge mismatch');
         return;
       }
@@ -772,7 +871,7 @@ export class ConnectionDO implements DurableObject {
       try {
         const relayUrl = new URL(relayTag[1]);
         const relayHost = relayUrl.host.toLowerCase();
-        const expectedHost = this.host.toLowerCase();
+        const expectedHost = session.host.toLowerCase();
 
         if (relayHost !== expectedHost) {
           this.sendOK(ws, event.id, false, `invalid: relay tag must match this relay (expected ${expectedHost}, got ${relayHost})`);
@@ -783,9 +882,9 @@ export class ConnectionDO implements DurableObject {
         return;
       }
 
-      this.authenticatedPubkeys.add(event.pubkey);
-      await this.state.storage.put('authenticatedPubkeys', Array.from(this.authenticatedPubkeys));
-      if (DEBUG) console.log(`NIP-42: Authenticated pubkey ${event.pubkey} for session ${this.sessionId}`);
+      session.authenticatedPubkeys.add(event.pubkey);
+      await this.persistSessions();
+      if (DEBUG) console.log(`NIP-42: Authenticated pubkey ${event.pubkey} for session ${sessionId}`);
 
       this.sendOK(ws, event.id, true, '');
 
@@ -814,7 +913,7 @@ export class ConnectionDO implements DurableObject {
   }
 
   private async getCachedOrQuery(filters: NostrFilter[], subscriptionId?: string): Promise<QueryResult> {
-    return await queryEvents(filters, this.bookmark, this.env, subscriptionId);
+    return await queryEvents(filters, this.env, subscriptionId);
   }
 
   private matchesFilters(event: NostrEvent, filters: NostrFilter[]): boolean {

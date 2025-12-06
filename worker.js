@@ -2192,6 +2192,7 @@ var init_msgpackr = __esm({
 var config_exports = {};
 __export(config_exports, {
   AUTH_REQUIRED: () => AUTH_REQUIRED,
+  CONNECTION_DO_SHARDING_ENABLED: () => CONNECTION_DO_SHARDING_ENABLED,
   CREATED_AT_LOWER_LIMIT: () => CREATED_AT_LOWER_LIMIT,
   CREATED_AT_UPPER_LIMIT: () => CREATED_AT_UPPER_LIMIT,
   MAX_TIME_WINDOWS_PER_QUERY: () => MAX_TIME_WINDOWS_PER_QUERY,
@@ -2287,7 +2288,7 @@ function validateGroupEvent(event) {
   }
   return { valid: true };
 }
-var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
+var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, CONNECTION_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -2301,7 +2302,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.8.23",
+      version: "8.9.23",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2391,6 +2392,7 @@ var init_config = __esm({
     MAX_TIME_WINDOWS_PER_QUERY = 7;
     READ_REPLICAS_PER_SHARD = 4;
     PAYMENT_DO_SHARDING_ENABLED = true;
+    CONNECTION_DO_SHARDING_ENABLED = true;
     PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
     REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
     excludedRateLimitKinds = /* @__PURE__ */ new Set([
@@ -5629,7 +5631,8 @@ var {
   checkValidNip05: checkValidNip052,
   blockedNip05Domains: blockedNip05Domains2,
   allowedNip05Domains: allowedNip05Domains2,
-  MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2
+  MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2,
+  CONNECTION_DO_SHARDING_ENABLED: CONNECTION_DO_SHARDING_ENABLED2
 } = config_exports;
 var GLOBAL_MAX_EVENTS = 1e3;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -5778,7 +5781,7 @@ __name(fetchEventFromFallbackRelay, "fetchEventFromFallbackRelay");
 async function fetchKind0EventForPubkey(pubkey, env) {
   try {
     const filters = [{ kinds: [0], authors: [pubkey], limit: 1 }];
-    const result = await queryEvents(filters, "first-unconstrained", env);
+    const result = await queryEvents(filters, env);
     if (result.events && result.events.length > 0) {
       return result.events[0];
     }
@@ -6023,7 +6026,7 @@ async function processDeletionEvent(event, env) {
   };
 }
 __name(processDeletionEvent, "processDeletionEvent");
-async function queryEvents(filters, bookmark, env, subscriptionId) {
+async function queryEvents(filters, env, subscriptionId) {
   const normalizedFilters = JSON.stringify(filters.map((f) => ({
     ...f,
     since: f.since ? Math.floor(f.since / 60) * 60 : void 0,
@@ -6063,7 +6066,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
     }).filter((f) => f !== null);
     if (processedFilters.length === 0) {
       console.warn("All filters were too complex, returning empty result");
-      return { events: [], bookmark: null };
+      return { events: [] };
     }
     const allEventIds = [];
     const allShardMapping = /* @__PURE__ */ new Map();
@@ -6099,7 +6102,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
     }, 0);
     const finalLimit = Math.min(requestedLimit, GLOBAL_MAX_EVENTS);
     const limitedEvents = events.slice(0, finalLimit);
-    const result = { events: limitedEvents, bookmark: null };
+    const result = { events: limitedEvents };
     try {
       const cache = caches.default;
       cache.put(cacheKey, new Response(JSON.stringify(result), {
@@ -6114,7 +6117,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
     return result;
   } catch (error) {
     console.error(`[ShardedCFNDB] Query error: ${error.message}`);
-    return { events: [], bookmark: null };
+    return { events: [] };
   }
 }
 __name(queryEvents, "queryEvents");
@@ -6147,7 +6150,7 @@ var relay_worker_default = {
       }
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          const doId = env.CONNECTION_DO.newUniqueId();
+          const doId = CONNECTION_DO_SHARDING_ENABLED2 ? env.CONNECTION_DO.newUniqueId() : env.CONNECTION_DO.idFromName("connection-main");
           const stub = env.CONNECTION_DO.get(doId);
           return stub.fetch(request);
         } else if (request.headers.get("Accept") === "application/nostr+json") {
@@ -6291,7 +6294,7 @@ function serveLandingPage() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="A serverless Nostr relay through Cloudflare Worker and D1 database" />
+    <meta name="description" content="A serverless Nostr relay powered by Cloudflare Workers and Durable Objects" />
     <title>Nosflare - Nostr Relay</title>
     <style>
         * {
@@ -6754,40 +6757,58 @@ function shouldFilterForPrivacy(event, authenticatedPubkeys) {
 __name(shouldFilterForPrivacy, "shouldFilterForPrivacy");
 var _ConnectionDO = class _ConnectionDO {
   constructor(state, env) {
-    this.subscriptions = /* @__PURE__ */ new Map();
-    this.registeredShards = /* @__PURE__ */ new Set();
+    this.sessions = /* @__PURE__ */ new Map();
     this.paymentCache = /* @__PURE__ */ new Map();
     this.PAYMENT_CACHE_TTL = 1e4;
-    this.bookmark = "first-unconstrained";
-    this.host = "";
-    this.authenticatedPubkeys = /* @__PURE__ */ new Set();
-    this.subscriptionsDirty = false;
-    this.pendingSubscriptionWrite = null;
-    this.pendingSubscriptionUpdate = null;
+    this.sessionsDirty = /* @__PURE__ */ new Set();
+    this.pendingSubscriptionWrites = /* @__PURE__ */ new Map();
+    this.pendingSubscriptionUpdates = /* @__PURE__ */ new Map();
     this.SUBSCRIPTION_WRITE_DELAY_MS = 500;
     this.SUBSCRIPTION_UPDATE_DELAY_MS = 500;
     this.state = state;
     this.env = env;
-    this.sessionId = crypto.randomUUID();
-    this.pubkeyRateLimiter = new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity);
-    this.reqRateLimiter = new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity);
     this.state.blockConcurrencyWhile(async () => {
-      const stored = await this.state.storage.get(["subscriptions", "sessionId", "authenticatedPubkeys"]);
-      if (stored.get("subscriptions")) {
-        this.subscriptions = new Map(stored.get("subscriptions"));
+      const storedSessions = await this.state.storage.get("sessions");
+      if (storedSessions) {
+        for (const [sessionId, sessionData] of storedSessions) {
+          this.sessions.set(sessionId, {
+            subscriptions: new Map(sessionData.subscriptions),
+            registeredShards: new Set(sessionData.registeredShards),
+            pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+            reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+            authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys),
+            challenge: sessionData.challenge,
+            host: sessionData.host || ""
+          });
+        }
       }
-      if (stored.get("sessionId")) {
-        this.sessionId = stored.get("sessionId");
-      }
-      if (stored.get("authenticatedPubkeys")) {
-        this.authenticatedPubkeys = new Set(stored.get("authenticatedPubkeys"));
-      }
-      if (this.subscriptions.size > 0) {
-        this.updateSubscriptions().catch(
-          (err) => console.error("Failed to re-sync subscriptions on wake:", err)
-        );
+      for (const [sessionId, session] of this.sessions) {
+        if (session.subscriptions.size > 0) {
+          this.updateSubscriptionsForSession(sessionId).catch(
+            (err) => console.error(`Failed to re-sync subscriptions for session ${sessionId} on wake:`, err)
+          );
+        }
       }
     });
+  }
+  getOrCreateSession(sessionId, host = "") {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = {
+        subscriptions: /* @__PURE__ */ new Map(),
+        registeredShards: /* @__PURE__ */ new Set(),
+        pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+        reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+        authenticatedPubkeys: /* @__PURE__ */ new Set(),
+        challenge: void 0,
+        host
+      };
+      this.sessions.set(sessionId, session);
+    }
+    return session;
+  }
+  getSession(sessionId) {
+    return this.sessions.get(sessionId);
   }
   async fetch(request) {
     const url = new URL(request.url);
@@ -6798,28 +6819,42 @@ var _ConnectionDO = class _ConnectionDO {
     if (!upgradeHeader || upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
-    this.host = request.headers.get("host") || url.host;
+    const host = request.headers.get("host") || url.host;
+    const sessionId = crypto.randomUUID();
+    const session = this.getOrCreateSession(sessionId, host);
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair);
     const attachment = {
-      sessionId: this.sessionId,
-      bookmark: this.bookmark,
-      host: this.host,
+      sessionId,
+      host,
       connectedAt: Date.now()
     };
     server.serializeAttachment(attachment);
     this.state.acceptWebSocket(server);
-    await this.state.storage.put("sessionId", this.sessionId);
+    await this.persistSessions();
     if (AUTH_REQUIRED) {
-      this.challenge = crypto.randomUUID();
-      this.sendAuth(server, this.challenge);
+      session.challenge = crypto.randomUUID();
+      this.sendAuth(server, session.challenge);
     }
     if (DEBUG3)
-      console.log(`ConnectionDO: New session ${this.sessionId}`);
+      console.log(`ConnectionDO: New session ${sessionId}`);
     return new Response(null, {
       status: 101,
       webSocket: client
     });
+  }
+  async persistSessions() {
+    const sessionsData = [];
+    for (const [sessionId, session] of this.sessions) {
+      sessionsData.push([sessionId, {
+        subscriptions: Array.from(session.subscriptions.entries()),
+        registeredShards: Array.from(session.registeredShards),
+        authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
+        challenge: session.challenge,
+        host: session.host
+      }]);
+    }
+    await this.state.storage.put("sessions", sessionsData);
   }
   async webSocketMessage(ws, message) {
     const attachment = ws.deserializeAttachment();
@@ -6838,13 +6873,6 @@ var _ConnectionDO = class _ConnectionDO {
         parsedMessage = JSON.parse(text);
       }
       await this.handleMessage(ws, parsedMessage);
-      const updatedAttachment = {
-        sessionId: attachment.sessionId,
-        bookmark: this.bookmark,
-        host: this.host,
-        connectedAt: attachment.connectedAt
-      };
-      ws.serializeAttachment(updatedAttachment);
     } catch (error) {
       console.error("Error handling message:", error);
       if (error instanceof SyntaxError) {
@@ -6857,61 +6885,72 @@ var _ConnectionDO = class _ConnectionDO {
   async webSocketClose(ws, code, reason, wasClean) {
     const attachment = ws.deserializeAttachment();
     if (attachment) {
+      const { sessionId } = attachment;
       if (DEBUG3)
-        console.log(`ConnectionDO: Session ${attachment.sessionId} closed`);
-      if (this.pendingSubscriptionWrite) {
-        clearTimeout(this.pendingSubscriptionWrite);
-        this.pendingSubscriptionWrite = null;
+        console.log(`ConnectionDO: Session ${sessionId} closed`);
+      const pendingWrite = this.pendingSubscriptionWrites.get(sessionId);
+      if (pendingWrite) {
+        clearTimeout(pendingWrite);
+        this.pendingSubscriptionWrites.delete(sessionId);
       }
-      if (this.pendingSubscriptionUpdate) {
-        clearTimeout(this.pendingSubscriptionUpdate);
-        this.pendingSubscriptionUpdate = null;
+      const pendingUpdate = this.pendingSubscriptionUpdates.get(sessionId);
+      if (pendingUpdate) {
+        clearTimeout(pendingUpdate);
+        this.pendingSubscriptionUpdates.delete(sessionId);
       }
-      await this.flushSubscriptionWrite();
-      this.unregisterSession().catch(
-        (err) => console.error("Failed to unregister session:", err)
+      await this.flushSubscriptionWriteForSession(sessionId);
+      await this.unregisterSessionFromShards(sessionId).catch(
+        (err) => console.error(`Failed to unregister session ${sessionId}:`, err)
       );
+      this.sessions.delete(sessionId);
+      this.sessionsDirty.delete(sessionId);
+      await this.persistSessions();
     }
   }
   async webSocketError(ws, error) {
     console.error("WebSocket error:", error);
   }
-  scheduleSubscriptionWrite() {
-    this.subscriptionsDirty = true;
-    if (this.pendingSubscriptionWrite) {
+  scheduleSubscriptionWriteForSession(sessionId) {
+    this.sessionsDirty.add(sessionId);
+    if (this.pendingSubscriptionWrites.has(sessionId)) {
       return;
     }
-    this.pendingSubscriptionWrite = setTimeout(async () => {
-      this.pendingSubscriptionWrite = null;
-      await this.flushSubscriptionWrite();
+    const timer = setTimeout(async () => {
+      this.pendingSubscriptionWrites.delete(sessionId);
+      await this.flushSubscriptionWriteForSession(sessionId);
     }, this.SUBSCRIPTION_WRITE_DELAY_MS);
+    this.pendingSubscriptionWrites.set(sessionId, timer);
   }
-  async flushSubscriptionWrite() {
-    if (!this.subscriptionsDirty) {
+  async flushSubscriptionWriteForSession(sessionId) {
+    if (!this.sessionsDirty.has(sessionId)) {
       return;
     }
-    this.subscriptionsDirty = false;
+    this.sessionsDirty.delete(sessionId);
     try {
-      await this.state.storage.put("subscriptions", Array.from(this.subscriptions.entries()));
+      await this.persistSessions();
     } catch (err) {
-      console.error("Failed to persist subscriptions to storage:", err);
-      this.subscriptionsDirty = true;
+      console.error(`Failed to persist sessions to storage:`, err);
+      this.sessionsDirty.add(sessionId);
     }
   }
-  scheduleSubscriptionUpdate() {
-    if (this.pendingSubscriptionUpdate) {
+  scheduleSubscriptionUpdateForSession(sessionId) {
+    if (this.pendingSubscriptionUpdates.has(sessionId)) {
       return;
     }
-    this.pendingSubscriptionUpdate = setTimeout(async () => {
-      this.pendingSubscriptionUpdate = null;
-      await this.updateSubscriptions().catch(
-        (err) => console.error("Failed to update subscriptions:", err)
+    const timer = setTimeout(async () => {
+      this.pendingSubscriptionUpdates.delete(sessionId);
+      await this.updateSubscriptionsForSession(sessionId).catch(
+        (err) => console.error(`Failed to update subscriptions for session ${sessionId}:`, err)
       );
     }, this.SUBSCRIPTION_UPDATE_DELAY_MS);
+    this.pendingSubscriptionUpdates.set(sessionId, timer);
   }
-  getRequiredShards() {
+  getRequiredShardsForSession(sessionId) {
     const requiredShards = /* @__PURE__ */ new Set();
-    for (const [subscriptionId, filters] of this.subscriptions) {
+    const session = this.getSession(sessionId);
+    if (!session)
+      return requiredShards;
+    for (const [subscriptionId, filters] of session.subscriptions) {
       for (const filter of filters) {
         if (filter.kinds && filter.kinds.length > 0) {
           for (const kind of filter.kinds) {
@@ -6922,8 +6961,11 @@ var _ConnectionDO = class _ConnectionDO {
     }
     return requiredShards;
   }
-  async unregisterSession() {
-    const unregisterPromises = Array.from(this.registeredShards).map(async (shardNum) => {
+  async unregisterSessionFromShards(sessionId) {
+    const session = this.getSession(sessionId);
+    if (!session)
+      return;
+    const unregisterPromises = Array.from(session.registeredShards).map(async (shardNum) => {
       try {
         const id = this.env.SESSION_MANAGER_DO.idFromName(`manager-${shardNum}`);
         const stub = this.env.SESSION_MANAGER_DO.get(id);
@@ -6931,20 +6973,23 @@ var _ConnectionDO = class _ConnectionDO {
           method: "POST",
           headers: { "Content-Type": "application/msgpack" },
           body: pack({
-            sessionId: this.sessionId
+            sessionId
           })
         });
       } catch (error) {
-        console.error(`Failed to unregister from shard ${shardNum}:`, error);
+        console.error(`Failed to unregister session ${sessionId} from shard ${shardNum}:`, error);
       }
     });
     await Promise.all(unregisterPromises);
-    this.registeredShards.clear();
+    session.registeredShards.clear();
   }
-  async updateSubscriptions() {
-    const requiredShards = this.getRequiredShards();
+  async updateSubscriptionsForSession(sessionId) {
+    const session = this.getSession(sessionId);
+    if (!session)
+      return;
+    const requiredShards = this.getRequiredShardsForSession(sessionId);
     const shardToSubscriptions = /* @__PURE__ */ new Map();
-    for (const [subscriptionId, filters] of this.subscriptions) {
+    for (const [subscriptionId, filters] of session.subscriptions) {
       for (const filter of filters) {
         if (filter.kinds && filter.kinds.length > 0) {
           for (const kind of filter.kinds) {
@@ -6969,17 +7014,17 @@ var _ConnectionDO = class _ConnectionDO {
           method: "POST",
           headers: { "Content-Type": "application/msgpack" },
           body: pack({
-            sessionId: this.sessionId,
+            sessionId,
             connectionDoId: this.state.id.toString(),
             subscriptions: relevantSubs
           })
         });
-        this.registeredShards.add(shardNum);
+        session.registeredShards.add(shardNum);
       } catch (error) {
-        console.error(`Failed to update subscriptions on shard ${shardNum}:`, error);
+        console.error(`Failed to update subscriptions for session ${sessionId} on shard ${shardNum}:`, error);
       }
     });
-    const shardsToUnregister = Array.from(this.registeredShards).filter(
+    const shardsToUnregister = Array.from(session.registeredShards).filter(
       (shard) => !requiredShards.has(shard)
     );
     const unregisterPromises = shardsToUnregister.map(async (shardNum) => {
@@ -6990,18 +7035,18 @@ var _ConnectionDO = class _ConnectionDO {
           method: "POST",
           headers: { "Content-Type": "application/msgpack" },
           body: pack({
-            sessionId: this.sessionId
+            sessionId
           })
         });
-        this.registeredShards.delete(shardNum);
+        session.registeredShards.delete(shardNum);
       } catch (error) {
-        console.error(`Failed to unregister from shard ${shardNum}:`, error);
+        console.error(`Failed to unregister session ${sessionId} from shard ${shardNum}:`, error);
       }
     });
     await Promise.all([...updatePromises, ...unregisterPromises]);
     if (DEBUG3)
       console.log(
-        `Session ${this.sessionId} registered with shards: [${Array.from(this.registeredShards).sort().join(", ")}]`
+        `Session ${sessionId} registered with shards: [${Array.from(session.registeredShards).sort().join(", ")}]`
       );
   }
   async handleBroadcast(request) {
@@ -7016,19 +7061,26 @@ var _ConnectionDO = class _ConnectionDO {
           headers: { "Content-Type": "application/msgpack" }
         });
       }
-      const ws = webSockets[0];
       let sentCount = 0;
-      for (const preSerializedEvent of events) {
-        if (isEventExpired(preSerializedEvent.event)) {
+      for (const ws of webSockets) {
+        const attachment = ws.deserializeAttachment();
+        if (!attachment)
           continue;
-        }
-        if (shouldFilterForPrivacy(preSerializedEvent.event, this.authenticatedPubkeys)) {
+        const session = this.getSession(attachment.sessionId);
+        if (!session)
           continue;
-        }
-        for (const [subscriptionId, filters] of this.subscriptions) {
-          if (this.matchesFilters(preSerializedEvent.event, filters)) {
-            this.sendPreSerializedEvent(ws, subscriptionId, preSerializedEvent.serializedJson);
-            sentCount++;
+        for (const preSerializedEvent of events) {
+          if (isEventExpired(preSerializedEvent.event)) {
+            continue;
+          }
+          if (shouldFilterForPrivacy(preSerializedEvent.event, session.authenticatedPubkeys)) {
+            continue;
+          }
+          for (const [subscriptionId, filters] of session.subscriptions) {
+            if (this.matchesFilters(preSerializedEvent.event, filters)) {
+              this.sendPreSerializedEvent(ws, subscriptionId, preSerializedEvent.serializedJson);
+              sentCount++;
+            }
           }
         }
       }
@@ -7072,6 +7124,17 @@ var _ConnectionDO = class _ConnectionDO {
     }
   }
   async handleEvent(ws, event) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment) {
+      this.sendOK(ws, "", false, "error: session not found");
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendOK(ws, "", false, "error: session not found");
+      return;
+    }
     try {
       if (!event || typeof event !== "object") {
         this.sendOK(ws, "", false, "invalid: event object required");
@@ -7081,12 +7144,12 @@ var _ConnectionDO = class _ConnectionDO {
         this.sendOK(ws, event.id || "", false, "invalid: missing required fields");
         return;
       }
-      if (AUTH_REQUIRED && !this.authenticatedPubkeys.has(event.pubkey)) {
+      if (AUTH_REQUIRED && !session.authenticatedPubkeys.has(event.pubkey)) {
         this.sendOK(ws, event.id, false, "auth-required: please AUTH to publish events");
         return;
       }
       if (!excludedRateLimitKinds.has(event.kind)) {
-        if (!this.pubkeyRateLimiter.removeToken()) {
+        if (!session.pubkeyRateLimiter.removeToken()) {
           if (DEBUG3)
             console.log(`Rate limit exceeded for pubkey ${event.pubkey}`);
           this.sendOK(ws, event.id, false, "rate-limited: slow down there chief");
@@ -7127,7 +7190,7 @@ var _ConnectionDO = class _ConnectionDO {
         }
         if (!hasPaid) {
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
-          const host = this.host;
+          const host = session.host;
           const message = host ? `blocked: payment required. Visit https://${host} to pay for relay access.` : "blocked: payment required. Please visit the relay website to pay for access.";
           this.sendOK(ws, event.id, false, message);
           return;
@@ -7167,7 +7230,7 @@ var _ConnectionDO = class _ConnectionDO {
         this.sendOK(ws, event.id, false, "invalid: kind 22242 events are for authentication only");
         return;
       }
-      const result = await processEvent(event, this.sessionId, this.env);
+      const result = await processEvent(event, sessionId, this.env);
       if (result.success) {
         this.sendOK(ws, event.id, true, result.message);
         const shardNum = event.kind % SESSION_MANAGER_SHARD_COUNT;
@@ -7184,16 +7247,27 @@ var _ConnectionDO = class _ConnectionDO {
     }
   }
   async handleReq(ws, message) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment) {
+      this.sendError(ws, "Session not found");
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, "Session not found");
+      return;
+    }
     const [_, subscriptionId, ...filters] = message;
     if (!subscriptionId || typeof subscriptionId !== "string" || subscriptionId === "" || subscriptionId.length > 64) {
       this.sendError(ws, "Invalid subscription ID: must be non-empty string of max 64 chars");
       return;
     }
-    if (AUTH_REQUIRED && this.authenticatedPubkeys.size === 0) {
+    if (AUTH_REQUIRED && session.authenticatedPubkeys.size === 0) {
       this.sendClosed(ws, subscriptionId, "auth-required: please AUTH to subscribe");
       return;
     }
-    if (!this.reqRateLimiter.removeToken()) {
+    if (!session.reqRateLimiter.removeToken()) {
       console.error(`REQ rate limit exceeded for subscription: ${subscriptionId}`);
       this.sendClosed(ws, subscriptionId, "rate-limited: slow down there chief");
       return;
@@ -7245,44 +7319,63 @@ var _ConnectionDO = class _ConnectionDO {
         filter.limit = 5e3;
       }
     }
-    this.subscriptions.set(subscriptionId, filters);
-    this.scheduleSubscriptionWrite();
-    this.scheduleSubscriptionUpdate();
+    session.subscriptions.set(subscriptionId, filters);
+    this.scheduleSubscriptionWriteForSession(sessionId);
+    this.scheduleSubscriptionUpdateForSession(sessionId);
     if (DEBUG3)
-      console.log(`New subscription ${subscriptionId} for session ${this.sessionId}`);
+      console.log(`New subscription ${subscriptionId} for session ${sessionId}`);
     try {
       const result = await this.getCachedOrQuery(filters, subscriptionId);
-      if (result.bookmark) {
-        this.bookmark = result.bookmark;
-      }
       for (const event of result.events) {
-        if (!isEventExpired(event) && !shouldFilterForPrivacy(event, this.authenticatedPubkeys)) {
+        if (!isEventExpired(event) && !shouldFilterForPrivacy(event, session.authenticatedPubkeys)) {
           this.sendEvent(ws, subscriptionId, event);
         }
       }
       this.sendEOSE(ws, subscriptionId);
     } catch (error) {
       console.error(`Error processing REQ for subscription ${subscriptionId}:`, error);
-      this.sendClosed(ws, subscriptionId, "error: could not connect to the database");
+      this.sendClosed(ws, subscriptionId, "error: could not query events");
     }
   }
   async handleCloseSubscription(ws, subscriptionId) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment) {
+      this.sendError(ws, "Session not found");
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendError(ws, "Session not found");
+      return;
+    }
     if (!subscriptionId) {
       this.sendError(ws, "Invalid subscription ID for CLOSE");
       return;
     }
-    const deleted = this.subscriptions.delete(subscriptionId);
+    const deleted = session.subscriptions.delete(subscriptionId);
     if (deleted) {
-      this.scheduleSubscriptionWrite();
-      this.scheduleSubscriptionUpdate();
+      this.scheduleSubscriptionWriteForSession(sessionId);
+      this.scheduleSubscriptionUpdateForSession(sessionId);
       if (DEBUG3)
-        console.log(`Closed subscription ${subscriptionId} for session ${this.sessionId}`);
+        console.log(`Closed subscription ${subscriptionId} for session ${sessionId}`);
       this.sendClosed(ws, subscriptionId, "Subscription closed");
     } else {
       this.sendClosed(ws, subscriptionId, "Subscription not found");
     }
   }
   async handleAuth(ws, event) {
+    const attachment = ws.deserializeAttachment();
+    if (!attachment) {
+      this.sendOK(ws, "", false, "error: session not found");
+      return;
+    }
+    const { sessionId } = attachment;
+    const session = this.getSession(sessionId);
+    if (!session) {
+      this.sendOK(ws, "", false, "error: session not found");
+      return;
+    }
     try {
       if (!event || typeof event !== "object") {
         this.sendOK(ws, "", false, "invalid: auth event object required");
@@ -7308,11 +7401,11 @@ var _ConnectionDO = class _ConnectionDO {
         this.sendOK(ws, event.id, false, "invalid: missing challenge tag");
         return;
       }
-      if (!this.challenge) {
+      if (!session.challenge) {
         this.sendOK(ws, event.id, false, "invalid: no challenge was issued");
         return;
       }
-      if (challengeTag[1] !== this.challenge) {
+      if (challengeTag[1] !== session.challenge) {
         this.sendOK(ws, event.id, false, "invalid: challenge mismatch");
         return;
       }
@@ -7324,7 +7417,7 @@ var _ConnectionDO = class _ConnectionDO {
       try {
         const relayUrl = new URL(relayTag[1]);
         const relayHost = relayUrl.host.toLowerCase();
-        const expectedHost = this.host.toLowerCase();
+        const expectedHost = session.host.toLowerCase();
         if (relayHost !== expectedHost) {
           this.sendOK(ws, event.id, false, `invalid: relay tag must match this relay (expected ${expectedHost}, got ${relayHost})`);
           return;
@@ -7333,10 +7426,10 @@ var _ConnectionDO = class _ConnectionDO {
         this.sendOK(ws, event.id, false, "invalid: relay tag must be a valid URL");
         return;
       }
-      this.authenticatedPubkeys.add(event.pubkey);
-      await this.state.storage.put("authenticatedPubkeys", Array.from(this.authenticatedPubkeys));
+      session.authenticatedPubkeys.add(event.pubkey);
+      await this.persistSessions();
       if (DEBUG3)
-        console.log(`NIP-42: Authenticated pubkey ${event.pubkey} for session ${this.sessionId}`);
+        console.log(`NIP-42: Authenticated pubkey ${event.pubkey} for session ${sessionId}`);
       this.sendOK(ws, event.id, true, "");
     } catch (error) {
       console.error("Error handling AUTH:", error);
@@ -7360,7 +7453,7 @@ var _ConnectionDO = class _ConnectionDO {
     });
   }
   async getCachedOrQuery(filters, subscriptionId) {
-    return await queryEvents(filters, this.bookmark, this.env, subscriptionId);
+    return await queryEvents(filters, this.env, subscriptionId);
   }
   matchesFilters(event, filters) {
     return filters.some((filter) => this.matchesFilter(event, filter));
