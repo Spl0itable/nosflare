@@ -140,6 +140,13 @@ export const allowedTags = new Set<string>([
   // ... tags that are explicitly allowed
 ]);
 
+// ConnectionDO sharding
+// When true, each WebSocket connection gets its own ConnectionDO instance (unique ID per connection).
+// When false, all connections share a single ConnectionDO instance.
+// Disabling sharding reduces Durable Object instance count but increases per-DO resource usage.
+// Recommended: true for high traffic relays, false for smaller relays to reduce DO instance count
+export const CONNECTION_DO_SHARDING_ENABLED = true;
+
 // SessionManagerDO sharding
 // Controls how event kinds are distributed across SessionManager shards for subscription matching.
 // Events are assigned to shards using: kind % SESSION_MANAGER_SHARD_COUNT
@@ -168,13 +175,6 @@ export const READ_REPLICAS_PER_SHARD = 4;
 // When false, all paid pubkeys are stored in a single PaymentDO instance.
 // Recommended: true for high traffic relays, false for smaller relays
 export const PAYMENT_DO_SHARDING_ENABLED = true;
-
-// ConnectionDO sharding
-// When true, each WebSocket connection gets its own ConnectionDO instance (unique ID per connection).
-// When false, all connections share a single ConnectionDO instance.
-// Disabling sharding reduces Durable Object instance count but increases per-DO resource usage.
-// Recommended: true for high traffic relays, false for smaller relays to reduce DO instance count
-export const CONNECTION_DO_SHARDING_ENABLED = true;
 
 // Rate limit thresholds
 export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min
