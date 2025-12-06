@@ -9,6 +9,28 @@ if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
   exit 0
 fi
 
+# Sentinel queue - the last queue created in the setup process
+# If this exists, we assume all 254 queues are already set up
+SENTINEL_QUEUE="event-indexing-replica-apac-49"
+
+# Check for --force flag to bypass sentinel check
+FORCE_SETUP=false
+if [ "$1" = "--force" ] || [ "$SKIP_QUEUE_SENTINEL_CHECK" = "true" ]; then
+  FORCE_SETUP=true
+  echo "🔄 Force mode enabled - running full queue check..."
+fi
+
+# Sentinel check: skip setup if the last queue already exists
+if [ "$FORCE_SETUP" = "false" ]; then
+  echo "🔍 Checking sentinel queue ($SENTINEL_QUEUE)..."
+  if npx wrangler queues list 2>/dev/null | grep -q "$SENTINEL_QUEUE"; then
+    echo "✅ Sentinel queue exists - all 254 queues already set up"
+    echo "   (Use --force or SKIP_QUEUE_SENTINEL_CHECK=true to run full check)"
+    exit 0
+  fi
+  echo "📋 Sentinel queue not found - running full setup..."
+fi
+
 # Get list of existing queues once
 echo "📋 Checking existing queues..."
 EXISTING_QUEUES=$(npx wrangler queues list 2>/dev/null || echo "")
