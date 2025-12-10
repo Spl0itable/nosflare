@@ -6738,19 +6738,31 @@ var _ConnectionDO = class _ConnectionDO {
     this.state = state;
     this.env = env;
     this.state.blockConcurrencyWhile(async () => {
-      const storedSessions = await this.state.storage.get("sessions");
-      if (storedSessions) {
-        for (const [sessionId, sessionData] of storedSessions) {
-          this.sessions.set(sessionId, {
-            subscriptions: new Map(sessionData.subscriptions),
-            registeredShards: new Set(sessionData.registeredShards),
-            pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
-            reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-            authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys),
-            challenge: sessionData.challenge,
-            host: sessionData.host || ""
-          });
+      try {
+        const storedSessions = await this.state.storage.get("sessions");
+        if (storedSessions) {
+          for (const [sessionId, sessionData] of storedSessions) {
+            const sanitizedSubscriptions = /* @__PURE__ */ new Map();
+            if (sessionData.subscriptions) {
+              for (const [subId, filters] of sessionData.subscriptions) {
+                sanitizedSubscriptions.set(subId, this.sanitizeFilters(filters));
+              }
+            }
+            this.sessions.set(sessionId, {
+              subscriptions: sanitizedSubscriptions,
+              registeredShards: new Set(sessionData.registeredShards),
+              pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+              reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+              authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys),
+              challenge: sessionData.challenge,
+              host: sessionData.host || ""
+            });
+          }
         }
+      } catch (err) {
+        console.error("Failed to load sessions from storage, clearing:", err);
+        await this.state.storage.delete("sessions");
+        this.sessions.clear();
       }
       for (const [sessionId, session] of this.sessions) {
         if (session.subscriptions.size > 0) {
@@ -6813,11 +6825,37 @@ var _ConnectionDO = class _ConnectionDO {
       webSocket: client
     });
   }
+  sanitizeFilters(filters) {
+    return filters.map((filter) => {
+      const sanitized = { ...filter };
+      if (sanitized.ids && sanitized.ids.length > 5e3) {
+        sanitized.ids = sanitized.ids.slice(0, 5e3);
+      }
+      if (sanitized.authors && sanitized.authors.length > 5e3) {
+        sanitized.authors = sanitized.authors.slice(0, 5e3);
+      }
+      if (sanitized.kinds && sanitized.kinds.length > 100) {
+        sanitized.kinds = sanitized.kinds.slice(0, 100);
+      }
+      for (const key of Object.keys(sanitized)) {
+        if (key.startsWith("#") && Array.isArray(sanitized[key])) {
+          if (sanitized[key].length > 2500) {
+            sanitized[key] = sanitized[key].slice(0, 2500);
+          }
+        }
+      }
+      return sanitized;
+    });
+  }
   async persistSessions() {
     const sessionsData = [];
     for (const [sessionId, session] of this.sessions) {
+      const sanitizedSubscriptions = [];
+      for (const [subId, filters] of session.subscriptions) {
+        sanitizedSubscriptions.push([subId, this.sanitizeFilters(filters)]);
+      }
       sessionsData.push([sessionId, {
-        subscriptions: Array.from(session.subscriptions.entries()),
+        subscriptions: sanitizedSubscriptions,
         registeredShards: Array.from(session.registeredShards),
         authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
         challenge: session.challenge,
@@ -7258,6 +7296,10 @@ var _ConnectionDO = class _ConnectionDO {
         }
       }
       if (filter.authors) {
+        if (filter.authors.length > 5e3) {
+          this.sendClosed(ws, subscriptionId, "invalid: too many authors (max 5000)");
+          return;
+        }
         for (const author of filter.authors) {
           if (!/^[a-f0-9]{64}$/.test(author)) {
             this.sendClosed(ws, subscriptionId, `invalid: Invalid author pubkey format: ${author}`);
@@ -7266,6 +7308,10 @@ var _ConnectionDO = class _ConnectionDO {
         }
       }
       if (filter.kinds) {
+        if (filter.kinds.length > 100) {
+          this.sendClosed(ws, subscriptionId, "invalid: too many kinds (max 100)");
+          return;
+        }
         const blockedKinds = filter.kinds.filter((kind) => !isEventKindAllowed(kind));
         if (blockedKinds.length > 0) {
           console.error(`Blocked kinds in subscription: ${blockedKinds.join(", ")}`);
@@ -7281,6 +7327,14 @@ var _ConnectionDO = class _ConnectionDO {
         filter.limit = 5e3;
       } else if (!filter.limit) {
         filter.limit = 5e3;
+      }
+      for (const [key, values] of Object.entries(filter)) {
+        if (key.startsWith("#") && Array.isArray(values)) {
+          if (values.length > 2500) {
+            this.sendClosed(ws, subscriptionId, `invalid: too many values in ${key} filter (max 2500)`);
+            return;
+          }
+        }
       }
     }
     session.subscriptions.set(subscriptionId, filters);

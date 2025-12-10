@@ -1,3 +1,7 @@
+## v8.9.26 - 2025-12-10
+
+Hotfix: critical bug that could cause websocket failure
+
 ## v8.9.25 - 2025-12-06
 
 Hotfix: removed deprecated code

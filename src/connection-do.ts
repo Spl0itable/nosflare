@@ -106,19 +106,31 @@ export class ConnectionDO implements DurableObject {
     this.env = env;
 
     this.state.blockConcurrencyWhile(async () => {
-      const storedSessions = await this.state.storage.get<any>('sessions');
-      if (storedSessions) {
-        for (const [sessionId, sessionData] of storedSessions as Array<[string, any]>) {
-          this.sessions.set(sessionId, {
-            subscriptions: new Map(sessionData.subscriptions as Array<[string, NostrFilter[]]>),
-            registeredShards: new Set(sessionData.registeredShards as number[]),
-            pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
-            reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-            authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys as string[]),
-            challenge: sessionData.challenge,
-            host: sessionData.host || ''
-          });
+      try {
+        const storedSessions = await this.state.storage.get<any>('sessions');
+        if (storedSessions) {
+          for (const [sessionId, sessionData] of storedSessions as Array<[string, any]>) {
+            const sanitizedSubscriptions = new Map<string, NostrFilter[]>();
+            if (sessionData.subscriptions) {
+              for (const [subId, filters] of sessionData.subscriptions as Array<[string, NostrFilter[]]>) {
+                sanitizedSubscriptions.set(subId, this.sanitizeFilters(filters));
+              }
+            }
+            this.sessions.set(sessionId, {
+              subscriptions: sanitizedSubscriptions,
+              registeredShards: new Set(sessionData.registeredShards as number[]),
+              pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+              reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+              authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys as string[]),
+              challenge: sessionData.challenge,
+              host: sessionData.host || ''
+            });
+          }
         }
+      } catch (err) {
+        console.error('Failed to load sessions from storage, clearing:', err);
+        await this.state.storage.delete('sessions');
+        this.sessions.clear();
       }
 
       for (const [sessionId, session] of this.sessions) {
@@ -197,11 +209,38 @@ export class ConnectionDO implements DurableObject {
     });
   }
 
+  private sanitizeFilters(filters: NostrFilter[]): NostrFilter[] {
+    return filters.map(filter => {
+      const sanitized = { ...filter };
+      if (sanitized.ids && sanitized.ids.length > 5000) {
+        sanitized.ids = sanitized.ids.slice(0, 5000);
+      }
+      if (sanitized.authors && sanitized.authors.length > 5000) {
+        sanitized.authors = sanitized.authors.slice(0, 5000);
+      }
+      if (sanitized.kinds && sanitized.kinds.length > 100) {
+        sanitized.kinds = sanitized.kinds.slice(0, 100);
+      }
+      for (const key of Object.keys(sanitized)) {
+        if (key.startsWith('#') && Array.isArray((sanitized as any)[key])) {
+          if ((sanitized as any)[key].length > 2500) {
+            (sanitized as any)[key] = (sanitized as any)[key].slice(0, 2500);
+          }
+        }
+      }
+      return sanitized;
+    });
+  }
+
   private async persistSessions(): Promise<void> {
     const sessionsData: Array<[string, any]> = [];
     for (const [sessionId, session] of this.sessions) {
+      const sanitizedSubscriptions: Array<[string, NostrFilter[]]> = [];
+      for (const [subId, filters] of session.subscriptions) {
+        sanitizedSubscriptions.push([subId, this.sanitizeFilters(filters)]);
+      }
       sessionsData.push([sessionId, {
-        subscriptions: Array.from(session.subscriptions.entries()),
+        subscriptions: sanitizedSubscriptions,
         registeredShards: Array.from(session.registeredShards),
         authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
         challenge: session.challenge,
@@ -718,6 +757,10 @@ export class ConnectionDO implements DurableObject {
       }
 
       if (filter.authors) {
+        if (filter.authors.length > 5000) {
+          this.sendClosed(ws, subscriptionId, 'invalid: too many authors (max 5000)');
+          return;
+        }
         for (const author of filter.authors) {
           if (!/^[a-f0-9]{64}$/.test(author)) {
             this.sendClosed(ws, subscriptionId, `invalid: Invalid author pubkey format: ${author}`);
@@ -727,6 +770,10 @@ export class ConnectionDO implements DurableObject {
       }
 
       if (filter.kinds) {
+        if (filter.kinds.length > 100) {
+          this.sendClosed(ws, subscriptionId, 'invalid: too many kinds (max 100)');
+          return;
+        }
         const blockedKinds = filter.kinds.filter((kind: number) => !isEventKindAllowed(kind));
         if (blockedKinds.length > 0) {
           console.error(`Blocked kinds in subscription: ${blockedKinds.join(', ')}`);
@@ -744,6 +791,15 @@ export class ConnectionDO implements DurableObject {
         filter.limit = 5000;
       } else if (!filter.limit) {
         filter.limit = 5000;
+      }
+
+      for (const [key, values] of Object.entries(filter)) {
+        if (key.startsWith('#') && Array.isArray(values)) {
+          if (values.length > 2500) {
+            this.sendClosed(ws, subscriptionId, `invalid: too many values in ${key} filter (max 2500)`);
+            return;
+          }
+        }
       }
     }
 
