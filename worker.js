@@ -6748,18 +6748,29 @@ var _ConnectionDO = class _ConnectionDO {
                 sanitizedSubscriptions.set(subId, this.sanitizeFilters(filters));
               }
             }
+            let authenticatedPubkeys = /* @__PURE__ */ new Set();
+            if (sessionData.authenticatedPubkeys) {
+              const pubkeys = sessionData.authenticatedPubkeys;
+              authenticatedPubkeys = new Set(pubkeys.slice(0, 100));
+            }
             this.sessions.set(sessionId, {
               subscriptions: sanitizedSubscriptions,
               registeredShards: new Set(sessionData.registeredShards),
               pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
               reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
-              authenticatedPubkeys: new Set(sessionData.authenticatedPubkeys),
+              authenticatedPubkeys,
               challenge: sessionData.challenge,
               host: sessionData.host || ""
             });
           }
         }
       } catch (err) {
+        console.error("Failed to load sessions from storage, clearing all storage:", err);
+        try {
+          await this.state.storage.deleteAll();
+        } catch (deleteErr) {
+          console.error("Failed to clear storage:", deleteErr);
+        }
         console.error("Failed to load sessions from storage, clearing:", err);
         await this.state.storage.delete("sessions");
         this.sessions.clear();
@@ -6848,19 +6859,34 @@ var _ConnectionDO = class _ConnectionDO {
     });
   }
   async persistSessions() {
+    const activeSessionIds = /* @__PURE__ */ new Set();
+    for (const ws of this.state.getWebSockets()) {
+      const attachment = ws.deserializeAttachment();
+      if (attachment?.sessionId) {
+        activeSessionIds.add(attachment.sessionId);
+      }
+    }
     const sessionsData = [];
     for (const [sessionId, session] of this.sessions) {
+      if (!activeSessionIds.has(sessionId)) {
+        continue;
+      }
       const sanitizedSubscriptions = [];
       for (const [subId, filters] of session.subscriptions) {
+        if (sanitizedSubscriptions.length >= 50)
+          break;
         sanitizedSubscriptions.push([subId, this.sanitizeFilters(filters)]);
       }
+      const limitedAuthPubkeys = Array.from(session.authenticatedPubkeys).slice(0, 100);
       sessionsData.push([sessionId, {
         subscriptions: sanitizedSubscriptions,
-        registeredShards: Array.from(session.registeredShards),
-        authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
+        registeredShards: Array.from(session.registeredShards).slice(0, 100),
+        authenticatedPubkeys: limitedAuthPubkeys,
         challenge: session.challenge,
         host: session.host
       }]);
+      if (sessionsData.length >= 500)
+        break;
     }
     await this.state.storage.put("sessions", sessionsData);
   }
