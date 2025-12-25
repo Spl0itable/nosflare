@@ -170,8 +170,8 @@ These settings control how the relay distributes work across Durable Objects. Lo
 
 **Tuning Guidelines:**
 
-- **Low traffic relay**: Set `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2, `PAYMENT_DO_SHARDING_ENABLED` to false
-- **High traffic relay**: Use defaults (50, 7, 4, true) for maximum parallelism
+- **Low traffic relay**: Set `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2
+- **High traffic relay**: Use defaults (50, 7, 4) for maximum parallelism
 - **Cost optimization**: Reducing these values significantly decreases Durable Object requests
 
 **Note:** All REQ subscriptions must include a `kinds` filter. Subscriptions without kinds are rejected to prevent broadcast fan-out to all shards.
