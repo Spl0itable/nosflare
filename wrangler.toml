@@ -2764,6 +2764,14 @@ tag = "v13-create-sqlite-dos"
 new_sqlite_classes = ["ConnectionDO", "SessionManagerDO"]
 
 [[migrations]]
+tag = "v14-remove-broadcast-shard-do"
+deleted_classes = ["BroadcastShardDO"]
+
+[[migrations]]
+tag = "v15-remove-session-manager-do"
+deleted_classes = ["SessionManagerDO"]
+
+[[migrations]]
 tag = "v16-restore-session-manager-do"
 new_classes = ["SessionManagerDO"]
 
