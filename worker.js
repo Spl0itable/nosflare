@@ -2301,7 +2301,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.8.23",
+      version: "8.8.22",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -6230,13 +6230,9 @@ async function indexEventsInCFNDB(env, events) {
         timestamp: Date.now()
       });
     });
-    try {
-      await Promise.all(archivePromises);
-      if (DEBUG2)
-        console.log(`Queued ${persistentEvents.length} events for R2 archival`);
-    } catch (err) {
-      console.error(`Failed to queue ${persistentEvents.length} events for R2 archival:`, err);
-    }
+    Promise.all(archivePromises).catch(
+      (err) => console.error(`Failed to queue ${persistentEvents.length} events for R2 archival:`, err)
+    );
   }
   if (DEBUG2)
     console.log(`Batch: ${persistentEvents.length} events indexed across ${eventsByShardId.size} time shards (R2 archival queued)`);
@@ -6810,10 +6806,8 @@ var _ConnectionDO = class _ConnectionDO {
     server.serializeAttachment(attachment);
     this.state.acceptWebSocket(server);
     await this.state.storage.put("sessionId", this.sessionId);
-    if (AUTH_REQUIRED) {
-      this.challenge = crypto.randomUUID();
-      this.sendAuth(server, this.challenge);
-    }
+    this.challenge = crypto.randomUUID();
+    this.sendAuth(server, this.challenge);
     if (DEBUG3)
       console.log(`ConnectionDO: New session ${this.sessionId}`);
     return new Response(null, {

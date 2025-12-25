@@ -1,8 +1,3 @@
-## v8.8.23 - 2025-12-03
-
-Hotfix: NIP-42 still sending challenge code despite being disabled
-Hotfix: events not properly sent to R2 bucket queue
-
 ## v8.8.22 - 2025-12-02
 
 Hotfix: removed deprecated code
