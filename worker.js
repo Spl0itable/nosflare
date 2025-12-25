@@ -2288,7 +2288,7 @@ function validateGroupEvent(event) {
   }
   return { valid: true };
 }
-var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, CONNECTION_DO_SHARDING_ENABLED, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
+var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, CONNECTION_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -2388,11 +2388,11 @@ var init_config = __esm({
       // "p", "e", "t"
       // ... tags that are explicitly allowed
     ]);
-    CONNECTION_DO_SHARDING_ENABLED = true;
     SESSION_MANAGER_SHARD_COUNT = 50;
     MAX_TIME_WINDOWS_PER_QUERY = 7;
     READ_REPLICAS_PER_SHARD = 4;
     PAYMENT_DO_SHARDING_ENABLED = true;
+    CONNECTION_DO_SHARDING_ENABLED = true;
     PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
     REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
     excludedRateLimitKinds = /* @__PURE__ */ new Set([
