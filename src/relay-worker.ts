@@ -19,6 +19,7 @@ const {
   blockedNip05Domains,
   allowedNip05Domains,
   MAX_TIME_WINDOWS_PER_QUERY,
+  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS,
 } = config;
 
 const GLOBAL_MAX_EVENTS = 1000;
@@ -515,7 +516,12 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env, s
       let until = filter.until || now;
 
       if (!since) {
-        const defaultDays = MAX_TIME_WINDOWS_PER_QUERY;
+        const hasKinds = filter.kinds && filter.kinds.length > 0;
+        const hasAuthors = filter.authors && filter.authors.length > 0;
+        const hasTags = Object.keys(filter).some(k => k.startsWith('#'));
+        const isUnfiltered = !hasKinds && !hasAuthors && !hasTags;
+
+        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS : MAX_TIME_WINDOWS_PER_QUERY;
         since = now - (defaultDays * 24 * 60 * 60);
       }
 

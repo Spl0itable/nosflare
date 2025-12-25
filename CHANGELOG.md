@@ -1,7 +1,3 @@
-## v8.8.22 - 2025-12-02
-
-Hotfix: removed deprecated code
-
 ## v8.8.21 - 2025-12-02
 
 New: automatic self-healing read replica DOs when horizontal scaling increased
