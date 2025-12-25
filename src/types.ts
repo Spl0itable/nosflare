@@ -47,6 +47,7 @@ export interface RelayInfo {
 
 export interface QueryResult {
   events: NostrEvent[];
+  bookmark: string | null;
 }
 
 export interface EventToIndex {

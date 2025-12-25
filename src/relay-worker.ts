@@ -19,7 +19,6 @@ const {
   blockedNip05Domains,
   allowedNip05Domains,
   MAX_TIME_WINDOWS_PER_QUERY,
-  CONNECTION_DO_SHARDING_ENABLED,
 } = config;
 
 const GLOBAL_MAX_EVENTS = 1000;
@@ -182,7 +181,7 @@ function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null>
 async function fetchKind0EventForPubkey(pubkey: string, env: Env): Promise<NostrEvent | null> {
   try {
     const filters = [{ kinds: [0], authors: [pubkey], limit: 1 }];
-    const result = await queryEvents(filters, env);
+    const result = await queryEvents(filters, 'first-unconstrained', env);
 
     if (result.events && result.events.length > 0) {
       return result.events[0];
@@ -481,7 +480,7 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
   };
 }
 
-async function queryEvents(filters: NostrFilter[], env: Env, subscriptionId?: string): Promise<QueryResult> {
+async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env, subscriptionId?: string): Promise<QueryResult> {
   const normalizedFilters = JSON.stringify(filters.map(f => ({
     ...f,
     since: f.since ? Math.floor(f.since / 60) * 60 : undefined,
@@ -531,7 +530,7 @@ async function queryEvents(filters: NostrFilter[], env: Env, subscriptionId?: st
 
     if (processedFilters.length === 0) {
       console.warn('All filters were too complex, returning empty result');
-      return { events: [] };
+      return { events: [], bookmark: null };
     }
 
     const allEventIds: string[] = [];
@@ -576,7 +575,7 @@ async function queryEvents(filters: NostrFilter[], env: Env, subscriptionId?: st
     const finalLimit = Math.min(requestedLimit, GLOBAL_MAX_EVENTS);
     const limitedEvents = events.slice(0, finalLimit);
 
-    const result: QueryResult = { events: limitedEvents };
+    const result: QueryResult = { events: limitedEvents, bookmark: null };
 
     try {
       const cache = caches.default;
@@ -594,7 +593,7 @@ async function queryEvents(filters: NostrFilter[], env: Env, subscriptionId?: st
 
   } catch (error: any) {
     console.error(`[ShardedCFNDB] Query error: ${error.message}`);
-    return { events: [] };
+    return { events: [], bookmark: null };
   }
 }
 
@@ -640,9 +639,7 @@ export default {
 
       if (url.pathname === "/") {
         if (request.headers.get("Upgrade") === "websocket") {
-          const doId = CONNECTION_DO_SHARDING_ENABLED
-            ? env.CONNECTION_DO.newUniqueId()
-            : env.CONNECTION_DO.idFromName('connection-main');
+          const doId = env.CONNECTION_DO.newUniqueId();
           const stub = env.CONNECTION_DO.get(doId);
           return stub.fetch(request);
         } else if (request.headers.get("Accept") === "application/nostr+json") {
@@ -804,7 +801,7 @@ function serveLandingPage(): Response {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="A serverless Nostr relay powered by Cloudflare Workers and Durable Objects" />
+    <meta name="description" content="A serverless Nostr relay through Cloudflare Worker and D1 database" />
     <title>Nosflare - Nostr Relay</title>
     <style>
         * {

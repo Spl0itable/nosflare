@@ -1,9 +1,3 @@
-## v8.9.23 - 2025-12-06
-
-Hotfix: removed legacy D1 code
-New: added option to disable ConnectionDO sharding
-New: added explanation of sharding in readme
-
 ## v8.8.23 - 2025-12-03
 
 Hotfix: NIP-42 still sending challenge code despite being disabled
