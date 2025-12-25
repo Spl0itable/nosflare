@@ -37,9 +37,9 @@ dead_letter_queue = "event-dlq"
 [limits]
 cpu_ms = 300000
 
-# Enable logs (on by default, but can disable)
+# Enable logs (off by default, but can enable)
 [observability.logs]
-enabled = true
+enabled = false
 
 # Durable Object migration with SQLite storage backend
 [[migrations]]
