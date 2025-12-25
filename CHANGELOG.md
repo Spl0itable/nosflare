@@ -1,7 +1,3 @@
-## v8.7.18 - 2025-12-02
-
-Hotfix: bug with read replicas not retrying failed event saves
-
 ## v8.7.17 - 2025-12-02
 
 Hotfix: require at least one kind filter in any REQ

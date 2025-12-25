@@ -164,8 +164,8 @@ These settings control how the relay distributes work across Durable Objects. Lo
 | Setting | Location | Default | Description |
 |---------|----------|---------|-------------|
 | `SESSION_MANAGER_SHARD_COUNT` | `src/config.ts` | 50 | Number of SessionManagerDO shards. Events are assigned using `kind % count`. Range: 1-50. |
-| `MAX_TIME_WINDOWS_PER_QUERY` | `src/config.ts` | 7 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
-| `READ_REPLICAS_PER_SHARD` | `src/config.ts` | 4 | Number of EventShardDO replicas per time shard. Each event write goes to all replicas. |
+| `MAX_TIME_WINDOWS_PER_QUERY` | `src/shard-router.ts` | 7 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
+| `READ_REPLICAS_PER_SHARD` | `src/shard-router.ts` | 4 | Number of EventShardDO replicas per time shard. Each event write goes to all replicas. |
 
 **Tuning Guidelines:**
 

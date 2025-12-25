@@ -10,17 +10,19 @@ import type {
   ShardQueryResponse,
   ShardInsertResponse
 } from './types';
-import { MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD } from './config';
 
 export const SHARD_WINDOW_SECONDS = 24 * 60 * 60;
 
 export const SUB_SHARDS_PER_TIME_WINDOW = 1;
+
+export const READ_REPLICAS_PER_SHARD = 4;
 
 const REPLICA_FETCH_TIMEOUT = 30000;
 const MAX_RETRY_ATTEMPTS = 3;
 const INITIAL_RETRY_DELAY = 1000;
 
 export const MAX_QUERY_SHARDS = 900;
+export const MAX_TIME_WINDOWS_PER_QUERY = 7;
 
 export function getTimeShardId(timestamp: number): string {
   const timeWindow = Math.floor(timestamp / SHARD_WINDOW_SECONDS);

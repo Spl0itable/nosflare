@@ -2194,11 +2194,8 @@ __export(config_exports, {
   AUTH_REQUIRED: () => AUTH_REQUIRED,
   CREATED_AT_LOWER_LIMIT: () => CREATED_AT_LOWER_LIMIT,
   CREATED_AT_UPPER_LIMIT: () => CREATED_AT_UPPER_LIMIT,
-  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: () => DEFAULT_UNFILTERED_TIME_WINDOW_DAYS,
-  MAX_TIME_WINDOWS_PER_QUERY: () => MAX_TIME_WINDOWS_PER_QUERY,
   PAY_TO_RELAY_ENABLED: () => PAY_TO_RELAY_ENABLED,
   PUBKEY_RATE_LIMIT: () => PUBKEY_RATE_LIMIT,
-  READ_REPLICAS_PER_SHARD: () => READ_REPLICAS_PER_SHARD,
   RELAY_ACCESS_PRICE_SATS: () => RELAY_ACCESS_PRICE_SATS,
   REQ_RATE_LIMIT: () => REQ_RATE_LIMIT,
   SESSION_MANAGER_SHARD_COUNT: () => SESSION_MANAGER_SHARD_COUNT,
@@ -2287,7 +2284,7 @@ function validateGroupEvent(event) {
   }
   return { valid: true };
 }
-var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, DEFAULT_UNFILTERED_TIME_WINDOW_DAYS, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
+var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -2301,7 +2298,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.7.18",
+      version: "8.7.17",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2388,9 +2385,6 @@ var init_config = __esm({
       // ... tags that are explicitly allowed
     ]);
     SESSION_MANAGER_SHARD_COUNT = 50;
-    MAX_TIME_WINDOWS_PER_QUERY = 7;
-    READ_REPLICAS_PER_SHARD = 4;
-    DEFAULT_UNFILTERED_TIME_WINDOW_DAYS = 3;
     PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
     REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
     excludedRateLimitKinds = /* @__PURE__ */ new Set([
@@ -2482,6 +2476,8 @@ var init_payment_router = __esm({
 var shard_router_exports = {};
 __export(shard_router_exports, {
   MAX_QUERY_SHARDS: () => MAX_QUERY_SHARDS,
+  MAX_TIME_WINDOWS_PER_QUERY: () => MAX_TIME_WINDOWS_PER_QUERY,
+  READ_REPLICAS_PER_SHARD: () => READ_REPLICAS_PER_SHARD,
   SHARD_WINDOW_SECONDS: () => SHARD_WINDOW_SECONDS,
   SUB_SHARDS_PER_TIME_WINDOW: () => SUB_SHARDS_PER_TIME_WINDOW,
   getAllReplicaShardIds: () => getAllReplicaShardIds,
@@ -2796,18 +2792,19 @@ async function insertEventsIntoShard(env, events) {
     return false;
   }
 }
-var SHARD_WINDOW_SECONDS, SUB_SHARDS_PER_TIME_WINDOW, REPLICA_FETCH_TIMEOUT, MAX_RETRY_ATTEMPTS, INITIAL_RETRY_DELAY, MAX_QUERY_SHARDS;
+var SHARD_WINDOW_SECONDS, SUB_SHARDS_PER_TIME_WINDOW, READ_REPLICAS_PER_SHARD, REPLICA_FETCH_TIMEOUT, MAX_RETRY_ATTEMPTS, INITIAL_RETRY_DELAY, MAX_QUERY_SHARDS, MAX_TIME_WINDOWS_PER_QUERY;
 var init_shard_router = __esm({
   "src/shard-router.ts"() {
     "use strict";
     init_msgpackr();
-    init_config();
     SHARD_WINDOW_SECONDS = 24 * 60 * 60;
     SUB_SHARDS_PER_TIME_WINDOW = 1;
+    READ_REPLICAS_PER_SHARD = 4;
     REPLICA_FETCH_TIMEOUT = 3e4;
     MAX_RETRY_ATTEMPTS = 3;
     INITIAL_RETRY_DELAY = 1e3;
     MAX_QUERY_SHARDS = 900;
+    MAX_TIME_WINDOWS_PER_QUERY = 7;
     __name(getTimeShardId, "getTimeShardId");
     __name(getShardId, "getShardId");
     __name(getAllSubShardsForTimeWindow, "getAllSubShardsForTimeWindow");
@@ -5582,11 +5579,12 @@ var {
   nip05Users: nip05Users2,
   checkValidNip05: checkValidNip052,
   blockedNip05Domains: blockedNip05Domains2,
-  allowedNip05Domains: allowedNip05Domains2,
-  MAX_TIME_WINDOWS_PER_QUERY: MAX_TIME_WINDOWS_PER_QUERY2,
-  DEFAULT_UNFILTERED_TIME_WINDOW_DAYS: DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2
+  allowedNip05Domains: allowedNip05Domains2
 } = config_exports;
 var GLOBAL_MAX_EVENTS = 1e3;
+var DEFAULT_TIME_WINDOW_DAYS = 7;
+var DEFAULT_UNFILTERED_TIME_WINDOW_DAYS = 3;
+var MAX_TIME_RANGE_DAYS = 7;
 var MAX_QUERY_COMPLEXITY = 1e3;
 function hashCode(str) {
   let hash = 0;
@@ -6004,7 +6002,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
         console.warn(`Query too complex (complexity: ${complexity}), skipping filter`);
         return null;
       }
-      const maxTimeRangeSeconds = MAX_TIME_WINDOWS_PER_QUERY2 * 24 * 60 * 60;
+      const maxTimeRangeSeconds = MAX_TIME_RANGE_DAYS * 24 * 60 * 60;
       const now = Math.floor(Date.now() / 1e3);
       let since = filter.since;
       let until = filter.until || now;
@@ -6013,7 +6011,7 @@ async function queryEvents(filters, bookmark, env, subscriptionId) {
         const hasAuthors = filter.authors && filter.authors.length > 0;
         const hasTags = Object.keys(filter).some((k) => k.startsWith("#"));
         const isUnfiltered = !hasKinds && !hasAuthors && !hasTags;
-        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS2 : MAX_TIME_WINDOWS_PER_QUERY2;
+        const defaultDays = isUnfiltered ? DEFAULT_UNFILTERED_TIME_WINDOW_DAYS : DEFAULT_TIME_WINDOW_DAYS;
         since = now - defaultDays * 24 * 60 * 60;
       }
       const requestedRange = until - since;
