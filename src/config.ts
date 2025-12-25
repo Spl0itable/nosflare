@@ -23,7 +23,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.7.17",
+  version: "8.7.16",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -141,14 +141,6 @@ export const allowedTags = new Set<string>([
   // "p", "e", "t"
   // ... tags that are explicitly allowed
 ]);
-
-// Session Manager sharding
-// Controls how event kinds are distributed across SessionManager shards for subscription matching.
-// Events are assigned to shards using: kind % SESSION_MANAGER_SHARD_COUNT
-// Lower values = fewer shards = less horizontal scaling but fewer DO requests
-// Higher values = more shards = more horizontal scaling but more DO requests
-// Recommended: 1 (all kinds in one shard) to 50 (maximum distribution)
-export const SESSION_MANAGER_SHARD_COUNT = 50;
 
 // Rate limit thresholds
 export const PUBKEY_RATE_LIMIT = { rate: 10 / 60000, capacity: 10 }; // 10 EVENT messages per min

@@ -2188,220 +2188,6 @@ var init_msgpackr = __esm({
   }
 });
 
-// src/config.ts
-var config_exports = {};
-__export(config_exports, {
-  AUTH_REQUIRED: () => AUTH_REQUIRED,
-  CREATED_AT_LOWER_LIMIT: () => CREATED_AT_LOWER_LIMIT,
-  CREATED_AT_UPPER_LIMIT: () => CREATED_AT_UPPER_LIMIT,
-  PAY_TO_RELAY_ENABLED: () => PAY_TO_RELAY_ENABLED,
-  PUBKEY_RATE_LIMIT: () => PUBKEY_RATE_LIMIT,
-  RELAY_ACCESS_PRICE_SATS: () => RELAY_ACCESS_PRICE_SATS,
-  REQ_RATE_LIMIT: () => REQ_RATE_LIMIT,
-  SESSION_MANAGER_SHARD_COUNT: () => SESSION_MANAGER_SHARD_COUNT,
-  allowedEventKinds: () => allowedEventKinds,
-  allowedNip05Domains: () => allowedNip05Domains,
-  allowedPubkeys: () => allowedPubkeys,
-  allowedTags: () => allowedTags,
-  blockedContent: () => blockedContent,
-  blockedEventKinds: () => blockedEventKinds,
-  blockedNip05Domains: () => blockedNip05Domains,
-  blockedPubkeys: () => blockedPubkeys,
-  blockedTags: () => blockedTags,
-  checkValidNip05: () => checkValidNip05,
-  containsBlockedContent: () => containsBlockedContent,
-  excludedRateLimitKinds: () => excludedRateLimitKinds,
-  isEventKindAllowed: () => isEventKindAllowed,
-  isPubkeyAllowed: () => isPubkeyAllowed,
-  isTagAllowed: () => isTagAllowed,
-  nip05Users: () => nip05Users,
-  relayInfo: () => relayInfo,
-  relayNpub: () => relayNpub,
-  validateGroupEvent: () => validateGroupEvent
-});
-function isPubkeyAllowed(pubkey) {
-  if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
-    return false;
-  }
-  return !blockedPubkeys.has(pubkey);
-}
-function isEventKindAllowed(kind) {
-  if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
-    return false;
-  }
-  return !blockedEventKinds.has(kind);
-}
-function containsBlockedContent(event) {
-  const lowercaseContent = (event.content || "").toLowerCase();
-  const lowercaseTags = event.tags.map((tag) => tag.join("").toLowerCase());
-  for (const blocked of blockedContent) {
-    const blockedLower = blocked.toLowerCase();
-    if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
-      return true;
-    }
-  }
-  return false;
-}
-function isTagAllowed(tag) {
-  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
-    return false;
-  }
-  return !blockedTags.has(tag);
-}
-function validateGroupEvent(event) {
-  const kind = event.kind;
-  const isGroupModerationKind = kind >= 9e3 && kind <= 9020;
-  const isGroupUserActionKind = kind === 9021 || kind === 9022;
-  const isGroupMetadataKind = kind >= 39e3 && kind <= 39003;
-  if (isGroupModerationKind || isGroupUserActionKind || isGroupMetadataKind) {
-    const hasHTag = event.tags.some((tag) => tag[0] === "h" && tag.length >= 2 && tag[1]);
-    if (!hasHTag) {
-      return {
-        valid: false,
-        reason: `NIP-29: kind ${kind} requires an 'h' tag with group ID`
-      };
-    }
-    if (isGroupMetadataKind) {
-      const hasDTag = event.tags.some((tag) => tag[0] === "d" && tag.length >= 2);
-      if (!hasDTag) {
-        return {
-          valid: false,
-          reason: `NIP-29: kind ${kind} requires a 'd' tag for addressable events`
-        };
-      }
-    }
-    const hTag = event.tags.find((tag) => tag[0] === "h");
-    if (hTag && hTag[1]) {
-      const groupId = hTag[1];
-      const groupIdPattern = /^[a-z0-9._'-]+$/i;
-      if (!groupIdPattern.test(groupId)) {
-        return {
-          valid: false,
-          reason: `NIP-29: invalid group ID format '${groupId}' (must contain only a-z0-9-_.')`
-        };
-      }
-    }
-  }
-  return { valid: true };
-}
-var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, SESSION_MANAGER_SHARD_COUNT, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
-var init_config = __esm({
-  "src/config.ts"() {
-    "use strict";
-    relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
-    PAY_TO_RELAY_ENABLED = true;
-    RELAY_ACCESS_PRICE_SATS = 212121;
-    relayInfo = {
-      name: "Nosflare",
-      description: "A serverless Nostr relay using Cloudflare Workers and Durable Objects",
-      pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
-      contact: "lux@fed.wtf",
-      supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
-      software: "https://github.com/Spl0itable/nosflare",
-      version: "8.7.17",
-      icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
-      // Optional fields (uncomment as needed):
-      // banner: "https://example.com/banner.jpg",
-      // privacy_policy: "https://example.com/privacy-policy.html",
-      // terms_of_service: "https://example.com/terms.html",
-      // Relay limitations
-      limitation: {
-        // max_message_length: 524288, // 512KB
-        // max_subscriptions: 300,
-        // max_limit: 10000,
-        // max_subid_length: 256,
-        // max_event_tags: 2000,
-        // max_content_length: 70000,
-        // min_pow_difficulty: 0,
-        auth_required: false,
-        // Set to true to enable NIP-42 authentication
-        payment_required: PAY_TO_RELAY_ENABLED,
-        restricted_writes: PAY_TO_RELAY_ENABLED,
-        created_at_lower_limit: 946684800,
-        // January 1, 2000
-        created_at_upper_limit: 2147483647
-        // Max unix timestamp (year 2038)
-        // default_limit: 10000
-      }
-      // Event retention policies (uncomment and configure as needed):
-      // retention: [
-      //   { kinds: [0, 1, [5, 7], [40, 49]], time: 3600 },
-      //   { kinds: [[40000, 49999]], time: 100 },
-      //   { kinds: [[30000, 39999]], count: 1000 },
-      //   { time: 3600, count: 10000 }
-      // ],
-      // Content limitations by country (uncomment as needed):
-      // relay_countries: ["*"], // Use ["US", "CA", "EU"] for specific countries, ["*"] for global
-      // Community preferences (uncomment as needed):
-      // language_tags: ["en", "en-419"], // IETF language tags, use ["*"] for all languages
-      // tags: ["sfw-only", "bitcoin-only", "anime"], // Community/content tags
-      // posting_policy: "https://example.com/posting-policy.html",
-      // Payment configuration (added dynamically in handleRelayInfoRequest if PAY_TO_RELAY_ENABLED):
-      // payments_url: "https://my-relay/payments",
-      // fees: {
-      //   admission: [{ amount: 1000000, unit: "msats" }],
-      //   subscription: [{ amount: 5000000, unit: "msats", period: 2592000 }],
-      //   publication: [{ kinds: [4], amount: 100, unit: "msats" }],
-      // }
-    };
-    nip05Users = {
-      "Luxas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
-      // ... more NIP-05 verified users
-    };
-    blockedPubkeys = /* @__PURE__ */ new Set([
-      "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
-      "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
-      "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18",
-      "05aee96dd41429a3ae97a9dac4dfc6867fdfacebca3f3bdc051e5004b0751f01",
-      "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362"
-    ]);
-    allowedPubkeys = /* @__PURE__ */ new Set([
-      // ... pubkeys that are explicitly allowed
-    ]);
-    blockedEventKinds = /* @__PURE__ */ new Set([
-      1064
-    ]);
-    allowedEventKinds = /* @__PURE__ */ new Set([
-      // ... kinds that are explicitly allowed
-    ]);
-    blockedContent = /* @__PURE__ */ new Set([
-      "~~ hello world! ~~"
-      // ... more blocked content
-    ]);
-    checkValidNip05 = false;
-    blockedNip05Domains = /* @__PURE__ */ new Set([
-      // Add domains that are explicitly blocked
-      // "primal.net"
-    ]);
-    allowedNip05Domains = /* @__PURE__ */ new Set([
-      // Add domains that are explicitly allowed
-      // Leave empty to allow all domains (unless blocked)
-    ]);
-    blockedTags = /* @__PURE__ */ new Set([
-      // ... tags that are explicitly blocked
-    ]);
-    allowedTags = /* @__PURE__ */ new Set([
-      // "p", "e", "t"
-      // ... tags that are explicitly allowed
-    ]);
-    SESSION_MANAGER_SHARD_COUNT = 50;
-    PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
-    REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
-    excludedRateLimitKinds = /* @__PURE__ */ new Set([
-      1059
-      // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
-    ]);
-    CREATED_AT_LOWER_LIMIT = relayInfo.limitation?.created_at_lower_limit ?? 0;
-    CREATED_AT_UPPER_LIMIT = relayInfo.limitation?.created_at_upper_limit ?? 2147483647;
-    AUTH_REQUIRED = relayInfo.limitation?.auth_required ?? false;
-    __name(isPubkeyAllowed, "isPubkeyAllowed");
-    __name(isEventKindAllowed, "isEventKindAllowed");
-    __name(containsBlockedContent, "containsBlockedContent");
-    __name(isTagAllowed, "isTagAllowed");
-    __name(validateGroupEvent, "validateGroupEvent");
-  }
-});
-
 // src/payment-router.ts
 var payment_router_exports = {};
 __export(payment_router_exports, {
@@ -2829,13 +2615,13 @@ var broadcast_consumer_exports = {};
 __export(broadcast_consumer_exports, {
   default: () => broadcast_consumer_default
 });
-var DEBUG, broadcast_consumer_default;
+var DEBUG, TOTAL_SESSION_MANAGER_SHARDS, broadcast_consumer_default;
 var init_broadcast_consumer = __esm({
   "src/broadcast-consumer.ts"() {
     "use strict";
     init_msgpackr();
-    init_config();
     DEBUG = false;
+    TOTAL_SESSION_MANAGER_SHARDS = 50;
     broadcast_consumer_default = {
       async queue(batch, env) {
         if (DEBUG)
@@ -2857,12 +2643,19 @@ var init_broadcast_consumer = __esm({
           if (DEBUG)
             console.log(`BroadcastConsumer: ${events.length} unique events after deduplication`);
           const shardToEvents = /* @__PURE__ */ new Map();
+          const GLOBAL_SHARD = 49;
           for (const event of events) {
-            const shardNum = event.kind % SESSION_MANAGER_SHARD_COUNT;
+            const shardNum = event.kind % TOTAL_SESSION_MANAGER_SHARDS;
             if (!shardToEvents.has(shardNum)) {
               shardToEvents.set(shardNum, []);
             }
             shardToEvents.get(shardNum).push(event);
+            if (shardNum !== GLOBAL_SHARD) {
+              if (!shardToEvents.has(GLOBAL_SHARD)) {
+                shardToEvents.set(GLOBAL_SHARD, []);
+              }
+              shardToEvents.get(GLOBAL_SHARD).push(event);
+            }
           }
           if (DEBUG)
             console.log(`BroadcastConsumer: Distributing to ${shardToEvents.size} shards`);
@@ -3008,7 +2801,212 @@ var RateLimiter = _RateLimiter;
 
 // src/connection-do.ts
 init_msgpackr();
-init_config();
+
+// src/config.ts
+var config_exports = {};
+__export(config_exports, {
+  AUTH_REQUIRED: () => AUTH_REQUIRED,
+  CREATED_AT_LOWER_LIMIT: () => CREATED_AT_LOWER_LIMIT,
+  CREATED_AT_UPPER_LIMIT: () => CREATED_AT_UPPER_LIMIT,
+  PAY_TO_RELAY_ENABLED: () => PAY_TO_RELAY_ENABLED,
+  PUBKEY_RATE_LIMIT: () => PUBKEY_RATE_LIMIT,
+  RELAY_ACCESS_PRICE_SATS: () => RELAY_ACCESS_PRICE_SATS,
+  REQ_RATE_LIMIT: () => REQ_RATE_LIMIT,
+  allowedEventKinds: () => allowedEventKinds,
+  allowedNip05Domains: () => allowedNip05Domains,
+  allowedPubkeys: () => allowedPubkeys,
+  allowedTags: () => allowedTags,
+  blockedContent: () => blockedContent,
+  blockedEventKinds: () => blockedEventKinds,
+  blockedNip05Domains: () => blockedNip05Domains,
+  blockedPubkeys: () => blockedPubkeys,
+  blockedTags: () => blockedTags,
+  checkValidNip05: () => checkValidNip05,
+  containsBlockedContent: () => containsBlockedContent,
+  excludedRateLimitKinds: () => excludedRateLimitKinds,
+  isEventKindAllowed: () => isEventKindAllowed,
+  isPubkeyAllowed: () => isPubkeyAllowed,
+  isTagAllowed: () => isTagAllowed,
+  nip05Users: () => nip05Users,
+  relayInfo: () => relayInfo,
+  relayNpub: () => relayNpub,
+  validateGroupEvent: () => validateGroupEvent
+});
+var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
+var PAY_TO_RELAY_ENABLED = true;
+var RELAY_ACCESS_PRICE_SATS = 212121;
+var relayInfo = {
+  name: "Nosflare",
+  description: "A serverless Nostr relay using Cloudflare Workers and Durable Objects",
+  pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
+  contact: "lux@fed.wtf",
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
+  software: "https://github.com/Spl0itable/nosflare",
+  version: "8.7.16",
+  icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
+  // Optional fields (uncomment as needed):
+  // banner: "https://example.com/banner.jpg",
+  // privacy_policy: "https://example.com/privacy-policy.html",
+  // terms_of_service: "https://example.com/terms.html",
+  // Relay limitations
+  limitation: {
+    // max_message_length: 524288, // 512KB
+    // max_subscriptions: 300,
+    // max_limit: 10000,
+    // max_subid_length: 256,
+    // max_event_tags: 2000,
+    // max_content_length: 70000,
+    // min_pow_difficulty: 0,
+    auth_required: false,
+    // Set to true to enable NIP-42 authentication
+    payment_required: PAY_TO_RELAY_ENABLED,
+    restricted_writes: PAY_TO_RELAY_ENABLED,
+    created_at_lower_limit: 946684800,
+    // January 1, 2000
+    created_at_upper_limit: 2147483647
+    // Max unix timestamp (year 2038)
+    // default_limit: 10000
+  }
+  // Event retention policies (uncomment and configure as needed):
+  // retention: [
+  //   { kinds: [0, 1, [5, 7], [40, 49]], time: 3600 },
+  //   { kinds: [[40000, 49999]], time: 100 },
+  //   { kinds: [[30000, 39999]], count: 1000 },
+  //   { time: 3600, count: 10000 }
+  // ],
+  // Content limitations by country (uncomment as needed):
+  // relay_countries: ["*"], // Use ["US", "CA", "EU"] for specific countries, ["*"] for global
+  // Community preferences (uncomment as needed):
+  // language_tags: ["en", "en-419"], // IETF language tags, use ["*"] for all languages
+  // tags: ["sfw-only", "bitcoin-only", "anime"], // Community/content tags
+  // posting_policy: "https://example.com/posting-policy.html",
+  // Payment configuration (added dynamically in handleRelayInfoRequest if PAY_TO_RELAY_ENABLED):
+  // payments_url: "https://my-relay/payments",
+  // fees: {
+  //   admission: [{ amount: 1000000, unit: "msats" }],
+  //   subscription: [{ amount: 5000000, unit: "msats", period: 2592000 }],
+  //   publication: [{ kinds: [4], amount: 100, unit: "msats" }],
+  // }
+};
+var nip05Users = {
+  "Luxas": "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df"
+  // ... more NIP-05 verified users
+};
+var blockedPubkeys = /* @__PURE__ */ new Set([
+  "3c7f5948b5d80900046a67d8e3bf4971d6cba013abece1dd542eca223cf3dd3f",
+  "fed5c0c3c8fe8f51629a0b39951acdf040fd40f53a327ae79ee69991176ba058",
+  "e810fafa1e89cdf80cced8e013938e87e21b699b24c8570537be92aec4b12c18",
+  "05aee96dd41429a3ae97a9dac4dfc6867fdfacebca3f3bdc051e5004b0751f01",
+  "53a756bb596055219d93e888f71d936ec6c47d960320476c955efd8941af4362"
+]);
+var allowedPubkeys = /* @__PURE__ */ new Set([
+  // ... pubkeys that are explicitly allowed
+]);
+var blockedEventKinds = /* @__PURE__ */ new Set([
+  1064
+]);
+var allowedEventKinds = /* @__PURE__ */ new Set([
+  // ... kinds that are explicitly allowed
+]);
+var blockedContent = /* @__PURE__ */ new Set([
+  "~~ hello world! ~~"
+  // ... more blocked content
+]);
+var checkValidNip05 = false;
+var blockedNip05Domains = /* @__PURE__ */ new Set([
+  // Add domains that are explicitly blocked
+  // "primal.net"
+]);
+var allowedNip05Domains = /* @__PURE__ */ new Set([
+  // Add domains that are explicitly allowed
+  // Leave empty to allow all domains (unless blocked)
+]);
+var blockedTags = /* @__PURE__ */ new Set([
+  // ... tags that are explicitly blocked
+]);
+var allowedTags = /* @__PURE__ */ new Set([
+  // "p", "e", "t"
+  // ... tags that are explicitly allowed
+]);
+var PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
+var REQ_RATE_LIMIT = { rate: 100 / 6e4, capacity: 100 };
+var excludedRateLimitKinds = /* @__PURE__ */ new Set([
+  1059
+  // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
+]);
+var CREATED_AT_LOWER_LIMIT = relayInfo.limitation?.created_at_lower_limit ?? 0;
+var CREATED_AT_UPPER_LIMIT = relayInfo.limitation?.created_at_upper_limit ?? 2147483647;
+var AUTH_REQUIRED = relayInfo.limitation?.auth_required ?? false;
+function isPubkeyAllowed(pubkey) {
+  if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
+    return false;
+  }
+  return !blockedPubkeys.has(pubkey);
+}
+__name(isPubkeyAllowed, "isPubkeyAllowed");
+function isEventKindAllowed(kind) {
+  if (allowedEventKinds.size > 0 && !allowedEventKinds.has(kind)) {
+    return false;
+  }
+  return !blockedEventKinds.has(kind);
+}
+__name(isEventKindAllowed, "isEventKindAllowed");
+function containsBlockedContent(event) {
+  const lowercaseContent = (event.content || "").toLowerCase();
+  const lowercaseTags = event.tags.map((tag) => tag.join("").toLowerCase());
+  for (const blocked of blockedContent) {
+    const blockedLower = blocked.toLowerCase();
+    if (lowercaseContent.includes(blockedLower) || lowercaseTags.some((tag) => tag.includes(blockedLower))) {
+      return true;
+    }
+  }
+  return false;
+}
+__name(containsBlockedContent, "containsBlockedContent");
+function isTagAllowed(tag) {
+  if (allowedTags.size > 0 && !allowedTags.has(tag)) {
+    return false;
+  }
+  return !blockedTags.has(tag);
+}
+__name(isTagAllowed, "isTagAllowed");
+function validateGroupEvent(event) {
+  const kind = event.kind;
+  const isGroupModerationKind = kind >= 9e3 && kind <= 9020;
+  const isGroupUserActionKind = kind === 9021 || kind === 9022;
+  const isGroupMetadataKind = kind >= 39e3 && kind <= 39003;
+  if (isGroupModerationKind || isGroupUserActionKind || isGroupMetadataKind) {
+    const hasHTag = event.tags.some((tag) => tag[0] === "h" && tag.length >= 2 && tag[1]);
+    if (!hasHTag) {
+      return {
+        valid: false,
+        reason: `NIP-29: kind ${kind} requires an 'h' tag with group ID`
+      };
+    }
+    if (isGroupMetadataKind) {
+      const hasDTag = event.tags.some((tag) => tag[0] === "d" && tag.length >= 2);
+      if (!hasDTag) {
+        return {
+          valid: false,
+          reason: `NIP-29: kind ${kind} requires a 'd' tag for addressable events`
+        };
+      }
+    }
+    const hTag = event.tags.find((tag) => tag[0] === "h");
+    if (hTag && hTag[1]) {
+      const groupId = hTag[1];
+      const groupIdPattern = /^[a-z0-9._'-]+$/i;
+      if (!groupIdPattern.test(groupId)) {
+        return {
+          valid: false,
+          reason: `NIP-29: invalid group ID format '${groupId}' (must contain only a-z0-9-_.')`
+        };
+      }
+    }
+  }
+  return { valid: true };
+}
+__name(validateGroupEvent, "validateGroupEvent");
 
 // node_modules/@noble/hashes/esm/crypto.js
 var crypto2 = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
@@ -5569,7 +5567,6 @@ var schnorr = /* @__PURE__ */ (() => {
 
 // src/relay-worker.ts
 init_msgpackr();
-init_config();
 var DEBUG2 = false;
 var {
   relayInfo: relayInfo2,
@@ -6175,13 +6172,7 @@ async function indexEventsInCFNDB(env, events) {
   for (const [shardId, shardEvents] of eventsByShardId) {
     indexPromises.push(insertEventsIntoShard2(env, shardEvents));
   }
-  const results = await Promise.all(indexPromises);
-  const failedCount = results.filter((r) => r === false).length;
-  if (failedCount > 0) {
-    throw new Error(
-      `Replica write failed for ${failedCount}/${results.length} time shards. Event IDs: ${persistentEvents.slice(0, 5).map((e) => e.id).join(", ")}${persistentEvents.length > 5 ? "..." : ""}`
-    );
-  }
+  await Promise.all(indexPromises);
   if (env.R2_ARCHIVE_QUEUE && env.NOSTR_ARCHIVE) {
     const archivePromises = persistentEvents.map((event) => {
       return env.R2_ARCHIVE_QUEUE.send({
@@ -6866,9 +6857,11 @@ var _ConnectionDO = class _ConnectionDO {
     const requiredShards = /* @__PURE__ */ new Set();
     for (const [subscriptionId, filters] of this.subscriptions) {
       for (const filter of filters) {
-        if (filter.kinds && filter.kinds.length > 0) {
+        if (!filter.kinds || filter.kinds.length === 0) {
+          requiredShards.add(49);
+        } else {
           for (const kind of filter.kinds) {
-            requiredShards.add(kind % SESSION_MANAGER_SHARD_COUNT);
+            requiredShards.add(kind % 50);
           }
         }
       }
@@ -6896,35 +6889,18 @@ var _ConnectionDO = class _ConnectionDO {
   }
   async updateSubscriptions() {
     const requiredShards = this.getRequiredShards();
-    const shardToSubscriptions = /* @__PURE__ */ new Map();
-    for (const [subscriptionId, filters] of this.subscriptions) {
-      for (const filter of filters) {
-        if (filter.kinds && filter.kinds.length > 0) {
-          for (const kind of filter.kinds) {
-            const shardNum = kind % SESSION_MANAGER_SHARD_COUNT;
-            if (!shardToSubscriptions.has(shardNum)) {
-              shardToSubscriptions.set(shardNum, []);
-            }
-            const existing = shardToSubscriptions.get(shardNum);
-            if (!existing.find(([id]) => id === subscriptionId)) {
-              existing.push([subscriptionId, filters]);
-            }
-          }
-        }
-      }
-    }
+    const subsArray = Array.from(this.subscriptions.entries());
     const updatePromises = Array.from(requiredShards).map(async (shardNum) => {
       try {
         const id = this.env.SESSION_MANAGER_DO.idFromName(`manager-${shardNum}`);
         const stub = this.env.SESSION_MANAGER_DO.get(id);
-        const relevantSubs = shardToSubscriptions.get(shardNum) || [];
         await stub.fetch("https://internal/update-subscriptions", {
           method: "POST",
           headers: { "Content-Type": "application/msgpack" },
           body: pack({
             sessionId: this.sessionId,
             connectionDoId: this.state.id.toString(),
-            subscriptions: relevantSubs
+            subscriptions: subsArray
           })
         });
         this.registeredShards.add(shardNum);
@@ -7123,7 +7099,7 @@ var _ConnectionDO = class _ConnectionDO {
       const result = await processEvent(event, this.sessionId, this.env);
       if (result.success) {
         this.sendOK(ws, event.id, true, result.message);
-        const shardNum = event.kind % SESSION_MANAGER_SHARD_COUNT;
+        const shardNum = event.kind % 50;
         this.env[`BROADCAST_QUEUE_${shardNum}`].send({
           event,
           timestamp: Date.now()
@@ -7158,10 +7134,6 @@ var _ConnectionDO = class _ConnectionDO {
     for (const filter of filters) {
       if (typeof filter !== "object" || filter === null) {
         this.sendClosed(ws, subscriptionId, "invalid: filter must be an object");
-        return;
-      }
-      if (!filter.kinds || filter.kinds.length === 0) {
-        this.sendClosed(ws, subscriptionId, "invalid: kinds filter is required");
         return;
       }
       if (filter.ids) {
@@ -7411,6 +7383,7 @@ var ConnectionDO = _ConnectionDO;
 // src/session-manager-do.ts
 init_msgpackr();
 var DEBUG4 = false;
+var MAX_GLOBAL_SESSIONS_PER_EVENT = 500;
 var MAX_BROADCAST_BATCH_SIZE = 900;
 var SESSION_TTL_MS = 30 * 60 * 1e3;
 var CLEANUP_INTERVAL_MS = 5 * 60 * 1e3;
@@ -7419,6 +7392,7 @@ var _SessionManagerDO = class _SessionManagerDO {
     this.sessions = /* @__PURE__ */ new Map();
     this.kindIndex = /* @__PURE__ */ new Map();
     this.authorIndex = /* @__PURE__ */ new Map();
+    this.globalSessions = /* @__PURE__ */ new Set();
     this.tagIndex = /* @__PURE__ */ new Map();
     this.state = state;
     this.env = env;
@@ -7479,6 +7453,8 @@ var _SessionManagerDO = class _SessionManagerDO {
             }
             this.kindIndex.get(kind).add(sessionId);
           }
+        } else {
+          this.globalSessions.add(sessionId);
         }
         if (filter.authors) {
           for (const author of filter.authors) {
@@ -7487,6 +7463,8 @@ var _SessionManagerDO = class _SessionManagerDO {
             }
             this.authorIndex.get(author).add(sessionId);
           }
+        } else if (!filter.kinds) {
+          this.globalSessions.add(sessionId);
         }
         for (const [key, values] of Object.entries(filter)) {
           if (key.startsWith("#") && Array.isArray(values)) {
@@ -7558,6 +7536,7 @@ var _SessionManagerDO = class _SessionManagerDO {
             }
           }
         }
+        this.globalSessions.delete(sessionId);
         for (const [key, values] of Object.entries(filter)) {
           if (key.startsWith("#") && Array.isArray(values)) {
             const tagName = key.substring(1);
@@ -7638,6 +7617,17 @@ var _SessionManagerDO = class _SessionManagerDO {
           if (sessionData) {
             matchingConnectionIds.add(sessionData.connectionDoId);
           }
+        }
+      }
+      let globalCount = 0;
+      for (const sessionId of this.globalSessions) {
+        if (globalCount >= MAX_GLOBAL_SESSIONS_PER_EVENT) {
+          break;
+        }
+        const sessionData = this.sessions.get(sessionId);
+        if (sessionData) {
+          matchingConnectionIds.add(sessionData.connectionDoId);
+          globalCount++;
         }
       }
       for (const tag of event.tags) {

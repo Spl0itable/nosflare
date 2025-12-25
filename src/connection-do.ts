@@ -25,8 +25,7 @@ import {
   validateGroupEvent,
   CREATED_AT_LOWER_LIMIT,
   CREATED_AT_UPPER_LIMIT,
-  AUTH_REQUIRED,
-  SESSION_MANAGER_SHARD_COUNT
+  AUTH_REQUIRED
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
@@ -281,9 +280,11 @@ export class ConnectionDO implements DurableObject {
 
     for (const [subscriptionId, filters] of this.subscriptions) {
       for (const filter of filters) {
-        if (filter.kinds && filter.kinds.length > 0) {
+        if (!filter.kinds || filter.kinds.length === 0) {
+          requiredShards.add(49);
+        } else {
           for (const kind of filter.kinds) {
-            requiredShards.add(kind % SESSION_MANAGER_SHARD_COUNT);
+            requiredShards.add(kind % 50);
           }
         }
       }
@@ -317,31 +318,12 @@ export class ConnectionDO implements DurableObject {
   private async updateSubscriptions(): Promise<void> {
     const requiredShards = this.getRequiredShards();
 
-    const shardToSubscriptions = new Map<number, Array<[string, NostrFilter[]]>>();
-
-    for (const [subscriptionId, filters] of this.subscriptions) {
-      for (const filter of filters) {
-        if (filter.kinds && filter.kinds.length > 0) {
-          for (const kind of filter.kinds) {
-            const shardNum = kind % SESSION_MANAGER_SHARD_COUNT;
-            if (!shardToSubscriptions.has(shardNum)) {
-              shardToSubscriptions.set(shardNum, []);
-            }
-            const existing = shardToSubscriptions.get(shardNum)!;
-            if (!existing.find(([id]) => id === subscriptionId)) {
-              existing.push([subscriptionId, filters]);
-            }
-          }
-        }
-      }
-    }
+    const subsArray = Array.from(this.subscriptions.entries());
 
     const updatePromises = Array.from(requiredShards).map(async (shardNum) => {
       try {
         const id = this.env.SESSION_MANAGER_DO.idFromName(`manager-${shardNum}`);
         const stub = this.env.SESSION_MANAGER_DO.get(id);
-
-        const relevantSubs = shardToSubscriptions.get(shardNum) || [];
 
         await stub.fetch('https://internal/update-subscriptions', {
           method: 'POST',
@@ -349,7 +331,7 @@ export class ConnectionDO implements DurableObject {
           body: pack({
             sessionId: this.sessionId,
             connectionDoId: this.state.id.toString(),
-            subscriptions: relevantSubs
+            subscriptions: subsArray
           })
         });
 
@@ -585,7 +567,7 @@ export class ConnectionDO implements DurableObject {
       if (result.success) {
         this.sendOK(ws, event.id, true, result.message);
 
-        const shardNum = event.kind % SESSION_MANAGER_SHARD_COUNT;
+        const shardNum = event.kind % 50;
         (this.env as any)[`BROADCAST_QUEUE_${shardNum}`].send({
           event,
           timestamp: Date.now()
@@ -627,11 +609,6 @@ export class ConnectionDO implements DurableObject {
     for (const filter of filters) {
       if (typeof filter !== 'object' || filter === null) {
         this.sendClosed(ws, subscriptionId, 'invalid: filter must be an object');
-        return;
-      }
-
-      if (!filter.kinds || filter.kinds.length === 0) {
-        this.sendClosed(ws, subscriptionId, 'invalid: kinds filter is required');
         return;
       }
 

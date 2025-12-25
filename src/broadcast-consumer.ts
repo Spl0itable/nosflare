@@ -4,9 +4,10 @@
 
 import { Env, BroadcastQueueMessage, NostrEvent } from './types';
 import { pack } from 'msgpackr';
-import { SESSION_MANAGER_SHARD_COUNT } from './config';
 
 const DEBUG = false;
+
+const TOTAL_SESSION_MANAGER_SHARDS = 50;
 
 export default {
   async queue(batch: MessageBatch<BroadcastQueueMessage>, env: Env): Promise<void> {
@@ -29,15 +30,23 @@ export default {
       }
 
       if (DEBUG) console.log(`BroadcastConsumer: ${events.length} unique events after deduplication`);
-      
+
       const shardToEvents = new Map<number, NostrEvent[]>();
+      const GLOBAL_SHARD = 49;
 
       for (const event of events) {
-        const shardNum = event.kind % SESSION_MANAGER_SHARD_COUNT;
+        const shardNum = event.kind % TOTAL_SESSION_MANAGER_SHARDS;
         if (!shardToEvents.has(shardNum)) {
           shardToEvents.set(shardNum, []);
         }
         shardToEvents.get(shardNum)!.push(event);
+
+        if (shardNum !== GLOBAL_SHARD) {
+          if (!shardToEvents.has(GLOBAL_SHARD)) {
+            shardToEvents.set(GLOBAL_SHARD, []);
+          }
+          shardToEvents.get(GLOBAL_SHARD)!.push(event);
+        }
       }
 
       if (DEBUG) console.log(`BroadcastConsumer: Distributing to ${shardToEvents.size} shards`);

@@ -1,9 +1,3 @@
-## v8.7.17 - 2025-12-02
-
-Hotfix: require at least one kind filter in any REQ
-Hotfix: only sends relevant subscriptions to each shard (instead of all subscriptions)
-Hotfix: horizontal scaling tuning added
-
 ## v8.7.16 - 2025-11-29
 
 New: completely refactored to no longer use SQL or D1 database and use only Durable Objects with Queues

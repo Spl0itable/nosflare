@@ -729,16 +729,7 @@ async function indexEventsInCFNDB(env: Env, events: NostrEvent[]): Promise<void>
     indexPromises.push(insertEventsIntoShard(env, shardEvents));
   }
 
-  const results = await Promise.all(indexPromises);
-
-  // Check if any replica writes failed - throw to trigger queue retry
-  const failedCount = results.filter(r => r === false).length;
-  if (failedCount > 0) {
-    throw new Error(
-      `Replica write failed for ${failedCount}/${results.length} time shards. ` +
-      `Event IDs: ${persistentEvents.slice(0, 5).map(e => e.id).join(', ')}${persistentEvents.length > 5 ? '...' : ''}`
-    );
-  }
+  await Promise.all(indexPromises);
 
   if (env.R2_ARCHIVE_QUEUE && env.NOSTR_ARCHIVE) {
     const archivePromises = persistentEvents.map(event => {
