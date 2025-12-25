@@ -2220,7 +2220,8 @@ __export(config_exports, {
   isTagAllowed: () => isTagAllowed,
   nip05Users: () => nip05Users,
   relayInfo: () => relayInfo,
-  relayNpub: () => relayNpub
+  relayNpub: () => relayNpub,
+  validateGroupEvent: () => validateGroupEvent
 });
 function isPubkeyAllowed(pubkey) {
   if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
@@ -2251,6 +2252,42 @@ function isTagAllowed(tag) {
   }
   return !blockedTags.has(tag);
 }
+function validateGroupEvent(event) {
+  const kind = event.kind;
+  const isGroupModerationKind = kind >= 9e3 && kind <= 9020;
+  const isGroupUserActionKind = kind === 9021 || kind === 9022;
+  const isGroupMetadataKind = kind >= 39e3 && kind <= 39003;
+  if (isGroupModerationKind || isGroupUserActionKind || isGroupMetadataKind) {
+    const hasHTag = event.tags.some((tag) => tag[0] === "h" && tag.length >= 2 && tag[1]);
+    if (!hasHTag) {
+      return {
+        valid: false,
+        reason: `NIP-29: kind ${kind} requires an 'h' tag with group ID`
+      };
+    }
+    if (isGroupMetadataKind) {
+      const hasDTag = event.tags.some((tag) => tag[0] === "d" && tag.length >= 2);
+      if (!hasDTag) {
+        return {
+          valid: false,
+          reason: `NIP-29: kind ${kind} requires a 'd' tag for addressable events`
+        };
+      }
+    }
+    const hTag = event.tags.find((tag) => tag[0] === "h");
+    if (hTag && hTag[1]) {
+      const groupId = hTag[1];
+      const groupIdPattern = /^[a-z0-9._'-]+$/i;
+      if (!groupIdPattern.test(groupId)) {
+        return {
+          valid: false,
+          reason: `NIP-29: invalid group ID format '${groupId}' (must contain only a-z0-9-_.')`
+        };
+      }
+    }
+  }
+  return { valid: true };
+}
 var relayNpub, PAY_TO_RELAY_ENABLED, RELAY_ACCESS_PRICE_SATS, relayInfo, nip05Users, blockedPubkeys, allowedPubkeys, blockedEventKinds, allowedEventKinds, blockedContent, checkValidNip05, blockedNip05Domains, allowedNip05Domains, blockedTags, allowedTags, CONNECTION_DO_SHARDING_ENABLED, SESSION_MANAGER_SHARD_COUNT, MAX_TIME_WINDOWS_PER_QUERY, READ_REPLICAS_PER_SHARD, PAYMENT_DO_SHARDING_ENABLED, PUBKEY_RATE_LIMIT, REQ_RATE_LIMIT, excludedRateLimitKinds, CREATED_AT_LOWER_LIMIT, CREATED_AT_UPPER_LIMIT, AUTH_REQUIRED;
 var init_config = __esm({
   "src/config.ts"() {
@@ -2265,7 +2302,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.9.25",
+      version: "8.9.24",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2353,7 +2390,7 @@ var init_config = __esm({
     ]);
     CONNECTION_DO_SHARDING_ENABLED = true;
     SESSION_MANAGER_SHARD_COUNT = 50;
-    MAX_TIME_WINDOWS_PER_QUERY = 30;
+    MAX_TIME_WINDOWS_PER_QUERY = 7;
     READ_REPLICAS_PER_SHARD = 4;
     PAYMENT_DO_SHARDING_ENABLED = true;
     PUBKEY_RATE_LIMIT = { rate: 10 / 6e4, capacity: 10 };
@@ -2369,6 +2406,7 @@ var init_config = __esm({
     __name(isEventKindAllowed, "isEventKindAllowed");
     __name(containsBlockedContent, "containsBlockedContent");
     __name(isTagAllowed, "isTagAllowed");
+    __name(validateGroupEvent, "validateGroupEvent");
   }
 });
 
@@ -7187,6 +7225,12 @@ var _ConnectionDO = class _ConnectionDO {
           this.sendOK(ws, event.id, false, `blocked: tag '${tag[0]}' not allowed`);
           return;
         }
+      }
+      const groupValidation = validateGroupEvent(event);
+      if (!groupValidation.valid) {
+        console.error(`Event denied. ${groupValidation.reason}`);
+        this.sendOK(ws, event.id, false, `invalid: ${groupValidation.reason}`);
+        return;
       }
       if (event.kind === 22242) {
         if (DEBUG3)

@@ -1,7 +1,3 @@
-## v8.9.25 - 2025-12-06
-
-Hotfix: removed deprecated code
-
 ## v8.9.24 - 2025-12-06
 
 Hotfix: improved event querying

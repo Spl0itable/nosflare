@@ -177,14 +177,14 @@ Sharding is a database architecture pattern that partitions data across multiple
 |---------|----------|---------|-------------|
 | `CONNECTION_DO_SHARDING_ENABLED` | `src/config.ts` | true | When true, each WebSocket connection gets its own ConnectionDO. When false, all connections share a single ConnectionDO. |
 | `SESSION_MANAGER_SHARD_COUNT` | `src/config.ts` | 50 | Number of SessionManagerDO shards. Events are assigned using `kind % count`. Range: 1-50. |
-| `MAX_TIME_WINDOWS_PER_QUERY` | `src/config.ts` | 30 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
+| `MAX_TIME_WINDOWS_PER_QUERY` | `src/config.ts` | 7 | Maximum days of EventShardDO shards queried per REQ. Each day = 1 shard query. |
 | `READ_REPLICAS_PER_SHARD` | `src/config.ts` | 4 | Number of EventShardDO replicas per time shard. Each event write goes to all replicas. |
 | `PAYMENT_DO_SHARDING_ENABLED` | `src/config.ts` | true | When true, paid pubkeys are sharded by first 4 chars of pubkey. When false, uses single PaymentDO. |
 
 **Tuning Guidelines:**
 
 - **Low traffic relay**: Set `CONNECTION_DO_SHARDING_ENABLED` to false, `SESSION_MANAGER_SHARD_COUNT` to 1-5, `MAX_TIME_WINDOWS_PER_QUERY` to 3, `READ_REPLICAS_PER_SHARD` to 2, `PAYMENT_DO_SHARDING_ENABLED` to false
-- **High traffic relay**: Use defaults (true, 50, 30, 4, true) for maximum parallelism
+- **High traffic relay**: Use defaults (true, 50, 7, 4, true) for maximum parallelism
 - **Cost optimization**: Reducing these values significantly decreases Durable Object requests
 
 **Note:** All REQ subscriptions must include a `kinds` filter. Subscriptions without kinds are rejected to prevent broadcast fan-out to all shards.
