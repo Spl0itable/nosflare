@@ -1,9 +1,5 @@
-export { ConnectionDO } from './connection-do';
-export { SessionManagerDO } from './session-manager-do';
+// Re-export the Durable Object class as a named export
+export { RelayWebSocket } from './durable-object';
 
-export { EventShardDO } from './event-shard-do';
-export { PaymentDO } from './payment-do';
-
+// Re-export the default worker handler
 export { default } from './relay-worker';
-
-export { default as broadcastConsumer } from './broadcast-consumer';

@@ -1,6 +1,10 @@
-## v8.7.16 - 2025-11-29
+## v7.7.18 - 2025-11-19
 
-New: completely refactored to no longer use SQL or D1 database and use only Durable Objects with Queues
+Hotfix: possible infinite loop in DOs alarm
+
+## v7.7.17 - 2025-11-19
+
+Hotfix: optimized tag handling
 
 ## v7.7.16 - 2025-11-18
 

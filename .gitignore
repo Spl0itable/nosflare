@@ -2,8 +2,8 @@
 node_modules/
 
 # Build output
-worker.js.map
 package-lock.json
+worker.js.map
 
 # TypeScript
 *.tsbuildinfo
