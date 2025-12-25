@@ -350,8 +350,7 @@ async function retryWithBackoff<T>(
 
 export async function insertEventsIntoShard(
   env: Env,
-  events: NostrEvent[],
-  replicaNum?: number
+  events: NostrEvent[]
 ): Promise<boolean> {
   if (events.length === 0) {
     return true;
@@ -359,10 +358,7 @@ export async function insertEventsIntoShard(
 
   try {
     const baseShardId = getEventShardId(events[0]);
-
-    const replicaShardIds = replicaNum !== undefined
-      ? [getReplicaShardId(baseShardId, replicaNum)]
-      : getAllReplicaShardIds(baseShardId);
+    const replicaShardIds = getAllReplicaShardIds(baseShardId);
 
     const insertPromises = replicaShardIds.map(async (replicaShardId) => {
       const result = await retryWithBackoff(async () => {
