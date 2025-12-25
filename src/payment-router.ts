@@ -3,7 +3,6 @@
  */
 
 import { pack, unpack } from 'msgpackr';
-import { PAYMENT_DO_SHARDING_ENABLED } from './config';
 import type {
   Env,
   PaymentRecord,
@@ -14,10 +13,6 @@ import type {
 export function getPaymentShardId(pubkey: string): string {
   if (!pubkey || pubkey.length < 4) {
     throw new Error('Invalid pubkey for payment sharding');
-  }
-
-  if (!PAYMENT_DO_SHARDING_ENABLED) {
-    return 'payment-main';
   }
 
   const prefix = pubkey.substring(0, 4).toLowerCase();

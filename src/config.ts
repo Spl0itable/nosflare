@@ -23,7 +23,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.7.19",
+  version: "8.7.18",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -142,7 +142,7 @@ export const allowedTags = new Set<string>([
   // ... tags that are explicitly allowed
 ]);
 
-// SessionManagerDO sharding
+// Session Manager sharding
 // Controls how event kinds are distributed across SessionManager shards for subscription matching.
 // Events are assigned to shards using: kind % SESSION_MANAGER_SHARD_COUNT
 // Lower values = fewer shards = less horizontal scaling but fewer DO requests
@@ -161,12 +161,6 @@ export const MAX_TIME_WINDOWS_PER_QUERY = 7;
 // Higher values = more read parallelism but more write overhead.
 // Recommended: 2 (low traffic) to 4 (high traffic)
 export const READ_REPLICAS_PER_SHARD = 4;
-
-// PaymentDO sharding
-// When true, paid pubkeys are distributed across shards based on the first 4 characters of the pubkey.
-// When false, all paid pubkeys are stored in a single PaymentDO instance.
-// Recommended: true for high traffic relays, false for smaller relays
-export const PAYMENT_DO_SHARDING_ENABLED = true;
 
 // Default time window for unfiltered queries (no kinds/authors/tags)
 // Shorter window to limit resource usage for broad queries
