@@ -2745,7 +2745,3 @@ cpu_ms = 300000
 # Enable logs (disabled by default, but can enabled)
 [observability.logs]
 enabled = false
-
-[[migrations]]
-tag = "v8"
-new_sqlite_classes = ["PaymentDO", "EventShardDO", "ConnectionDO", "SessionManagerDO"]
