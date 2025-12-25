@@ -23,7 +23,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "8.8.21",
+  version: "8.7.21",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -158,11 +158,8 @@ export const MAX_TIME_WINDOWS_PER_QUERY = 7;
 
 // EventShardDO read replicas
 // Number of replicas per time shard. Each event write goes to all replicas.
-// All replicas contain identical data for high availability and load distribution.
 // Higher values = more read parallelism but more write overhead.
-// Recommended: 2 (low traffic) to 4+ (high traffic)
-// Scaling note: When you increase this value, new replicas will automatically backfill
-// old data on-demand when first queried (lazy backfill from replica 0).
+// Recommended: 2 (low traffic) to 4 (high traffic)
 export const READ_REPLICAS_PER_SHARD = 4;
 
 // PaymentDO sharding

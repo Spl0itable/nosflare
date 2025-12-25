@@ -350,51 +350,6 @@ export class EventShardDO implements DurableObject {
     });
   }
 
-  private async triggerBackfillFromReplica0(): Promise<void> {
-    const currentId = this.state.id.toString();
-    const baseShardId = currentId.replace(/-r\d+$/, '');
-    const replica0Id = `${baseShardId}-r0`;
-
-    console.log(`Backfill: Copying data from ${replica0Id} to ${currentId}`);
-
-    try {
-      const replica0Stub = this.env.EVENT_SHARD_DO.get(this.env.EVENT_SHARD_DO.idFromName(replica0Id));
-
-      const response = await replica0Stub.fetch('https://internal/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/msgpack' },
-        body: pack({
-          kinds: undefined,
-          authors: undefined,
-          limit: 500000
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Replica 0 query failed: HTTP ${response.status}`);
-      }
-
-      const result = unpack(new Uint8Array(await response.arrayBuffer())) as any;
-
-      if (result.events && result.events.length > 0) {
-        console.log(`Backfill: Found ${result.events.length} events in ${replica0Id}, inserting...`);
-
-        for (const event of result.events) {
-          await this.queueInsert(event);
-        }
-
-        console.log(`Backfill: Successfully backfilled ${result.events.length} events to ${currentId}`);
-      } else {
-        console.log(`Backfill: Replica 0 is empty, no backfill needed`);
-      }
-
-      await this.state.storage.put('backfill_completed', true);
-    } catch (error: any) {
-      console.error(`Backfill failed for ${currentId}:`, error.message);
-      throw error;
-    }
-  }
-
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -439,21 +394,10 @@ export class EventShardDO implements DurableObject {
       throw error;
     }
 
-    const wasEmpty = this.eventCount === 0;
-
     const promises = events.map(event => this.queueInsert(event));
     const results = await Promise.all(promises);
 
     const inserted = results.filter(r => r).length;
-
-    if (wasEmpty && inserted > 0 && !await this.state.storage.get('backfill_completed')) {
-      const replicaId = this.env.DO_NAME || '';
-      if (replicaId && !replicaId.endsWith('-r0')) {
-        this.triggerBackfillFromReplica0().catch(err =>
-          console.error(`Background backfill failed for ${replicaId}:`, err.message)
-        );
-      }
-    }
 
     const response: ShardInsertResponse = {
       inserted,

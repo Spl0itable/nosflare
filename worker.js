@@ -2302,7 +2302,7 @@ var init_config = __esm({
       contact: "lux@fed.wtf",
       supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 23, 33, 40, 42, 50, 51, 58, 65, 71, 78, 89, 94],
       software: "https://github.com/Spl0itable/nosflare",
-      version: "8.8.21",
+      version: "8.7.21",
       icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
       // Optional fields (uncomment as needed):
       // banner: "https://example.com/banner.jpg",
@@ -2611,23 +2611,6 @@ function getShardsForFilter(filter) {
   }
   return getTimeRangeShards(since, until, singleAuthor);
 }
-async function triggerBackfill(env, events, targetReplicaId) {
-  try {
-    const stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(targetReplicaId));
-    const response = await stub.fetch("https://internal/insert", {
-      method: "POST",
-      headers: { "Content-Type": "application/msgpack" },
-      body: pack(events)
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const result = unpack(new Uint8Array(await response.arrayBuffer()));
-    console.log(`Backfilled ${result.inserted} events to ${targetReplicaId}`);
-  } catch (error) {
-    throw new Error(`Backfill to ${targetReplicaId} failed: ${error.message}`);
-  }
-}
 async function queryEventShard(env, shardId, filter, subscriptionId) {
   const emptyResponse = {
     eventIds: [],
@@ -2659,30 +2642,6 @@ async function queryEventShard(env, shardId, filter, subscriptionId) {
       const latency = Date.now() - startTime;
       if (latency > 5e3) {
         console.warn(`Slow query for ${replicaShardId}: ${latency}ms (returned ${result.eventIds?.length || 0} events)`);
-      }
-      if (result.eventIds.length === 0 && !replicaShardId.endsWith("-r0")) {
-        const replica0Id = getReplicaShardId(shardId, 0);
-        const replica0Stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(replica0Id));
-        try {
-          const replica0Response = await replica0Stub.fetch("https://internal/query", {
-            method: "POST",
-            headers: { "Content-Type": "application/msgpack" },
-            body: pack(shardFilter),
-            signal: controller.signal
-          });
-          if (replica0Response.ok) {
-            const replica0Result = unpack(new Uint8Array(await replica0Response.arrayBuffer()));
-            if (replica0Result.eventIds.length > 0 && replica0Result.events) {
-              console.log(`Lazy backfill: ${replicaShardId} empty, found ${replica0Result.eventIds.length} events in ${replica0Id}`);
-              triggerBackfill(env, replica0Result.events, replicaShardId).catch(
-                (err) => console.error(`Background backfill failed for ${replicaShardId}:`, err.message)
-              );
-              return replica0Result;
-            }
-          }
-        } catch (error) {
-          console.warn(`Replica 0 fallback failed for ${shardId}:`, error.message);
-        }
       }
       return result;
     } catch (error) {
@@ -2793,13 +2752,21 @@ async function retryWithBackoff(fn, context, maxAttempts = MAX_RETRY_ATTEMPTS) {
   }
   return null;
 }
-async function insertEventsIntoShard(env, events) {
+async function insertEventsIntoShard(env, events, queueIndex) {
   if (events.length === 0) {
     return true;
   }
   try {
     const baseShardId = getEventShardId(events[0]);
-    const replicaShardIds = getAllReplicaShardIds(baseShardId);
+    let replicaShardIds;
+    if (queueIndex !== void 0) {
+      replicaShardIds = [];
+      for (let i = queueIndex; i < READ_REPLICAS_PER_SHARD; i += 4) {
+        replicaShardIds.push(getReplicaShardId(baseShardId, i));
+      }
+    } else {
+      replicaShardIds = getAllReplicaShardIds(baseShardId);
+    }
     const insertPromises = replicaShardIds.map(async (replicaShardId) => {
       const result = await retryWithBackoff(async () => {
         const stub = env.EVENT_SHARD_DO.get(env.EVENT_SHARD_DO.idFromName(replicaShardId));
@@ -2866,7 +2833,6 @@ var init_shard_router = __esm({
     __name(selectReadReplica, "selectReadReplica");
     __name(getTimeRangeShards, "getTimeRangeShards");
     __name(getShardsForFilter, "getShardsForFilter");
-    __name(triggerBackfill, "triggerBackfill");
     __name(queryEventShard, "queryEventShard");
     __name(transformNostrFilterToShardFormat, "transformNostrFilterToShardFormat");
     __name(queryShards, "queryShards");
@@ -5913,12 +5879,14 @@ async function queueEvent(event, env) {
     };
     const shardNum = Math.abs(hashCode(event.id)) % 50;
     const queueStartTime = Date.now();
-    const queueReplicas = ["PRIMARY", "REPLICA_ENAM", "REPLICA_WEUR", "REPLICA_APAC"];
-    const selectedQueueIndex = Math.abs(hashCode(event.id + "queue")) % 4;
-    const selectedQueue = queueReplicas[selectedQueueIndex];
-    const queueName = `INDEXING_QUEUE_${selectedQueue}_${shardNum}`;
+    const queuePromises = [
+      env[`INDEXING_QUEUE_PRIMARY_${shardNum}`].send(eventData),
+      env[`INDEXING_QUEUE_REPLICA_ENAM_${shardNum}`].send(eventData),
+      env[`INDEXING_QUEUE_REPLICA_WEUR_${shardNum}`].send(eventData),
+      env[`INDEXING_QUEUE_REPLICA_APAC_${shardNum}`].send(eventData)
+    ];
     try {
-      await env[queueName].send(eventData);
+      await Promise.all(queuePromises);
       const queueLatency = Date.now() - queueStartTime;
       queueLatencySum += queueLatency;
       queueLatencyCount++;
@@ -6130,12 +6098,21 @@ async function processIndexingQueue(batch, env) {
     console.log(`Processing indexing queue batch: ${batch.messages.length} events`);
   const startTime = Date.now();
   const events = batch.messages.map((m) => m.body.event);
+  const queueName = batch.queue;
+  let queueIndex = 0;
+  if (queueName.includes("REPLICA_ENAM")) {
+    queueIndex = 1;
+  } else if (queueName.includes("REPLICA_WEUR")) {
+    queueIndex = 2;
+  } else if (queueName.includes("REPLICA_APAC")) {
+    queueIndex = 3;
+  }
   try {
-    await indexEventsInCFNDB(env, events);
+    await indexEventsInCFNDB(env, events, queueIndex);
     batch.messages.forEach((m) => m.ack());
     const duration = Date.now() - startTime;
     if (DEBUG2)
-      console.log(`Indexing queue batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
+      console.log(`Indexing queue ${queueIndex} batch completed: ${events.length} events indexed in ${duration}ms (batched)`);
   } catch (error) {
     console.error(`Failed to index batch:`, error.message);
     batch.messages.forEach((m) => m.retry());
@@ -6193,7 +6170,7 @@ var relay_worker_default = {
     }
   }
 };
-async function indexEventsInCFNDB(env, events) {
+async function indexEventsInCFNDB(env, events, queueIndex) {
   if (!env.EVENT_SHARD_DO) {
     throw new Error("EVENT_SHARD_DO not configured");
   }
@@ -6221,7 +6198,7 @@ async function indexEventsInCFNDB(env, events) {
   }
   const indexPromises = [];
   for (const [shardId, shardEvents] of eventsByShardId) {
-    indexPromises.push(insertEventsIntoShard2(env, shardEvents));
+    indexPromises.push(insertEventsIntoShard2(env, shardEvents, queueIndex));
   }
   const results = await Promise.all(indexPromises);
   const failedCount = results.filter((r) => r === false).length;
@@ -8038,41 +8015,6 @@ var _EventShardDO = class _EventShardDO {
       isStale: this.isStale
     });
   }
-  async triggerBackfillFromReplica0() {
-    const currentId = this.state.id.toString();
-    const baseShardId = currentId.replace(/-r\d+$/, "");
-    const replica0Id = `${baseShardId}-r0`;
-    console.log(`Backfill: Copying data from ${replica0Id} to ${currentId}`);
-    try {
-      const replica0Stub = this.env.EVENT_SHARD_DO.get(this.env.EVENT_SHARD_DO.idFromName(replica0Id));
-      const response = await replica0Stub.fetch("https://internal/query", {
-        method: "POST",
-        headers: { "Content-Type": "application/msgpack" },
-        body: pack({
-          kinds: void 0,
-          authors: void 0,
-          limit: 5e5
-        })
-      });
-      if (!response.ok) {
-        throw new Error(`Replica 0 query failed: HTTP ${response.status}`);
-      }
-      const result = unpack(new Uint8Array(await response.arrayBuffer()));
-      if (result.events && result.events.length > 0) {
-        console.log(`Backfill: Found ${result.events.length} events in ${replica0Id}, inserting...`);
-        for (const event of result.events) {
-          await this.queueInsert(event);
-        }
-        console.log(`Backfill: Successfully backfilled ${result.events.length} events to ${currentId}`);
-      } else {
-        console.log(`Backfill: Replica 0 is empty, no backfill needed`);
-      }
-      await this.state.storage.put("backfill_completed", true);
-    } catch (error) {
-      console.error(`Backfill failed for ${currentId}:`, error.message);
-      throw error;
-    }
-  }
   async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -8109,18 +8051,9 @@ var _EventShardDO = class _EventShardDO {
       }
       throw error;
     }
-    const wasEmpty = this.eventCount === 0;
     const promises = events.map((event) => this.queueInsert(event));
     const results = await Promise.all(promises);
     const inserted = results.filter((r) => r).length;
-    if (wasEmpty && inserted > 0 && !await this.state.storage.get("backfill_completed")) {
-      const replicaId = this.env.DO_NAME || "";
-      if (replicaId && !replicaId.endsWith("-r0")) {
-        this.triggerBackfillFromReplica0().catch(
-          (err) => console.error(`Background backfill failed for ${replicaId}:`, err.message)
-        );
-      }
-    }
     const response = {
       inserted,
       eventCount: this.eventCount,
