@@ -48,4 +48,4 @@ new_sqlite_classes = ["RelayWebSocket"]
 
 # Scheduled cron for event archiving
 [triggers]
-crons = ["* * * * *"]
+crons = ["0 0 * * *"]
