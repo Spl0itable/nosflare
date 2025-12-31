@@ -1087,7 +1087,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     }
 
     sql += " ORDER BY created_at DESC LIMIT ?";
-    params.push(500);
+    params.push(Math.min(filter.limit || 500, 500));
 
     return { sql, params };
   }
@@ -1145,7 +1145,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
       sql += " ORDER BY e.created_at DESC";
       sql += " LIMIT ?";
-      params.push(500);
+      params.push(Math.min(filter.limit || 500, 500));
 
       return { sql, params };
     }
@@ -1209,7 +1209,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
     sql += " ORDER BY e.created_at DESC";
     sql += " LIMIT ?";
-    params.push(500);
+    params.push(Math.min(filter.limit || 500, 500));
 
     return { sql, params };
   }
@@ -1280,7 +1280,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(500);
+  params.push(Math.min(filter.limit || 500, 500));
 
   return { sql, params };
 }
@@ -2641,7 +2641,7 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
   });
 
   // Apply the most restrictive limit from filters
-  const limit = 500;
+  const limit = Math.min(...filters.map(f => Math.min(f.limit || 500, 500)));
   const limitedEvents = sortedEvents.slice(0, limit);
 
   console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);

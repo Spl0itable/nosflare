@@ -3755,7 +3755,7 @@ function buildQuery(filter) {
       sql2 += " AND " + whereConditions.join(" AND ");
     }
     sql2 += " ORDER BY created_at DESC LIMIT ?";
-    params.push(500);
+    params.push(Math.min(filter.limit || 500, 500));
     return { sql: sql2, params };
   }
   if (tagCount > 0) {
@@ -3797,7 +3797,7 @@ function buildQuery(filter) {
       }
       sql3 += " ORDER BY e.created_at DESC";
       sql3 += " LIMIT ?";
-      params.push(500);
+      params.push(Math.min(filter.limit || 500, 500));
       return { sql: sql3, params };
     }
     const tagConditions = allTags.map((t) => {
@@ -3844,7 +3844,7 @@ function buildQuery(filter) {
     params.push(allTags.length);
     sql2 += " ORDER BY e.created_at DESC";
     sql2 += " LIMIT ?";
-    params.push(500);
+    params.push(Math.min(filter.limit || 500, 500));
     return { sql: sql2, params };
   }
   let indexHint = "";
@@ -3899,7 +3899,7 @@ function buildQuery(filter) {
   }
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(500);
+  params.push(Math.min(filter.limit || 500, 500));
   return { sql, params };
 }
 __name(buildQuery, "buildQuery");
@@ -4961,7 +4961,7 @@ async function queryEventsWithArchive(filters, bookmark, env) {
     }
     return a.id.localeCompare(b.id);
   });
-  const limit = 500;
+  const limit = Math.min(...filters.map((f) => Math.min(f.limit || 500, 500)));
   const limitedEvents = sortedEvents.slice(0, limit);
   console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
   return {
