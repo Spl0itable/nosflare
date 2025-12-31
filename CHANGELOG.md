@@ -1,3 +1,7 @@
+## v7.7.24 - 2025-12-31
+
+Hotfix: bug in query logic
+
 ## v7.7.23 - 2025-12-31
 
 Hotfix: direct ID lookup bug with R2 bucket

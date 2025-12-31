@@ -2195,8 +2195,11 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     }
 
     // If this was purely a direct ID lookup, return early
-    console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
-    return results;
+    if (!filter.since && !filter.until && !filter.authors && !filter.kinds &&
+      !Object.keys(filter).some(k => k.startsWith('#'))) {
+      console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
+      return results;
+    }
   }
 
   if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
@@ -2530,21 +2533,14 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
   // Query D1 with processed filters
   const d1Result = await queryEvents(processedFilters, bookmark, env);
 
-  // Determine if we need archive access
+  // Determine if we need archive access - ONLY based on time filters
   const needsArchive = filters.some((filter, index) => {
     // Skip filters that were modified with default bounds
     if (modifiedFilterIndices.has(index)) {
       return false;
     }
 
-    // For direct ID lookups, check if any IDs are missing from D1
-    if (filter.ids && filter.ids.length > 0) {
-      const foundIds = new Set(d1Result.events.map(e => e.id));
-      const hasMissingIds = filter.ids.some(id => !foundIds.has(id));
-      return hasMissingIds;
-    }
-
-    // Only check archive if the filter explicitly requests old data
+    // Only check archive if the filter explicitly requests old data via time filters
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
 
@@ -2558,7 +2554,7 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
 
   console.log('Query requires archive access');
 
-  // Query archive for each filter that needs it
+  // Query archive for each filter that needs it (only time-based queries)
   const archiveEvents: NostrEvent[] = [];
   for (let i = 0; i < filters.length; i++) {
     const filter = filters[i];
@@ -2568,21 +2564,7 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
       continue;
     }
 
-    // Handle direct ID lookups
-    if (filter.ids && filter.ids.length > 0) {
-      const foundIds = new Set(d1Result.events.map(e => e.id));
-      const missingIds = filter.ids.filter(id => !foundIds.has(id));
-
-      if (missingIds.length > 0) {
-        console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-        const archiveFilter = { ...filter, ids: missingIds };
-        const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-        archiveEvents.push(...archived);
-      }
-      continue;
-    }
-
-    // Handle time-based queries
+    // Handle time-based queries only
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
 

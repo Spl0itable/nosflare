@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.23",
+  version: "7.7.24",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4623,8 +4623,10 @@ async function queryArchive(filter, hotDataCutoff, r2) {
         console.log(`Archive: Error fetching event ${eventId}: ${e}`);
       }
     }
-    console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
-    return results;
+    if (!filter.since && !filter.until && !filter.authors && !filter.kinds && !Object.keys(filter).some((k) => k.startsWith("#"))) {
+      console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
+      return results;
+    }
   }
   if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
     console.log("Archive query skipped - filter.since is newer than archive cutoff");
@@ -4891,11 +4893,6 @@ async function queryEventsWithArchive(filters, bookmark, env) {
     if (modifiedFilterIndices.has(index)) {
       return false;
     }
-    if (filter.ids && filter.ids.length > 0) {
-      const foundIds = new Set(d1Result.events.map((e) => e.id));
-      const hasMissingIds = filter.ids.some((id) => !foundIds.has(id));
-      return hasMissingIds;
-    }
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
     return queryStartsBeforeCutoff || queryEndsBeforeCutoff;
@@ -4909,17 +4906,6 @@ async function queryEventsWithArchive(filters, bookmark, env) {
   for (let i = 0; i < filters.length; i++) {
     const filter = filters[i];
     if (modifiedFilterIndices.has(i)) {
-      continue;
-    }
-    if (filter.ids && filter.ids.length > 0) {
-      const foundIds = new Set(d1Result.events.map((e) => e.id));
-      const missingIds = filter.ids.filter((id) => !foundIds.has(id));
-      if (missingIds.length > 0) {
-        console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-        const archiveFilter = { ...filter, ids: missingIds };
-        const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-        archiveEvents.push(...archived);
-      }
       continue;
     }
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
@@ -5967,6 +5953,20 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
   }
+  // Check if any filter needs archive access (time filters > 90 days old)
+  needsArchiveAccess(filters) {
+    const ARCHIVE_RETENTION_DAYS2 = 90;
+    const archiveCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS2 * 24 * 60 * 60;
+    return filters.some((filter) => {
+      if (filter.since && filter.since < archiveCutoff) {
+        return true;
+      }
+      if (filter.until && filter.until < archiveCutoff) {
+        return true;
+      }
+      return false;
+    });
+  }
   // Query cache methods with deduplication
   async getCachedOrQuery(filters, bookmark) {
     const cacheKey = JSON.stringify({ filters, bookmark });
@@ -5981,7 +5981,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       cached.lastAccessed = Date.now();
       return cached.result;
     }
-    const queryPromise = queryEventsWithArchive(filters, bookmark, this.env);
+    const needsArchive = this.needsArchiveAccess(filters);
+    const queryPromise = needsArchive ? queryEventsWithArchive(filters, bookmark, this.env) : queryEvents(filters, bookmark, this.env);
+    if (needsArchive) {
+      console.log("Query requires archive access due to time filters");
+    }
     this.activeQueries.set(cacheKey, queryPromise);
     try {
       const result = await queryPromise;

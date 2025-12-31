@@ -9,7 +9,7 @@ import {
   isTagAllowed,
   excludedRateLimitKinds
 } from './config';
-import { verifyEventSignature, hasPaidForRelay, processEvent, queryEventsWithArchive } from './relay-worker';
+import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents, queryEventsWithArchive } from './relay-worker';
 
 // Session attachment data structure
 interface SessionAttachment {
@@ -249,6 +249,24 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
+  // Check if any filter needs archive access (time filters > 90 days old)
+  private needsArchiveAccess(filters: NostrFilter[]): boolean {
+    const ARCHIVE_RETENTION_DAYS = 90;
+    const archiveCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
+
+    return filters.some(filter => {
+      // Check if since filter goes back beyond archive cutoff
+      if (filter.since && filter.since < archiveCutoff) {
+        return true;
+      }
+      // Check if until filter is before archive cutoff
+      if (filter.until && filter.until < archiveCutoff) {
+        return true;
+      }
+      return false;
+    });
+  }
+
   // Query cache methods with deduplication
   private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
     // Create cache key from filters and bookmark
@@ -270,8 +288,19 @@ export class RelayWebSocket implements DurableObject {
       return cached.result;
     }
 
+    // Determine if archive access is needed based on time filters
+    const needsArchive = this.needsArchiveAccess(filters);
+
     // Execute query and track as active
-    const queryPromise = queryEventsWithArchive(filters, bookmark, this.env);
+    // Only use queryEventsWithArchive if time filters require historical data
+    const queryPromise = needsArchive
+      ? queryEventsWithArchive(filters, bookmark, this.env)
+      : queryEvents(filters, bookmark, this.env);
+
+    if (needsArchive) {
+      console.log('Query requires archive access due to time filters');
+    }
+
     this.activeQueries.set(cacheKey, queryPromise);
 
     try {
