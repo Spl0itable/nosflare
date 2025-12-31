@@ -1,3 +1,7 @@
+## v7.7.22 - 2025-12-31
+
+Hotfix: reduce unnecessary calls to R2 bucket
+
 ## v7.7.21 - 2025-12-31
 
 Hotfix: set max returned events from 5000 to 500

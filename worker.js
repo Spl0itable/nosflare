@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.21",
+  version: "7.7.22",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4874,29 +4874,29 @@ async function queryArchive(filter, hotDataCutoff, r2) {
 __name(queryArchive, "queryArchive");
 async function queryEventsWithArchive(filters, bookmark, env) {
   const hotDataCutoff = Math.floor(Date.now() / 1e3) - ARCHIVE_RETENTION_DAYS * 24 * 60 * 60;
-  const modifiedFilters = /* @__PURE__ */ new Set();
-  const processedFilters = filters.map((filter) => {
+  const modifiedFilterIndices = /* @__PURE__ */ new Set();
+  const processedFilters = filters.map((filter, index) => {
     if (filter.since || filter.until) {
       return filter;
     }
     if (filter.ids && filter.ids.length > 0) {
       return filter;
     }
-    const modifiedFilter = {
+    modifiedFilterIndices.add(index);
+    return {
       ...filter,
       since: Math.floor(Date.now() / 1e3) - DEFAULT_TIME_WINDOW_DAYS * 24 * 60 * 60
     };
-    modifiedFilters.add(modifiedFilter);
-    console.log(`Added default ${DEFAULT_TIME_WINDOW_DAYS}-day time bound to unbounded query`);
-    return modifiedFilter;
   });
   const d1Result = await queryEvents(processedFilters, bookmark, env);
-  const needsArchive = filters.some((filter) => {
-    if (filter.ids && filter.ids.length > 0) {
-      return true;
-    }
-    if (modifiedFilters.has(filter)) {
+  const needsArchive = filters.some((filter, index) => {
+    if (modifiedFilterIndices.has(index)) {
       return false;
+    }
+    if (filter.ids && filter.ids.length > 0) {
+      const foundIds = new Set(d1Result.events.map((e) => e.id));
+      const hasMissingIds = filter.ids.some((id) => !foundIds.has(id));
+      return hasMissingIds;
     }
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
@@ -4906,46 +4906,36 @@ async function queryEventsWithArchive(filters, bookmark, env) {
     console.log("Archive not needed - all queries within hot data range");
     return d1Result;
   }
-  console.log("Query requires archive access - checking for missing events or old data");
+  console.log("Query requires archive access");
   const archiveEvents = [];
-  for (const filter of filters) {
-    const correspondingProcessed = processedFilters.find((pf) => {
-      const filterCopy = { ...filter };
-      const processedCopy = { ...pf };
-      delete filterCopy.since;
-      delete filterCopy.until;
-      delete processedCopy.since;
-      delete processedCopy.until;
-      return JSON.stringify(filterCopy) === JSON.stringify(processedCopy);
-    });
-    if (correspondingProcessed && modifiedFilters.has(correspondingProcessed)) {
-      console.log("Skipping archive for filter with default time bounds");
+  for (let i = 0; i < filters.length; i++) {
+    const filter = filters[i];
+    if (modifiedFilterIndices.has(i)) {
       continue;
     }
-    const hasDirectIds = filter.ids && filter.ids.length > 0;
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
-    if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
-      if (hasDirectIds) {
-        const foundIds = new Set(d1Result.events.map((e) => e.id));
-        const missingIds = filter.ids.filter((id) => !foundIds.has(id));
-        if (missingIds.length > 0) {
-          console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-          const archiveFilter = { ...filter, ids: missingIds };
-          delete archiveFilter.since;
-          delete archiveFilter.until;
-          const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-          archiveEvents.push(...archived);
-        }
-      } else {
-        const archiveFilter = { ...filter };
-        if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
-          archiveFilter.until = hotDataCutoff;
-        }
-        console.log(`Querying archive for time range: ${archiveFilter.since} to ${archiveFilter.until}`);
+    if (filter.ids && filter.ids.length > 0) {
+      const foundIds = new Set(d1Result.events.map((e) => e.id));
+      const missingIds = filter.ids.filter((id) => !foundIds.has(id));
+      if (missingIds.length > 0) {
+        console.log(`Checking archive for ${missingIds.length} missing event IDs`);
+        const archiveFilter = { ...filter, ids: missingIds };
+        delete archiveFilter.since;
+        delete archiveFilter.until;
         const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
         archiveEvents.push(...archived);
       }
+      continue;
+    }
+    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+    if (queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+      const archiveFilter = { ...filter };
+      if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+        archiveFilter.until = hotDataCutoff;
+      }
+      console.log(`Querying archive for time range: ${archiveFilter.since} to ${archiveFilter.until}`);
+      const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+      archiveEvents.push(...archived);
     }
   }
   const allEvents = /* @__PURE__ */ new Map();

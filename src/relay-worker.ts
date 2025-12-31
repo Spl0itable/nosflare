@@ -2506,48 +2506,48 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
 // Query events with archive support
 async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, env: Env): Promise<QueryResult> {
   const hotDataCutoff = Math.floor(Date.now() / 1000) - (ARCHIVE_RETENTION_DAYS * 24 * 60 * 60);
-  
+
   // Track which filters were modified with default time bounds
-  const modifiedFilters = new Set<NostrFilter>();
-  
+  const modifiedFilterIndices = new Set<number>();
+
   // Add default time bounds to unbounded queries BEFORE checking archive needs
-  const processedFilters = filters.map(filter => {
+  const processedFilters = filters.map((filter, index) => {
     // Don't modify filters with explicit time bounds
     if (filter.since || filter.until) {
       return filter;
     }
-    
-    // Don't modify direct ID lookups (they need archive access)
+
+    // Don't modify direct ID lookups - we'll check D1 first anyway
     if (filter.ids && filter.ids.length > 0) {
       return filter;
     }
-    
+
     // Add default 90-day window for unbounded queries
-    const modifiedFilter = { 
-      ...filter, 
+    modifiedFilterIndices.add(index);
+    return {
+      ...filter,
       since: Math.floor(Date.now() / 1000) - (DEFAULT_TIME_WINDOW_DAYS * 24 * 60 * 60)
     };
-    modifiedFilters.add(modifiedFilter);
-    console.log(`Added default ${DEFAULT_TIME_WINDOW_DAYS}-day time bound to unbounded query`);
-    return modifiedFilter;
   });
-  
+
   // Query D1 with processed filters
   const d1Result = await queryEvents(processedFilters, bookmark, env);
 
   // Determine if we need archive access
-  const needsArchive = filters.some(filter => {
-    // Always check archive for direct ID lookups (no time constraints)
-    if (filter.ids && filter.ids.length > 0) {
-      return true;
-    }
-
-    // If this filter was modified with a default time bound, skip archive
-    if (modifiedFilters.has(filter)) {
+  const needsArchive = filters.some((filter, index) => {
+    // Skip filters that were modified with default bounds
+    if (modifiedFilterIndices.has(index)) {
       return false;
     }
 
-    // Only check archive if the ORIGINAL filter explicitly requests old data
+    // For direct ID lookups, check if any IDs are missing from D1
+    if (filter.ids && filter.ids.length > 0) {
+      const foundIds = new Set(d1Result.events.map(e => e.id));
+      const hasMissingIds = filter.ids.some(id => !foundIds.has(id));
+      return hasMissingIds;
+    }
+
+    // Only check archive if the filter explicitly requests old data
     const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
     const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
 
@@ -2559,80 +2559,58 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
     return d1Result;
   }
 
-  console.log('Query requires archive access - checking for missing events or old data');
+  console.log('Query requires archive access');
 
   // Query archive for each filter that needs it
   const archiveEvents: NostrEvent[] = [];
-  for (const filter of filters) {
+  for (let i = 0; i < filters.length; i++) {
+    const filter = filters[i];
+
     // Skip filters that were modified with default bounds
-    const correspondingProcessed = processedFilters.find(pf => {
-      // Match by checking if all non-time properties are equal
-      const filterCopy = { ...filter };
-      const processedCopy = { ...pf };
-      delete filterCopy.since;
-      delete filterCopy.until;
-      delete processedCopy.since;
-      delete processedCopy.until;
-      return JSON.stringify(filterCopy) === JSON.stringify(processedCopy);
-    });
-    
-    if (correspondingProcessed && modifiedFilters.has(correspondingProcessed)) {
-      console.log('Skipping archive for filter with default time bounds');
+    if (modifiedFilterIndices.has(i)) {
       continue;
     }
 
-    // Check if this specific filter needs archive
-    const hasDirectIds = filter.ids && filter.ids.length > 0;
-    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
-    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+    // Handle direct ID lookups
+    if (filter.ids && filter.ids.length > 0) {
+      const foundIds = new Set(d1Result.events.map(e => e.id));
+      const missingIds = filter.ids.filter(id => !foundIds.has(id));
 
-    if (hasDirectIds || queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
-      // For direct ID lookups, check which IDs are missing from D1 results
-      if (hasDirectIds) {
-        const foundIds = new Set(d1Result.events.map(e => e.id));
-        const missingIds = filter.ids!.filter(id => !foundIds.has(id));
-
-        if (missingIds.length > 0) {
-          console.log(`Checking archive for ${missingIds.length} missing event IDs`);
-          const archiveFilter = { ...filter, ids: missingIds };
-
-          // Don't apply time constraints for direct ID lookups in archive
-          delete archiveFilter.since;
-          delete archiveFilter.until;
-
-          const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
-          archiveEvents.push(...archived);
-        }
-      } else {
-        // For time-based queries, adjust the filter for archive query to avoid overlap
-        const archiveFilter = { ...filter };
-
-        // If querying archive, cap the `until` at the cutoff to avoid overlap with D1
-        if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
-          archiveFilter.until = hotDataCutoff;
-        }
-
-        console.log(`Querying archive for time range: ${archiveFilter.since} to ${archiveFilter.until}`);
+      if (missingIds.length > 0) {
+        console.log(`Checking archive for ${missingIds.length} missing event IDs`);
+        const archiveFilter = { ...filter, ids: missingIds };
+        delete archiveFilter.since;
+        delete archiveFilter.until;
         const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
         archiveEvents.push(...archived);
       }
+      continue;
+    }
+
+    // Handle time-based queries
+    const queryStartsBeforeCutoff = filter.since && filter.since < hotDataCutoff;
+    const queryEndsBeforeCutoff = filter.until && filter.until < hotDataCutoff;
+
+    if (queryStartsBeforeCutoff || queryEndsBeforeCutoff) {
+      const archiveFilter = { ...filter };
+      if (!archiveFilter.until || archiveFilter.until > hotDataCutoff) {
+        archiveFilter.until = hotDataCutoff;
+      }
+      console.log(`Querying archive for time range: ${archiveFilter.since} to ${archiveFilter.until}`);
+      const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
+      archiveEvents.push(...archived);
     }
   }
 
-  // Merge results from D1 and archive
+  // Merge and return results
   const allEvents = new Map<string, NostrEvent>();
-
-  // Add D1 events
   for (const event of d1Result.events) {
     allEvents.set(event.id, event);
   }
-
-  // Add archive events
   for (const event of archiveEvents) {
     allEvents.set(event.id, event);
   }
 
-  // Sort by created_at descending and apply overall limit
   const sortedEvents = Array.from(allEvents.values()).sort((a, b) => {
     if (b.created_at !== a.created_at) {
       return b.created_at - a.created_at;
@@ -2640,7 +2618,6 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
     return a.id.localeCompare(b.id);
   });
 
-  // Apply the most restrictive limit from filters
   const limit = Math.min(...filters.map(f => Math.min(f.limit || 500, 500)));
   const limitedEvents = sortedEvents.slice(0, limit);
 
