@@ -1,3 +1,7 @@
+## v7.7.20 - 2025-12-31
+
+Hotfix: unnecessary calls to R2 bucket from REQs
+
 ## v7.7.19 - 2025-12-31
 
 Hotfix: broken event archive system
