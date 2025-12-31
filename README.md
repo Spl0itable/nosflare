@@ -109,7 +109,7 @@ Nosflare uses an intelligent hybrid storage system that combines D1 database for
 
 - **Hot Storage (D1)**: Recent 90 days of events for fast queries
 - **Archive Storage (R2)**: Events older than 90 days, still fully queryable
-- **Automatic Migration**: Cron job runs every 30 minutes to archive old events
+- **Automatic Migration**: Cron job runs every 24hrs to archive old events
 - **Seamless Queries**: Clients can query both hot and archived data transparently
 - **Unlimited Capacity**: R2 has no storage limits, enabling infinite event retention
 

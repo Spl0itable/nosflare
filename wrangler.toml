@@ -19,7 +19,7 @@ read_replicas = ["auto"]
 # R2 bucket binding for event archive
 [[r2_buckets]]
 binding = "EVENT_ARCHIVE"
-bucket_name = "nostr-event-archive"
+bucket_name = "nostr-events-archive"
 
 # Queue binding for event processing
 [[queues.producers]]

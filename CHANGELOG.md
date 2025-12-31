@@ -1,3 +1,7 @@
+## v7.7.19 - 2025-12-31
+
+Hotfix: broken event archive system
+
 ## v7.7.18 - 2025-11-19
 
 Hotfix: possible infinite loop in DOs alarm
