@@ -16,8 +16,6 @@ It also uses the [Websocket Hibernation API](https://developers.cloudflare.com/d
 
 Additionally, the relay implementation uses [Queues](https://developers.cloudflare.com/queues/) to handle saving EVENT messages, which is capable of sustaining message bursts up to 5000/sec. Each message is then saved to the D1 database in batches of 100 messages.
 
-![Nosflare diagram](images/diagram.png)
-
 ## One-click Deploy
 
 Don't know how to code or operate a server but still want to run your own Nostr relay? Nosflare Deploy is the easiest, no-code, one-click deployment of your very own relay using your own Cloudflare account for a one-time setup fee of 21,420 sats!
