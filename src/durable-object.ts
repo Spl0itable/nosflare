@@ -171,7 +171,7 @@ export class RelayWebSocket implements DurableObject {
       const keysToDelete: string[] = [];
       for (const [key] of allKeys) {
         if (key.startsWith('subs:')) {
-          const sessionId = key.substring(5); // Remove 'subs:' prefix
+          const sessionId = key.substring(5);
           if (!activeSessionIds.has(sessionId)) {
             keysToDelete.push(key);
           }
@@ -366,13 +366,10 @@ export class RelayWebSocket implements DurableObject {
     // If still too large, use frequency-weighted eviction
     if (this.queryCache.size > this.MAX_CACHE_SIZE) {
       const entries = Array.from(this.queryCache.entries());
-
-      // Calculate eviction score: lower score = more likely to evict
-      // Score combines recency and frequency (higher access count = higher score)
       const scoredEntries = entries.map(([key, entry]) => {
-        const recencyScore = (now - entry.lastAccessed) / 1000; // seconds since last access
-        const frequencyScore = entry.accessCount * 10; // weight frequency heavily
-        const evictionScore = frequencyScore - (recencyScore / 60); // subtract age in minutes
+        const recencyScore = (now - entry.lastAccessed) / 1000;
+        const frequencyScore = entry.accessCount * 10;
+        const evictionScore = frequencyScore - (recencyScore / 60);
 
         return { key, score: evictionScore };
       });
@@ -486,13 +483,6 @@ export class RelayWebSocket implements DurableObject {
     if (keysToInvalidate.size > 0) {
       console.log(`Invalidated ${keysToInvalidate.size} local cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
     }
-
-    // Note: Global cache invalidation is not implemented due to Cloudflare Cache API limitations.
-    // Cloudflare's Cache API doesn't support pattern-based or tag-based invalidation.
-    // We would need to know the exact cache key (hash of filters + bookmark) to delete entries.
-    // Since there are potentially infinite filter combinations that could match an event,
-    // we rely on the TTL (5 minutes) to ensure global cache freshness.
-    // Future improvement: Track cache keys in KV storage for targeted invalidation.
   }
 
   async fetch(request: Request): Promise<Response> {
