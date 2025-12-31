@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.20",
+  version: "7.7.21",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2900,7 +2900,7 @@ var {
 } = config_exports;
 var ARCHIVE_RETENTION_DAYS = 90;
 var ARCHIVE_BATCH_SIZE = 10;
-var GLOBAL_MAX_EVENTS = 5e3;
+var GLOBAL_MAX_EVENTS = 500;
 var DEFAULT_TIME_WINDOW_DAYS = 90;
 var MAX_QUERY_COMPLEXITY = 1e3;
 var CHUNK_SIZE = 500;
@@ -3755,7 +3755,7 @@ function buildQuery(filter) {
       sql2 += " AND " + whereConditions.join(" AND ");
     }
     sql2 += " ORDER BY created_at DESC LIMIT ?";
-    params.push(Math.min(filter.limit || 1e3, 5e3));
+    params.push(500);
     return { sql: sql2, params };
   }
   if (tagCount > 0) {
@@ -3797,7 +3797,7 @@ function buildQuery(filter) {
       }
       sql3 += " ORDER BY e.created_at DESC";
       sql3 += " LIMIT ?";
-      params.push(Math.min(filter.limit || 1e3, 5e3));
+      params.push(500);
       return { sql: sql3, params };
     }
     const tagConditions = allTags.map((t) => {
@@ -3844,7 +3844,7 @@ function buildQuery(filter) {
     params.push(allTags.length);
     sql2 += " ORDER BY e.created_at DESC";
     sql2 += " LIMIT ?";
-    params.push(Math.min(filter.limit || 1e3, 5e3));
+    params.push(500);
     return { sql: sql2, params };
   }
   let indexHint = "";
@@ -3899,7 +3899,7 @@ function buildQuery(filter) {
   }
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(Math.min(filter.limit || 1e3, 5e3));
+  params.push(500);
   return { sql, params };
 }
 __name(buildQuery, "buildQuery");
@@ -4961,7 +4961,7 @@ async function queryEventsWithArchive(filters, bookmark, env) {
     }
     return a.id.localeCompare(b.id);
   });
-  const limit = Math.min(...filters.map((f) => f.limit || 1e4));
+  const limit = 500;
   const limitedEvents = sortedEvents.slice(0, limit);
   console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);
   return {
@@ -6399,10 +6399,10 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendClosed(session.webSocket, subscriptionId, "invalid: too many event IDs (max 5000)");
         return;
       }
-      if (filter.limit && filter.limit > 5e3) {
-        filter.limit = 5e3;
+      if (filter.limit && filter.limit > 500) {
+        filter.limit = 500;
       } else if (!filter.limit) {
-        filter.limit = 5e3;
+        filter.limit = 500;
       }
     }
     session.subscriptions.set(subscriptionId, filters);

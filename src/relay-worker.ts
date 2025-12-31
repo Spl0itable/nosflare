@@ -23,7 +23,7 @@ const ARCHIVE_RETENTION_DAYS = 90;
 const ARCHIVE_BATCH_SIZE = 10;
 
 // Query optimization constants
-const GLOBAL_MAX_EVENTS = 5000;
+const GLOBAL_MAX_EVENTS = 500;
 const DEFAULT_TIME_WINDOW_DAYS = 90;
 const MAX_QUERY_COMPLEXITY = 1000;
 const CHUNK_SIZE = 500;
@@ -1087,7 +1087,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
     }
 
     sql += " ORDER BY created_at DESC LIMIT ?";
-    params.push(Math.min(filter.limit || 1000, 5000));
+    params.push(500);
 
     return { sql, params };
   }
@@ -1145,7 +1145,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
       sql += " ORDER BY e.created_at DESC";
       sql += " LIMIT ?";
-      params.push(Math.min(filter.limit || 1000, 5000));
+      params.push(500);
 
       return { sql, params };
     }
@@ -1209,7 +1209,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
     sql += " ORDER BY e.created_at DESC";
     sql += " LIMIT ?";
-    params.push(Math.min(filter.limit || 1000, 5000));
+    params.push(500);
 
     return { sql, params };
   }
@@ -1280,7 +1280,7 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
 
   sql += " ORDER BY created_at DESC";
   sql += " LIMIT ?";
-  params.push(Math.min(filter.limit || 1000, 5000));
+  params.push(500);
 
   return { sql, params };
 }
@@ -2641,7 +2641,7 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
   });
 
   // Apply the most restrictive limit from filters
-  const limit = Math.min(...filters.map(f => f.limit || 10000));
+  const limit = 500;
   const limitedEvents = sortedEvents.slice(0, limit);
 
   console.log(`Query returned ${d1Result.events.length} events from D1, ${archiveEvents.length} from archive`);

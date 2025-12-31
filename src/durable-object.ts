@@ -827,10 +827,10 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // Cap limit at 5000 if it's too high or set default if not provided
-      if (filter.limit && filter.limit > 5000) {
-        filter.limit = 5000;
+      if (filter.limit && filter.limit > 500) {
+        filter.limit = 500;
       } else if (!filter.limit) {
-        filter.limit = 5000;
+        filter.limit = 500;
       }
     }
 
