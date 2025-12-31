@@ -1,3 +1,7 @@
+## v7.7.23 - 2025-12-31
+
+Hotfix: direct ID lookup bug with R2 bucket
+
 ## v7.7.22 - 2025-12-31
 
 Hotfix: reduce unnecessary calls to R2 bucket

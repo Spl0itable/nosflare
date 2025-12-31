@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.22",
+  version: "7.7.23",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4623,10 +4623,8 @@ async function queryArchive(filter, hotDataCutoff, r2) {
         console.log(`Archive: Error fetching event ${eventId}: ${e}`);
       }
     }
-    if (!filter.since && !filter.until && !filter.authors && !filter.kinds && !Object.keys(filter).some((k) => k.startsWith("#"))) {
-      console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
-      return results;
-    }
+    console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
+    return results;
   }
   if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
     console.log("Archive query skipped - filter.since is newer than archive cutoff");
@@ -4919,8 +4917,6 @@ async function queryEventsWithArchive(filters, bookmark, env) {
       if (missingIds.length > 0) {
         console.log(`Checking archive for ${missingIds.length} missing event IDs`);
         const archiveFilter = { ...filter, ids: missingIds };
-        delete archiveFilter.since;
-        delete archiveFilter.until;
         const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
         archiveEvents.push(...archived);
       }

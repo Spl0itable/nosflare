@@ -2195,11 +2195,8 @@ async function queryArchive(filter: NostrFilter, hotDataCutoff: number, r2: R2Bu
     }
 
     // If this was purely a direct ID lookup, return early
-    if (!filter.since && !filter.until && !filter.authors && !filter.kinds &&
-      !Object.keys(filter).some(k => k.startsWith('#'))) {
-      console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
-      return results;
-    }
+    console.log(`Archive: Direct ID lookup complete, found ${results.length} events`);
+    return results;
   }
 
   if (filter.since && filter.since >= hotDataCutoff && !filter.ids) {
@@ -2579,8 +2576,6 @@ async function queryEventsWithArchive(filters: NostrFilter[], bookmark: string, 
       if (missingIds.length > 0) {
         console.log(`Checking archive for ${missingIds.length} missing event IDs`);
         const archiveFilter = { ...filter, ids: missingIds };
-        delete archiveFilter.since;
-        delete archiveFilter.until;
         const archived = await queryArchive(archiveFilter, hotDataCutoff, env.EVENT_ARCHIVE);
         archiveEvents.push(...archived);
       }
