@@ -249,7 +249,17 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  // Query cache methods with deduplication
+  // Helper to generate global cache key
+  private async generateGlobalCacheKey(filters: NostrFilter[], bookmark: string): Promise<string> {
+    const cacheData = JSON.stringify({ filters, bookmark });
+    const buffer = new TextEncoder().encode(cacheData);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return `https://nosflare-query-cache/${hashHex}`;
+  }
+
+  // Query cache methods with deduplication and global caching
   private async getCachedOrQuery(filters: NostrFilter[], bookmark: string): Promise<QueryResult> {
     // Create cache key from filters and bookmark
     const cacheKey = JSON.stringify({ filters, bookmark });
@@ -260,10 +270,36 @@ export class RelayWebSocket implements DurableObject {
       return await this.activeQueries.get(cacheKey)!;
     }
 
-    // Check cache
+    // Check Cloudflare global cache first
+    try {
+      const globalCache = caches.default;
+      const globalCacheKey = await this.generateGlobalCacheKey(filters, bookmark);
+      const globalCached = await globalCache.match(globalCacheKey);
+
+      if (globalCached) {
+        console.log('Returning globally cached query result');
+        const result = await globalCached.json() as QueryResult;
+
+        // Also update local cache for faster subsequent access
+        this.queryCache.set(cacheKey, {
+          result,
+          timestamp: Date.now(),
+          accessCount: 1,
+          lastAccessed: Date.now()
+        });
+        this.addToCacheIndex(cacheKey, filters);
+
+        return result;
+      }
+    } catch (error) {
+      console.error('Error checking global cache:', error);
+      // Continue to local cache/query if global cache fails
+    }
+
+    // Check local cache
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
-      console.log('Returning cached query result');
+      console.log('Returning locally cached query result');
       // Update access tracking
       cached.accessCount++;
       cached.lastAccessed = Date.now();
@@ -277,7 +313,7 @@ export class RelayWebSocket implements DurableObject {
     try {
       const result = await queryPromise;
 
-      // Cache the result
+      // Cache the result locally
       this.queryCache.set(cacheKey, {
         result,
         timestamp: Date.now(),
@@ -291,6 +327,23 @@ export class RelayWebSocket implements DurableObject {
       // Clean up old cache entries if cache is too large
       if (this.queryCache.size > this.MAX_CACHE_SIZE) {
         this.cleanupQueryCache();
+      }
+
+      // Store in Cloudflare global cache
+      try {
+        const globalCache = caches.default;
+        const globalCacheKey = await this.generateGlobalCacheKey(filters, bookmark);
+        const response = new Response(JSON.stringify(result), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'public, max-age=300' // 5 minute TTL
+          }
+        });
+        await globalCache.put(globalCacheKey, response);
+        console.log('Stored query result in global cache');
+      } catch (error) {
+        console.error('Error storing in global cache:', error);
+        // Continue even if global cache storage fails
       }
 
       return result;
@@ -393,7 +446,7 @@ export class RelayWebSocket implements DurableObject {
   }
 
   private invalidateRelevantCaches(event: NostrEvent): void {
-    // Optimized cache invalidation using index
+    // Optimized cache invalidation using index (for local cache only)
     const keysToInvalidate = new Set<string>();
 
     // O(1) lookup by kind
@@ -424,15 +477,22 @@ export class RelayWebSocket implements DurableObject {
       }
     }
 
-    // Invalidate collected keys
+    // Invalidate collected keys from local cache
     for (const key of keysToInvalidate) {
       this.queryCache.delete(key);
       this.removeFromCacheIndex(key);
     }
 
     if (keysToInvalidate.size > 0) {
-      console.log(`Invalidated ${keysToInvalidate.size} cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
+      console.log(`Invalidated ${keysToInvalidate.size} local cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
     }
+
+    // Note: Global cache invalidation is not implemented due to Cloudflare Cache API limitations.
+    // Cloudflare's Cache API doesn't support pattern-based or tag-based invalidation.
+    // We would need to know the exact cache key (hash of filters + bookmark) to delete entries.
+    // Since there are potentially infinite filter combinations that could match an event,
+    // we rely on the TTL (5 minutes) to ensure global cache freshness.
+    // Future improvement: Track cache keys in KV storage for targeted invalidation.
   }
 
   async fetch(request: Request): Promise<Response> {

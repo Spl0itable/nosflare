@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.25",
+  version: "7.7.26",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -5252,16 +5252,44 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
   }
-  // Query cache methods with deduplication
+  // Helper to generate global cache key
+  async generateGlobalCacheKey(filters, bookmark) {
+    const cacheData = JSON.stringify({ filters, bookmark });
+    const buffer = new TextEncoder().encode(cacheData);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    return `https://nosflare-query-cache/${hashHex}`;
+  }
+  // Query cache methods with deduplication and global caching
   async getCachedOrQuery(filters, bookmark) {
     const cacheKey = JSON.stringify({ filters, bookmark });
     if (this.activeQueries.has(cacheKey)) {
       console.log("Returning in-flight query result (deduplication)");
       return await this.activeQueries.get(cacheKey);
     }
+    try {
+      const globalCache = caches.default;
+      const globalCacheKey = await this.generateGlobalCacheKey(filters, bookmark);
+      const globalCached = await globalCache.match(globalCacheKey);
+      if (globalCached) {
+        console.log("Returning globally cached query result");
+        const result = await globalCached.json();
+        this.queryCache.set(cacheKey, {
+          result,
+          timestamp: Date.now(),
+          accessCount: 1,
+          lastAccessed: Date.now()
+        });
+        this.addToCacheIndex(cacheKey, filters);
+        return result;
+      }
+    } catch (error) {
+      console.error("Error checking global cache:", error);
+    }
     const cached = this.queryCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.QUERY_CACHE_TTL) {
-      console.log("Returning cached query result");
+      console.log("Returning locally cached query result");
       cached.accessCount++;
       cached.lastAccessed = Date.now();
       return cached.result;
@@ -5279,6 +5307,21 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.addToCacheIndex(cacheKey, filters);
       if (this.queryCache.size > this.MAX_CACHE_SIZE) {
         this.cleanupQueryCache();
+      }
+      try {
+        const globalCache = caches.default;
+        const globalCacheKey = await this.generateGlobalCacheKey(filters, bookmark);
+        const response = new Response(JSON.stringify(result), {
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "public, max-age=300"
+            // 5 minute TTL
+          }
+        });
+        await globalCache.put(globalCacheKey, response);
+        console.log("Stored query result in global cache");
+      } catch (error) {
+        console.error("Error storing in global cache:", error);
       }
       return result;
     } finally {
@@ -5384,7 +5427,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.removeFromCacheIndex(key);
     }
     if (keysToInvalidate.size > 0) {
-      console.log(`Invalidated ${keysToInvalidate.size} cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
+      console.log(`Invalidated ${keysToInvalidate.size} local cache entries for event ${event.id} (kind:${event.kind}, author:${event.pubkey.substring(0, 8)}...)`);
     }
   }
   async fetch(request) {

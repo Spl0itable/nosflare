@@ -1,3 +1,7 @@
+## v7.7.26 - 2026-01-01
+
+Hotfix: added global cache api
+
 ## v7.7.25 - 2025-12-31
 
 Hotfix: removed r2 bucket event archiving
