@@ -2,7 +2,7 @@
 
 # Nosflare
 
-Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare D1](https://developers.cloudflare.com/d1/) database and [R2 Object Storage](https://developers.cloudflare.com/r2/) bucket. You can use a live, paid version of this relay implementation by adding it to your relay list: `wss://relay.nosflare.com`
+Nosflare is a serverless [Nostr](https://github.com/fiatjaf/nostr) relay purpose-built for [Cloudflare Workers](https://workers.cloudflare.com/) and a [Cloudflare D1](https://developers.cloudflare.com/d1/) database. You can use a live, paid version of this relay implementation by adding it to your relay list: `wss://relay.nosflare.com`
 
 Most applicable NIPs are supported along with support for "pay to relay", allowlisting or blocklisting pubkeys and event kinds and tags, throttle number of events from a single pubkey through rate limiting, block specific words and/or phrases, and support of [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) for `username@your-domain.com` verified Nostr addresses.
 
@@ -34,7 +34,7 @@ Or, continue below to manually deploy Nosflare...
 
 ### Prerequisites
 
-- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database, Durable Objects, and R2 bucket.
+- A [Cloudflare](https://www.cloudflare.com/plans/) account (recommended with Workers paid plan, but free tier available) to enable D1 database and Durable Objects.
 - [Node.js](https://nodejs.org/) and npm (for installing dependencies and running the build script).
 - (optional) [Wrangler CLI](https://developers.cloudflare.com/workers/cli-wrangler/install-update)
 
@@ -85,12 +85,12 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 #### Cloudflare Dashboard
 
 1. Log in to your Cloudflare dashboard.
-2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region. Go to R2 Object Storage and click "Create a bucket" and call this whatever you like and select region.
+2. Go to Storage & Databases > D1 SQL Database section and click "Create Database" button. Pick any name you want and select the Region.
 3. In the newly created D1 database click Settings tab and click "Enable read replication". Ignore the warning, Nosflare has been extensively tested to support read replication. However, fallback support is included in case read replication is disabled.
-4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name. Additionally, in the `bucket_name` add the name of the R2 bucket created.
+4. Edit the `wrangler.toml` file to use your own D1 database settings for name and id. The id is the "UUID" listed on the D1 Database dashboard. In this same file you can also change some other settings for the worker, including its name.
 5. Go to Queues and click Create Queue and call it "event-processing-queue"
 6. Go to the Compute (Workers) section and click create button to start a new worker. You can import directly from a git repo or start with "Hello World" template. You can call the worker whatever you'd like. This will be the primary relay worker (the one Nostr clients connect to).
-7. If not using a connected git repo, then on the Bindings tab of the Worker, bind the `RELAY_DATABASE` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section, bind the `EVENT_QUEUE` variable to the Queue you created, and bind `EVENT_ARCHIVE` to the R2 bucket you created. These bindings will occur automatically and can be skipped if pushing from git to the worker.
+7. If not using a connected git repo, then on the Bindings tab of the Worker, bind the `RELAY_DATABASE` variable to the D1 database you created in the Storage & Databases > D1 SQL Database section and bind the `EVENT_QUEUE` variable to the Queue you created. These bindings will occur automatically and can be skipped if pushing from git to the worker.
 8. Depending what you picked in step 4, Copy the contents of `worker.js` file and paste into the online editor. Or, if files are git pushed to a repo, the Worker will automatically build from the `worker.js` script to the Worker.
 9. Save and deploy the relay worker. Visit the relay URL through HTTP request (from browser) to the landing page. This will trigger the database initialization to build the necessary database tables.
 10. Add a custom domain in the Worker's settings in Settings > Domains & Routes section (this will be the desired relay URL).
@@ -99,21 +99,7 @@ You can deploy Nosflare using either the Wrangler CLI or directly through the Cl
 
 Nosflare typically costs **75-90% less** than traditional relay hosting while providing **better performance**, **global scale**, and **zero maintenance**.
 
-View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/), [R2 storage](https://developers.cloudflare.com/r2/pricing/)
-
-## Hybrid Storage
-
-Nosflare uses an intelligent hybrid storage system that combines D1 database for hot data with R2 bucket for cost-effective archival:
-
-### How It Works
-
-- **Hot Storage (D1)**: Recent 90 days of events for fast queries
-- **Archive Storage (R2)**: Events older than 90 days, still fully queryable
-- **Automatic Migration**: Cron job runs every 24hrs to archive old events
-- **Seamless Queries**: Clients can query both hot and archived data transparently
-- **Unlimited Capacity**: R2 has no storage limits, enabling infinite event retention
-
-The archive system uses smart indexing with hourly partitions and secondary indices by author, kind, and tags for efficient querying of historical data.
+View detailed pricing → [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 database](https://developers.cloudflare.com/d1/platform/pricing/)
 
 ## Pay To Relay
 

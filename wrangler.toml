@@ -16,11 +16,6 @@ database_name = "nostr-relay"
 database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 read_replicas = ["auto"]
 
-# R2 bucket binding for event archive
-[[r2_buckets]]
-binding = "EVENT_ARCHIVE"
-bucket_name = "nostr-events-archive"
-
 # Queue binding for event processing
 [[queues.producers]]
 binding = "EVENT_QUEUE"
@@ -45,7 +40,3 @@ enabled = false
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["RelayWebSocket"]
-
-# Scheduled cron for event archiving
-[triggers]
-crons = ["0 0 * * *"]

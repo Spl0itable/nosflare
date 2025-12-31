@@ -1,3 +1,7 @@
+## v7.7.25 - 2025-12-31
+
+Hotfix: removed r2 bucket event archiving
+
 ## v7.7.24 - 2025-12-31
 
 Hotfix: bug in query logic

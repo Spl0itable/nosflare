@@ -69,7 +69,6 @@ export interface PendingEventMetadata {
 export interface Env {
   RELAY_DATABASE: D1Database;
   RELAY_WEBSOCKET: DurableObjectNamespace;
-  EVENT_ARCHIVE: R2Bucket;
   EVENT_QUEUE: Queue<PendingEventMetadata>;
 }
 
