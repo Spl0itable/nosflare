@@ -1,3 +1,7 @@
+## v7.7.28 - 2026-01-01
+
+Hotfix: simplified db optimization schedule
+
 ## v7.7.27 - 2026-01-01
 
 Hotfix: issue with queue consumer conurrency

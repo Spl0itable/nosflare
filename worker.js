@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.27",
+  version: "7.7.28",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -5107,27 +5107,22 @@ var relay_worker_default = {
       console.error("Queue processing failed:", error);
     }
   },
-  // Scheduled handler for archiving and maintenance
+  // Scheduled handler for 24hr database maintenance (runs daily at 00:00 UTC)
   async scheduled(event, env, ctx) {
-    console.log("Running scheduled maintenance...");
+    console.log("Running scheduled 24hr database maintenance...");
     try {
-      const now = /* @__PURE__ */ new Date();
-      const currentMinute = now.getMinutes();
-      const currentHour = now.getHours();
-      console.log("Running database optimization...");
       const session = env.RELAY_DATABASE.withSession("first-primary");
+      console.log("Running PRAGMA optimize...");
       await session.prepare("PRAGMA optimize").run();
-      console.log("Database optimization completed");
-      if ([0, 6, 12, 18].includes(currentHour) && currentMinute === 0) {
-        console.log("Running scheduled ANALYZE (every 6 hours for accurate query plans)...");
-        const session2 = env.RELAY_DATABASE.withSession("first-primary");
-        await session2.prepare("ANALYZE events").run();
-        await session2.prepare("ANALYZE tags").run();
-        await session2.prepare("ANALYZE event_tags_cache").run();
-        await session2.prepare("ANALYZE event_tags_cache_multi").run();
-        await session2.prepare("ANALYZE content_hashes").run();
-        console.log("ANALYZE completed - query planner statistics updated");
-      }
+      console.log("PRAGMA optimize completed");
+      console.log("Running ANALYZE on all tables...");
+      await session.prepare("ANALYZE events").run();
+      await session.prepare("ANALYZE tags").run();
+      await session.prepare("ANALYZE event_tags_cache").run();
+      await session.prepare("ANALYZE event_tags_cache_multi").run();
+      await session.prepare("ANALYZE content_hashes").run();
+      console.log("ANALYZE completed - query planner statistics updated");
+      console.log("Scheduled 24hr database maintenance completed successfully");
     } catch (error) {
       console.error("Scheduled maintenance failed:", error);
     }
