@@ -27,6 +27,7 @@ max_batch_size = 100
 max_batch_timeout = 5
 max_retries = 3
 dead_letter_queue = "event-dlq"
+max_concurrency = 250
 
 # CPU limits (lower to 10 if not on paid Workers plan)
 [limits]

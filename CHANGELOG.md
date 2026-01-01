@@ -1,3 +1,7 @@
+## v7.7.27 - 2026-01-01
+
+Hotfix: issue with queue consumer conurrency
+
 ## v7.7.26 - 2026-01-01
 
 Hotfix: added global cache api

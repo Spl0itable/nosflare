@@ -71,7 +71,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.26",
+  version: "7.7.27",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4140,109 +4140,130 @@ __name(queryEvents, "queryEvents");
 async function processEventsFromQueue(batch, env) {
   console.log(`Processing queue batch with ${batch.messages.length} events`);
   const session = env.RELAY_DATABASE.withSession("first-primary");
-  const processedEventIds = [];
-  const failedMessages = [];
-  for (const message of batch.messages) {
-    const metadata = message.body;
-    const event = metadata.event;
-    try {
-      const tagP = metadata.tags.find((t) => t.name === "p")?.value || null;
-      const tagE = metadata.tags.find((t) => t.name === "e")?.value || null;
-      const tagA = metadata.tags.find((t) => t.name === "a")?.value || null;
-      const tagT = metadata.tags.find((t) => t.name === "t")?.value || null;
-      const tagD = metadata.tags.find((t) => t.name === "d")?.value || null;
-      const tagR = metadata.tags.find((t) => t.name === "r")?.value || null;
-      const tagL = metadata.tags.find((t) => t.name === "L")?.value || null;
-      const tagS = metadata.tags.find((t) => t.name === "s")?.value || null;
-      const tagU = metadata.tags.find((t) => t.name === "u")?.value || null;
-      const eTags = metadata.tags.filter((t) => t.name === "e").map((t) => t.value);
-      const replyToEventId = eTags.length > 0 ? eTags[0] : null;
-      const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null;
-      const contentPreview = event.content.substring(0, 100);
-      await session.prepare(`
-        INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO NOTHING
-      `).bind(
-        event.id,
-        event.pubkey,
-        event.created_at,
-        event.kind,
-        JSON.stringify(event.tags),
-        event.content,
-        event.sig,
-        tagP,
-        tagE,
-        tagA,
-        tagT,
-        tagD,
-        tagR,
-        tagL,
-        tagS,
-        tagU,
-        replyToEventId,
-        rootEventId,
-        contentPreview
-      ).run();
-      if (metadata.tags.length > 0) {
-        for (let j = 0; j < metadata.tags.length; j += 50) {
-          const tagChunk = metadata.tags.slice(j, j + 50);
-          const tagBatch = tagChunk.map(
-            (t) => session.prepare(`
-              INSERT INTO tags (event_id, tag_name, tag_value)
-              VALUES (?, ?, ?)
-            `).bind(event.id, t.name, t.value)
-          );
-          if (tagBatch.length > 0) {
-            await session.batch(tagBatch);
-          }
-        }
-      }
-      if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
+  const results = await Promise.allSettled(
+    batch.messages.map(async (message) => {
+      const metadata = message.body;
+      const event = metadata.event;
+      try {
+        const tagP = metadata.tags.find((t) => t.name === "p")?.value || null;
+        const tagE = metadata.tags.find((t) => t.name === "e")?.value || null;
+        const tagA = metadata.tags.find((t) => t.name === "a")?.value || null;
+        const tagT = metadata.tags.find((t) => t.name === "t")?.value || null;
+        const tagD = metadata.tags.find((t) => t.name === "d")?.value || null;
+        const tagR = metadata.tags.find((t) => t.name === "r")?.value || null;
+        const tagL = metadata.tags.find((t) => t.name === "L")?.value || null;
+        const tagS = metadata.tags.find((t) => t.name === "s")?.value || null;
+        const tagU = metadata.tags.find((t) => t.name === "u")?.value || null;
+        const eTags = metadata.tags.filter((t) => t.name === "e").map((t) => t.value);
+        const replyToEventId = eTags.length > 0 ? eTags[0] : null;
+        const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null;
+        const contentPreview = event.content.substring(0, 100);
         await session.prepare(`
-          INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(event_id) DO UPDATE SET
-            tag_p = excluded.tag_p,
-            tag_e = excluded.tag_e,
-            tag_a = excluded.tag_a
+          INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO NOTHING
         `).bind(
           event.id,
           event.pubkey,
-          event.kind,
           event.created_at,
-          metadata.eventTagsCache.tag_p,
-          metadata.eventTagsCache.tag_e,
-          metadata.eventTagsCache.tag_a
+          event.kind,
+          JSON.stringify(event.tags),
+          event.content,
+          event.sig,
+          tagP,
+          tagE,
+          tagA,
+          tagT,
+          tagD,
+          tagR,
+          tagL,
+          tagS,
+          tagU,
+          replyToEventId,
+          rootEventId,
+          contentPreview
         ).run();
+        if (metadata.tags.length > 0) {
+          for (let j = 0; j < metadata.tags.length; j += 50) {
+            const tagChunk = metadata.tags.slice(j, j + 50);
+            const tagBatch = tagChunk.map(
+              (t) => session.prepare(`
+                INSERT INTO tags (event_id, tag_name, tag_value)
+                VALUES (?, ?, ?)
+              `).bind(event.id, t.name, t.value)
+            );
+            if (tagBatch.length > 0) {
+              await session.batch(tagBatch);
+            }
+          }
+        }
+        if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
+          await session.prepare(`
+            INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+              tag_p = excluded.tag_p,
+              tag_e = excluded.tag_e,
+              tag_a = excluded.tag_a
+          `).bind(
+            event.id,
+            event.pubkey,
+            event.kind,
+            event.created_at,
+            metadata.eventTagsCache.tag_p,
+            metadata.eventTagsCache.tag_e,
+            metadata.eventTagsCache.tag_a
+          ).run();
+        }
+        const cacheableTags = metadata.tags.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
+        if (cacheableTags.length > 0) {
+          const cacheBatch = cacheableTags.map(
+            (t) => session.prepare(`
+              INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+          );
+          await session.batch(cacheBatch);
+        }
+        if (metadata.contentHash) {
+          await session.prepare(`
+            INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(hash) DO NOTHING
+          `).bind(metadata.contentHash, event.id, event.pubkey, event.created_at).run();
+        }
+        console.log(`Successfully processed event ${event.id} from queue`);
+        message.ack();
+        return { success: true, eventId: event.id };
+      } catch (error) {
+        console.error(`Failed to process event ${event.id} from queue:`, {
+          error: error.message,
+          stack: error.stack,
+          eventKind: event.kind,
+          eventPubkey: event.pubkey,
+          tagCount: metadata.tags.length,
+          hasContentHash: !!metadata.contentHash
+        });
+        message.retry();
+        return { success: false, eventId: event.id, error: error.message };
       }
-      const cacheableTags = metadata.tags.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
-      if (cacheableTags.length > 0) {
-        const cacheBatch = cacheableTags.map(
-          (t) => session.prepare(`
-            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-        );
-        await session.batch(cacheBatch);
-      }
-      if (metadata.contentHash) {
-        await session.prepare(`
-          INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(hash) DO NOTHING
-        `).bind(metadata.contentHash, event.id, event.pubkey, event.created_at).run();
-      }
-      processedEventIds.push(event.id);
-      console.log(`Successfully processed event ${event.id} from queue`);
-      message.ack();
-    } catch (error) {
-      console.error(`Failed to process event ${event.id} from queue:`, error.message);
-      failedMessages.push(message);
-      message.retry();
+    })
+  );
+  const processedEventIds = [];
+  const failedEvents = [];
+  results.forEach((result) => {
+    if (result.status === "fulfilled" && result.value.success) {
+      processedEventIds.push(result.value.eventId);
+    } else if (result.status === "fulfilled" && !result.value.success) {
+      failedEvents.push({ eventId: result.value.eventId, error: result.value.error });
+    } else if (result.status === "rejected") {
+      console.error("Unexpected promise rejection in queue processing:", result.reason);
     }
+  });
+  console.log(`Queue batch processed: ${processedEventIds.length} succeeded, ${failedEvents.length} failed/retrying`);
+  if (failedEvents.length > 0) {
+    console.log("Failed events:", failedEvents);
   }
-  console.log(`Queue batch processed: ${processedEventIds.length} succeeded, ${failedMessages.length} failed/retrying`);
 }
 __name(processEventsFromQueue, "processEventsFromQueue");
 function handleRelayInfoRequest(request) {
