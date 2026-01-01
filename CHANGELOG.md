@@ -1,3 +1,7 @@
+## v7.7.29 - 2026-01-02
+
+Hotfix: tags handling optimization
+
 ## v7.7.28 - 2026-01-01
 
 Hotfix: simplified db optimization schedule

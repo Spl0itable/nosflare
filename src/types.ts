@@ -56,7 +56,7 @@ export interface QueryResult {
 export interface PendingEventMetadata {
   event: NostrEvent;
   timestamp: number;
-  tags: Array<{ name: string; value: string }>;
+  tags: Array<{ name: string; value: string; index: number; rest: string[] | null }>;
   eventTagsCache: {
     tag_p: string | null;
     tag_e: string | null;

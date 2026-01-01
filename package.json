@@ -1,6 +1,6 @@
 {
   "name": "nosflare",
-  "version": "7.7.28",
+  "version": "7.7.29",
   "main": "worker.js",
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "@noble/curves": "^1.0.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
     "esbuild": "^0.19.0",
     "wrangler": "^3.0.0"
   }
