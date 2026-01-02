@@ -19,7 +19,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.29",
+  version: "7.8.29",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
@@ -154,6 +154,20 @@ export const REQ_RATE_LIMIT = { rate: 50 / 60000, capacity: 50 }; // 50 REQ mess
 export const excludedRateLimitKinds = new Set<number>([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
+]);
+
+// Database pruning settings (D1 has a 10GB limit)
+export const DB_PRUNING_ENABLED = true; // Set to false to disable automatic pruning
+export const DB_SIZE_THRESHOLD_GB = 9; // Start pruning when database exceeds this size (in GB)
+export const DB_PRUNE_BATCH_SIZE = 1000; // Number of events to delete per batch
+export const DB_PRUNE_TARGET_GB = 8; // Target size to prune down to (in GB)
+
+// Event kinds to preserve during pruning (replaceable events critical for user identity)
+// Kind 0: Profile metadata, Kind 3: Contact list, Kind 10002: Relay list
+export const pruneProtectedKinds = new Set<number>([
+  0,      // Profile metadata
+  3,      // Contact list / follows
+  10002,  // Relay list metadata
 ]);
 
 // *************************** //

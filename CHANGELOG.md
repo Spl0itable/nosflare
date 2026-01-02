@@ -1,3 +1,7 @@
+## v7.8.29 - 2026-01-02
+
+New: added automatic database pruning to stay under D1's 10GB storage limit
+
 ## v7.7.29 - 2026-01-02
 
 Hotfix: tags handling optimization

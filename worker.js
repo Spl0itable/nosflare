@@ -35,6 +35,10 @@ var RateLimiter = _RateLimiter;
 // src/config.ts
 var config_exports = {};
 __export(config_exports, {
+  DB_PRUNE_BATCH_SIZE: () => DB_PRUNE_BATCH_SIZE,
+  DB_PRUNE_TARGET_GB: () => DB_PRUNE_TARGET_GB,
+  DB_PRUNING_ENABLED: () => DB_PRUNING_ENABLED,
+  DB_SIZE_THRESHOLD_GB: () => DB_SIZE_THRESHOLD_GB,
   PAY_TO_RELAY_ENABLED: () => PAY_TO_RELAY_ENABLED,
   PUBKEY_RATE_LIMIT: () => PUBKEY_RATE_LIMIT,
   RELAY_ACCESS_PRICE_SATS: () => RELAY_ACCESS_PRICE_SATS,
@@ -58,6 +62,7 @@ __export(config_exports, {
   isPubkeyAllowed: () => isPubkeyAllowed,
   isTagAllowed: () => isTagAllowed,
   nip05Users: () => nip05Users,
+  pruneProtectedKinds: () => pruneProtectedKinds,
   relayInfo: () => relayInfo,
   relayNpub: () => relayNpub
 });
@@ -71,7 +76,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.7.29",
+  version: "7.8.29",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -292,6 +297,18 @@ var REQ_RATE_LIMIT = { rate: 50 / 6e4, capacity: 50 };
 var excludedRateLimitKinds = /* @__PURE__ */ new Set([
   1059
   // ... kinds to exclude from EVENT rate limiting Ex: 1, 2, 3
+]);
+var DB_PRUNING_ENABLED = true;
+var DB_SIZE_THRESHOLD_GB = 9;
+var DB_PRUNE_BATCH_SIZE = 1e3;
+var DB_PRUNE_TARGET_GB = 8;
+var pruneProtectedKinds = /* @__PURE__ */ new Set([
+  0,
+  // Profile metadata
+  3,
+  // Contact list / follows
+  10002
+  // Relay list metadata
 ]);
 function isPubkeyAllowed(pubkey) {
   if (allowedPubkeys.size > 0 && !allowedPubkeys.has(pubkey)) {
@@ -2896,7 +2913,12 @@ var {
   antiSpamKinds: antiSpamKinds2,
   checkValidNip05: checkValidNip052,
   blockedNip05Domains: blockedNip05Domains2,
-  allowedNip05Domains: allowedNip05Domains2
+  allowedNip05Domains: allowedNip05Domains2,
+  DB_PRUNING_ENABLED: DB_PRUNING_ENABLED2,
+  DB_SIZE_THRESHOLD_GB: DB_SIZE_THRESHOLD_GB2,
+  DB_PRUNE_BATCH_SIZE: DB_PRUNE_BATCH_SIZE2,
+  DB_PRUNE_TARGET_GB: DB_PRUNE_TARGET_GB2,
+  pruneProtectedKinds: pruneProtectedKinds2
 } = config_exports;
 var GLOBAL_MAX_EVENTS = 500;
 var MAX_QUERY_COMPLEXITY = 1e3;
@@ -5166,6 +5188,67 @@ async function getOptimalDO(cf, env, url) {
   return { stub, doName: fallback.name };
 }
 __name(getOptimalDO, "getOptimalDO");
+async function getDatabaseSizeBytes(session) {
+  try {
+    const pageCountResult = await session.prepare("PRAGMA page_count").first();
+    const pageSizeResult = await session.prepare("PRAGMA page_size").first();
+    if (pageCountResult && pageSizeResult) {
+      return pageCountResult.page_count * pageSizeResult.page_size;
+    }
+    return 0;
+  } catch (error) {
+    console.error("Error getting database size:", error);
+    return 0;
+  }
+}
+__name(getDatabaseSizeBytes, "getDatabaseSizeBytes");
+async function pruneOldEvents(session, targetSizeBytes) {
+  let totalEventsDeleted = 0;
+  let currentSize = await getDatabaseSizeBytes(session);
+  console.log(`Starting database pruning. Current size: ${(currentSize / (1024 * 1024 * 1024)).toFixed(2)} GB, Target: ${(targetSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+  const protectedKindsArray = Array.from(pruneProtectedKinds2);
+  const protectedKindsClause = protectedKindsArray.length > 0 ? `AND kind NOT IN (${protectedKindsArray.join(",")})` : "";
+  while (currentSize > targetSizeBytes) {
+    const oldestEvents = await session.prepare(`
+      SELECT id FROM events
+      WHERE 1=1 ${protectedKindsClause}
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).bind(DB_PRUNE_BATCH_SIZE2).all();
+    if (!oldestEvents.results || oldestEvents.results.length === 0) {
+      console.log("No more events eligible for pruning");
+      break;
+    }
+    const eventIds = oldestEvents.results.map((row) => row.id);
+    const placeholders = eventIds.map(() => "?").join(",");
+    const deleteResult = await session.prepare(`
+      DELETE FROM events WHERE id IN (${placeholders})
+    `).bind(...eventIds).run();
+    const deletedCount = deleteResult.meta?.changes || eventIds.length;
+    totalEventsDeleted += deletedCount;
+    await session.prepare(`
+      DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+    await session.prepare(`
+      DELETE FROM event_tags_cache_multi WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+    await session.prepare(`
+      DELETE FROM mv_recent_notes WHERE id IN (${placeholders})
+    `).bind(...eventIds).run();
+    await session.prepare(`
+      DELETE FROM mv_timeline_cache WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+    console.log(`Pruned ${deletedCount} events (total: ${totalEventsDeleted})`);
+    currentSize = await getDatabaseSizeBytes(session);
+    console.log(`Current database size: ${(currentSize / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+    if (totalEventsDeleted >= 1e5) {
+      console.log("Reached maximum pruning limit for this run (100,000 events)");
+      break;
+    }
+  }
+  return { eventsDeleted: totalEventsDeleted, finalSizeBytes: currentSize };
+}
+__name(pruneOldEvents, "pruneOldEvents");
 var relay_worker_default = {
   async fetch(request, env, ctx) {
     try {
@@ -5220,6 +5303,21 @@ var relay_worker_default = {
     console.log("Running scheduled 24hr database maintenance...");
     try {
       const session = env.RELAY_DATABASE.withSession("first-primary");
+      if (DB_PRUNING_ENABLED2) {
+        const currentSizeBytes = await getDatabaseSizeBytes(session);
+        const currentSizeGB = currentSizeBytes / (1024 * 1024 * 1024);
+        console.log(`Current database size: ${currentSizeGB.toFixed(2)} GB (threshold: ${DB_SIZE_THRESHOLD_GB2} GB)`);
+        if (currentSizeGB >= DB_SIZE_THRESHOLD_GB2) {
+          console.log(`Database size (${currentSizeGB.toFixed(2)} GB) exceeds threshold (${DB_SIZE_THRESHOLD_GB2} GB). Starting pruning...`);
+          const targetSizeBytes = DB_PRUNE_TARGET_GB2 * 1024 * 1024 * 1024;
+          const pruneResult = await pruneOldEvents(session, targetSizeBytes);
+          console.log(`Pruning completed. Deleted ${pruneResult.eventsDeleted} events. Final size: ${(pruneResult.finalSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+        } else {
+          console.log("Database size is within limits. No pruning needed.");
+        }
+      } else {
+        console.log("Database pruning is disabled.");
+      }
       console.log("Running PRAGMA optimize...");
       await session.prepare("PRAGMA optimize").run();
       console.log("PRAGMA optimize completed");

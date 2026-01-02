@@ -16,6 +16,11 @@ const {
   checkValidNip05,
   blockedNip05Domains,
   allowedNip05Domains,
+  DB_PRUNING_ENABLED,
+  DB_SIZE_THRESHOLD_GB,
+  DB_PRUNE_BATCH_SIZE,
+  DB_PRUNE_TARGET_GB,
+  pruneProtectedKinds,
 } = config;
 
 // Query optimization constants
@@ -2534,6 +2539,99 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   return { stub, doName: fallback.name };
 }
 
+// Database pruning helper functions
+
+// Get the current database size in bytes using SQLite pragmas
+async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number> {
+  try {
+    const pageCountResult = await session.prepare('PRAGMA page_count').first() as { page_count: number } | null;
+    const pageSizeResult = await session.prepare('PRAGMA page_size').first() as { page_size: number } | null;
+
+    if (pageCountResult && pageSizeResult) {
+      return pageCountResult.page_count * pageSizeResult.page_size;
+    }
+    return 0;
+  } catch (error) {
+    console.error('Error getting database size:', error);
+    return 0;
+  }
+}
+
+// Prune old events to reduce database size
+// Returns the number of events deleted
+async function pruneOldEvents(session: D1DatabaseSession, targetSizeBytes: number): Promise<{ eventsDeleted: number; finalSizeBytes: number }> {
+  let totalEventsDeleted = 0;
+  let currentSize = await getDatabaseSizeBytes(session);
+
+  console.log(`Starting database pruning. Current size: ${(currentSize / (1024 * 1024 * 1024)).toFixed(2)} GB, Target: ${(targetSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+
+  // Build the protected kinds clause for SQL
+  const protectedKindsArray = Array.from(pruneProtectedKinds);
+  const protectedKindsClause = protectedKindsArray.length > 0
+    ? `AND kind NOT IN (${protectedKindsArray.join(',')})`
+    : '';
+
+  // Keep pruning in batches until we reach target size
+  while (currentSize > targetSizeBytes) {
+    // Find the oldest events (excluding protected kinds)
+    const oldestEvents = await session.prepare(`
+      SELECT id FROM events
+      WHERE 1=1 ${protectedKindsClause}
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).bind(DB_PRUNE_BATCH_SIZE).all();
+
+    if (!oldestEvents.results || oldestEvents.results.length === 0) {
+      console.log('No more events eligible for pruning');
+      break;
+    }
+
+    const eventIds = oldestEvents.results.map((row: any) => row.id as string);
+    const placeholders = eventIds.map(() => '?').join(',');
+
+    // Delete from events table (CASCADE will handle tags and content_hashes)
+    const deleteResult = await session.prepare(`
+      DELETE FROM events WHERE id IN (${placeholders})
+    `).bind(...eventIds).run();
+
+    const deletedCount = deleteResult.meta?.changes || eventIds.length;
+    totalEventsDeleted += deletedCount;
+
+    // Clean up cache tables that don't have CASCADE delete
+    await session.prepare(`
+      DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+
+    await session.prepare(`
+      DELETE FROM event_tags_cache_multi WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+
+    // Also clean up mv_recent_notes
+    await session.prepare(`
+      DELETE FROM mv_recent_notes WHERE id IN (${placeholders})
+    `).bind(...eventIds).run();
+
+    // Clean up mv_timeline_cache
+    await session.prepare(`
+      DELETE FROM mv_timeline_cache WHERE event_id IN (${placeholders})
+    `).bind(...eventIds).run();
+
+    console.log(`Pruned ${deletedCount} events (total: ${totalEventsDeleted})`);
+
+    // Check current size after deletion
+    currentSize = await getDatabaseSizeBytes(session);
+    console.log(`Current database size: ${(currentSize / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+
+    // Safety break - don't delete more than 100,000 events in a single maintenance run
+    if (totalEventsDeleted >= 100000) {
+      console.log('Reached maximum pruning limit for this run (100,000 events)');
+      break;
+    }
+  }
+
+  return { eventsDeleted: totalEventsDeleted, finalSizeBytes: currentSize };
+}
+
 // Export functions for use by Durable Object
 export {
   verifyEventSignature,
@@ -2614,6 +2712,24 @@ export default {
 
     try {
       const session = env.RELAY_DATABASE.withSession('first-primary');
+
+      // Check database size and prune if necessary (D1 has a 10GB limit)
+      if (DB_PRUNING_ENABLED) {
+        const currentSizeBytes = await getDatabaseSizeBytes(session);
+        const currentSizeGB = currentSizeBytes / (1024 * 1024 * 1024);
+        console.log(`Current database size: ${currentSizeGB.toFixed(2)} GB (threshold: ${DB_SIZE_THRESHOLD_GB} GB)`);
+
+        if (currentSizeGB >= DB_SIZE_THRESHOLD_GB) {
+          console.log(`Database size (${currentSizeGB.toFixed(2)} GB) exceeds threshold (${DB_SIZE_THRESHOLD_GB} GB). Starting pruning...`);
+          const targetSizeBytes = DB_PRUNE_TARGET_GB * 1024 * 1024 * 1024;
+          const pruneResult = await pruneOldEvents(session, targetSizeBytes);
+          console.log(`Pruning completed. Deleted ${pruneResult.eventsDeleted} events. Final size: ${(pruneResult.finalSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+        } else {
+          console.log('Database size is within limits. No pruning needed.');
+        }
+      } else {
+        console.log('Database pruning is disabled.');
+      }
 
       // Run PRAGMA optimize (SQLite's intelligent optimization)
       console.log('Running PRAGMA optimize...');
