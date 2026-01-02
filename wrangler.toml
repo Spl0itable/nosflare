@@ -14,7 +14,6 @@ class_name = "RelayWebSocket"
 binding = "RELAY_DATABASE"
 database_name = "nostr-relay"
 database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
-read_replicas = ["auto"]
 
 # Cron trigger for 24hr database maintenance
 [triggers]
