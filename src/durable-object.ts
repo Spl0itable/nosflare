@@ -742,10 +742,10 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Check required fields
+      // Check required fields (content can be empty string but not null/undefined)
       if (!event.id || !event.pubkey || !event.sig || !event.created_at ||
         event.kind === undefined || !Array.isArray(event.tags) ||
-        event.content === undefined) {
+        event.content === undefined || event.content === null) {
         this.sendOK(session.webSocket, event.id || '', false, 'invalid: missing required fields');
         return;
       }

@@ -3575,13 +3575,16 @@ async function saveEventToDatabase(event, env) {
     }
     const cacheableTags = tagInserts.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
     if (cacheableTags.length > 0) {
-      const cacheBatch = cacheableTags.map(
-        (t) => session.prepare(`
-          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-      );
-      await session.batch(cacheBatch);
+      for (let j = 0; j < cacheableTags.length; j += 50) {
+        const cacheChunk = cacheableTags.slice(j, j + 50);
+        const cacheBatch = cacheChunk.map(
+          (t) => session.prepare(`
+            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+        );
+        await session.batch(cacheBatch);
+      }
     }
     if (contentHash) {
       await session.prepare(`
@@ -5708,7 +5711,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, "", false, "invalid: event object required");
         return;
       }
-      if (!event.id || !event.pubkey || !event.sig || !event.created_at || event.kind === void 0 || !Array.isArray(event.tags) || event.content === void 0) {
+      if (!event.id || !event.pubkey || !event.sig || !event.created_at || event.kind === void 0 || !Array.isArray(event.tags) || event.content === void 0 || event.content === null) {
         this.sendOK(session.webSocket, event.id || "", false, "invalid: missing required fields");
         return;
       }

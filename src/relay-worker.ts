@@ -794,15 +794,19 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     }
 
     // Insert ALL p/e/a/t/d/r/L/s/u tags into multi-value cache
+    // Chunk in batches of 50 to stay well under D1's 100 statement batch limit
     const cacheableTags = tagInserts.filter(t => ['p', 'e', 'a', 't', 'd', 'r', 'L', 's', 'u'].includes(t.name));
     if (cacheableTags.length > 0) {
-      const cacheBatch = cacheableTags.map(t =>
-        session.prepare(`
-          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-      );
-      await session.batch(cacheBatch);
+      for (let j = 0; j < cacheableTags.length; j += 50) {
+        const cacheChunk = cacheableTags.slice(j, j + 50);
+        const cacheBatch = cacheChunk.map(t =>
+          session.prepare(`
+            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+        );
+        await session.batch(cacheBatch);
+      }
     }
 
     // Insert content hash if present
