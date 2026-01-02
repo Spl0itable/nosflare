@@ -615,17 +615,18 @@ function calculateQueryComplexity(filter: NostrFilter): number {
 }
 
 // Event processing
-async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string }> {
+async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string; bookmark?: string }> {
   try {
-    // Check cache for duplicate event ID
-    const existingEvent = await env.RELAY_DATABASE.withSession('first-unconstrained')
+    // Check cache for duplicate event ID using primary for consistency
+    const session = env.RELAY_DATABASE.withSession('first-primary');
+    const existingEvent = await session
       .prepare("SELECT id FROM events WHERE id = ? LIMIT 1")
       .bind(event.id)
       .first();
 
     if (existingEvent) {
       console.log(`Duplicate event detected: ${event.id}`);
-      return { success: false, message: "duplicate: already have this event" };
+      return { success: false, message: "duplicate: already have this event", bookmark: session.getBookmark() ?? undefined };
     }
 
     // NIP-05 validation if enabled (bypassed for kind 1059)
@@ -652,7 +653,7 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
 }
 
 // Save event directly to D1 database
-async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
+async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string; bookmark?: string }> {
   try {
     // Check worker cache for duplicate event ID
     const cache = caches.default;
@@ -667,7 +668,7 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     // Check D1 for duplicate event ID
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
-      return { success: false, message: "duplicate: event already exists" };
+      return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? undefined };
     }
 
     // Check for duplicate content (only if anti-spam is enabled)
@@ -681,7 +682,7 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
         : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
 
       if (duplicateContent) {
-        return { success: false, message: "duplicate: content already exists" };
+        return { success: false, message: "duplicate: content already exists", bookmark: session.getBookmark() ?? undefined };
       }
     }
 
@@ -753,7 +754,7 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     // Check if the event was actually inserted (not a duplicate that slipped through)
     if (insertResult.meta.changes === 0) {
       console.log(`Event ${event.id} already exists in database (race condition duplicate)`);
-      return { success: false, message: "duplicate: event already exists" };
+      return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? undefined };
     }
 
     // Only insert tags if the event was successfully inserted
@@ -794,15 +795,19 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     }
 
     // Insert ALL p/e/a/t/d/r/L/s/u tags into multi-value cache
+    // Chunk in batches of 50 to stay well under D1's 100 statement batch limit
     const cacheableTags = tagInserts.filter(t => ['p', 'e', 'a', 't', 'd', 'r', 'L', 's', 'u'].includes(t.name));
     if (cacheableTags.length > 0) {
-      const cacheBatch = cacheableTags.map(t =>
-        session.prepare(`
-          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-      );
-      await session.batch(cacheBatch);
+      for (let j = 0; j < cacheableTags.length; j += 50) {
+        const cacheChunk = cacheableTags.slice(j, j + 50);
+        const cacheBatch = cacheChunk.map(t =>
+          session.prepare(`
+            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+        );
+        await session.batch(cacheBatch);
+      }
     }
 
     // Insert content hash if present
@@ -822,7 +827,7 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     }));
 
     console.log(`Event ${event.id} saved directly to database`);
-    return { success: true, message: "Event saved successfully" };
+    return { success: true, message: "Event saved successfully", bookmark: session.getBookmark() ?? undefined };
 
   } catch (error: any) {
     console.error(`Error saving event to database: ${error.message}`);
@@ -832,15 +837,16 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
 }
 
 // Helper function for kind 5
-async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
+async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string; bookmark?: string }> {
   console.log(`Processing deletion event ${event.id}`);
   const deletedEventIds = event.tags.filter(tag => tag[0] === "e").map(tag => tag[1]);
 
+  const session = env.RELAY_DATABASE.withSession('first-primary');
+
   if (deletedEventIds.length === 0) {
-    return { success: true, message: "No events to delete" };
+    return { success: true, message: "No events to delete", bookmark: session.getBookmark() ?? undefined };
   }
 
-  const session = env.RELAY_DATABASE.withSession('first-primary');
   let deletedCount = 0;
   const errors: string[] = [];
 
@@ -902,12 +908,13 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
   const saveResult = await saveEventToDatabase(event, env);
 
   if (errors.length > 0) {
-    return { success: false, message: errors[0] };
+    return { success: false, message: errors[0], bookmark: saveResult.bookmark ?? (session.getBookmark() ?? undefined) };
   }
 
   return {
     success: true,
-    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete"
+    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete",
+    bookmark: saveResult.bookmark ?? (session.getBookmark() ?? undefined)
   };
 }
 

@@ -742,10 +742,10 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Check required fields
+      // Check required fields (content can be empty string but not null/undefined)
       if (!event.id || !event.pubkey || !event.sig || !event.created_at ||
         event.kind === undefined || !Array.isArray(event.tags) ||
-        event.content === undefined) {
+        event.content === undefined || event.content === null) {
         this.sendOK(session.webSocket, event.id || '', false, 'invalid: missing required fields');
         return;
       }
@@ -832,6 +832,11 @@ export class RelayWebSocket implements DurableObject {
 
       // Process the event (save to database)
       const result = await processEvent(event, session.id, this.env);
+
+      // Update session bookmark for read-after-write consistency
+      if (result.bookmark) {
+        session.bookmark = result.bookmark;
+      }
 
       if (result.success) {
         // Send OK to the sender

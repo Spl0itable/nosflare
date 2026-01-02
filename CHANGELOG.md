@@ -1,3 +1,7 @@
+## v7.9.33 - 2026-01-03
+
+Hotfix: session/bookmark storage improvement
+
 ## v7.9.32 - 2026-01-03
 
 Hotfix: tag handling in queries
