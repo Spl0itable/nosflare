@@ -126,14 +126,16 @@ export interface Nip05Response {
 }
 
 // WebSocket message types for Nostr protocol
-export type NostrMessage = 
+export type NostrMessage =
   | ["EVENT", string, NostrEvent]
   | ["EOSE", string]
   | ["OK", string, boolean, string]
   | ["NOTICE", string]
   | ["REQ", string, ...NostrFilter[]]
   | ["CLOSE", string]
-  | ["CLOSED", string, string];
+  | ["CLOSED", string, string]
+  | ["AUTH", string]
+  | ["AUTH", NostrEvent];
 
 // WebSocket event types for Cloudflare Workers
 export interface WebSocketEventMap {

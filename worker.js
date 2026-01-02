@@ -35,6 +35,8 @@ var RateLimiter = _RateLimiter;
 // src/config.ts
 var config_exports = {};
 __export(config_exports, {
+  AUTH_REQUIRED: () => AUTH_REQUIRED,
+  AUTH_TIMEOUT_MS: () => AUTH_TIMEOUT_MS,
   DB_PRUNE_BATCH_SIZE: () => DB_PRUNE_BATCH_SIZE,
   DB_PRUNE_TARGET_GB: () => DB_PRUNE_TARGET_GB,
   DB_PRUNING_ENABLED: () => DB_PRUNING_ENABLED,
@@ -69,14 +71,16 @@ __export(config_exports, {
 var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
 var PAY_TO_RELAY_ENABLED = true;
 var RELAY_ACCESS_PRICE_SATS = 2121;
+var AUTH_REQUIRED = true;
+var AUTH_TIMEOUT_MS = 6e5;
 var relayInfo = {
   name: "Nosflare",
   description: "A serverless Nostr relay through Cloudflare Worker and D1 database",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lux@fed.wtf",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.8.29",
+  version: "7.9.29",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -91,7 +95,7 @@ var relayInfo = {
     // max_event_tags: 2000,
     // max_content_length: 70000,
     // min_pow_difficulty: 0,
-    // auth_required: false,
+    auth_required: AUTH_REQUIRED,
     payment_required: PAY_TO_RELAY_ENABLED,
     restricted_writes: PAY_TO_RELAY_ENABLED
     // created_at_lower_limit: 0,
@@ -5714,6 +5718,14 @@ var _RelayWebSocket = class _RelayWebSocket {
       };
       this.sessions.set(attachment.sessionId, session);
     }
+    if (AUTH_REQUIRED && !attachment.authChallenge) {
+      const challenge2 = this.generateAuthChallenge();
+      attachment.authChallenge = challenge2;
+      attachment.authChallengeCreatedAt = Date.now();
+      attachment.authenticatedPubkeys = [];
+      this.sendAuth(ws, challenge2);
+      ws.serializeAttachment(attachment);
+    }
     try {
       let parsedMessage;
       if (typeof message === "string") {
@@ -5723,13 +5735,16 @@ var _RelayWebSocket = class _RelayWebSocket {
         const text = decoder.decode(message);
         parsedMessage = JSON.parse(text);
       }
-      await this.handleMessage(session, parsedMessage);
+      await this.handleMessage(session, parsedMessage, attachment);
       const updatedAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid
+        hasPaid: attachment.hasPaid,
+        authChallenge: attachment.authChallenge,
+        authChallengeCreatedAt: attachment.authChallengeCreatedAt,
+        authenticatedPubkeys: attachment.authenticatedPubkeys
       };
       ws.serializeAttachment(updatedAttachment);
     } catch (error) {
@@ -5788,7 +5803,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       });
     }
   }
-  async handleMessage(session, message) {
+  async handleMessage(session, message, attachment) {
     if (!Array.isArray(message)) {
       this.sendError(session.webSocket, "Invalid message format: expected JSON array");
       return;
@@ -5797,13 +5812,16 @@ var _RelayWebSocket = class _RelayWebSocket {
     try {
       switch (type) {
         case "EVENT":
-          await this.handleEvent(session, args[0]);
+          await this.handleEvent(session, args[0], attachment);
           break;
         case "REQ":
-          await this.handleReq(session, message);
+          await this.handleReq(session, message, attachment);
           break;
         case "CLOSE":
           await this.handleCloseSubscription(session, args[0]);
+          break;
+        case "AUTH":
+          await this.handleAuth(session, args[0], attachment);
           break;
         default:
           this.sendError(session.webSocket, `Unknown message type: ${type}`);
@@ -5813,7 +5831,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.sendError(session.webSocket, `Failed to process ${type} message`);
     }
   }
-  async handleEvent(session, event) {
+  async handleEvent(session, event, attachment) {
     try {
       if (!event || typeof event !== "object") {
         this.sendOK(session.webSocket, "", false, "invalid: event object required");
@@ -5821,6 +5839,10 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
       if (!event.id || !event.pubkey || !event.sig || !event.created_at || event.kind === void 0 || !Array.isArray(event.tags) || event.content === void 0) {
         this.sendOK(session.webSocket, event.id || "", false, "invalid: missing required fields");
+        return;
+      }
+      if (AUTH_REQUIRED && !this.isAuthenticated(attachment)) {
+        this.sendOK(session.webSocket, event.id, false, "auth-required: authentication required to publish events");
         return;
       }
       if (!excludedRateLimitKinds.has(event.kind)) {
@@ -5887,10 +5909,14 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.sendOK(session.webSocket, event?.id || "", false, `error: ${error.message}`);
     }
   }
-  async handleReq(session, message) {
+  async handleReq(session, message, attachment) {
     const [_, subscriptionId, ...filters] = message;
     if (!subscriptionId || typeof subscriptionId !== "string" || subscriptionId === "" || subscriptionId.length > 64) {
       this.sendError(session.webSocket, "Invalid subscription ID: must be non-empty string of max 64 chars");
+      return;
+    }
+    if (AUTH_REQUIRED && !this.isAuthenticated(attachment)) {
+      this.sendClosed(session.webSocket, subscriptionId, "auth-required: authentication required to subscribe");
       return;
     }
     if (!session.reqRateLimiter.removeToken()) {
@@ -5971,6 +5997,84 @@ var _RelayWebSocket = class _RelayWebSocket {
     } else {
       this.sendClosed(session.webSocket, subscriptionId, "Subscription not found");
     }
+  }
+  // NIP-42: Handle AUTH message from client
+  async handleAuth(session, authEvent, attachment) {
+    try {
+      if (!authEvent || typeof authEvent !== "object") {
+        this.sendOK(session.webSocket, "", false, "invalid: auth event object required");
+        return;
+      }
+      if (!authEvent.id || !authEvent.pubkey || !authEvent.sig || !authEvent.created_at || authEvent.kind === void 0 || !Array.isArray(authEvent.tags) || authEvent.content === void 0) {
+        this.sendOK(session.webSocket, authEvent.id || "", false, "invalid: missing required fields");
+        return;
+      }
+      if (authEvent.kind !== 22242) {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: auth event must be kind 22242");
+        return;
+      }
+      const isValidSignature = await verifyEventSignature(authEvent);
+      if (!isValidSignature) {
+        console.error(`Auth signature verification failed for event ${authEvent.id}`);
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: signature verification failed");
+        return;
+      }
+      const now = Math.floor(Date.now() / 1e3);
+      const timeDiff = Math.abs(now - authEvent.created_at);
+      if (timeDiff > 600) {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: auth event created_at is too far from current time");
+        return;
+      }
+      const challengeTag = authEvent.tags.find((tag) => tag[0] === "challenge");
+      if (!challengeTag || !challengeTag[1]) {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: missing challenge tag");
+        return;
+      }
+      if (challengeTag[1] !== attachment.authChallenge) {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: challenge mismatch");
+        return;
+      }
+      if (attachment.authChallengeCreatedAt && Date.now() - attachment.authChallengeCreatedAt > AUTH_TIMEOUT_MS) {
+        const newChallenge = this.generateAuthChallenge();
+        attachment.authChallenge = newChallenge;
+        attachment.authChallengeCreatedAt = Date.now();
+        this.sendAuth(session.webSocket, newChallenge);
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: challenge expired, new challenge sent");
+        return;
+      }
+      const relayTag = authEvent.tags.find((tag) => tag[0] === "relay");
+      if (!relayTag || !relayTag[1]) {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: missing relay tag");
+        return;
+      }
+      try {
+        const authRelayUrl = new URL(relayTag[1]);
+        const sessionHost = session.host.toLowerCase();
+        const authHost = authRelayUrl.host.toLowerCase();
+        if (authHost !== sessionHost) {
+          this.sendOK(session.webSocket, authEvent.id, false, "invalid: relay URL mismatch");
+          return;
+        }
+      } catch {
+        this.sendOK(session.webSocket, authEvent.id, false, "invalid: malformed relay URL");
+        return;
+      }
+      if (!attachment.authenticatedPubkeys) {
+        attachment.authenticatedPubkeys = [];
+      }
+      if (!attachment.authenticatedPubkeys.includes(authEvent.pubkey)) {
+        attachment.authenticatedPubkeys.push(authEvent.pubkey);
+      }
+      console.log(`NIP-42 Auth successful for pubkey ${authEvent.pubkey} on session ${session.id}`);
+      this.sendOK(session.webSocket, authEvent.id, true, "");
+    } catch (error) {
+      console.error("Error handling AUTH:", error);
+      this.sendOK(session.webSocket, authEvent?.id || "", false, `error: ${error.message}`);
+    }
+  }
+  // NIP-42: Check if session is authenticated (has at least one authenticated pubkey)
+  isAuthenticated(attachment) {
+    return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.length > 0);
   }
   async broadcastEvent(event) {
     await this.broadcastToLocalSessions(event);
@@ -6082,6 +6186,21 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
     }
     return true;
+  }
+  // NIP-42: Send AUTH challenge to client
+  sendAuth(ws, challenge2) {
+    try {
+      const authMessage = ["AUTH", challenge2];
+      ws.send(JSON.stringify(authMessage));
+    } catch (error) {
+      console.error("Error sending AUTH:", error);
+    }
+  }
+  // NIP-42: Generate a cryptographically secure challenge string
+  generateAuthChallenge() {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   sendOK(ws, eventId, status, message) {
     try {

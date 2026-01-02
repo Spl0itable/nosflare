@@ -1,3 +1,7 @@
+## v7.9.29 - 2026-01-02
+
+New: NIP-42 support
+
 ## v7.8.29 - 2026-01-02
 
 New: added automatic database pruning to stay under D1's 10GB storage limit
