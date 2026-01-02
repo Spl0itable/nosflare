@@ -13,17 +13,13 @@ import {
 } from './config';
 import { verifyEventSignature, hasPaidForRelay, processEvent, queryEvents } from './relay-worker';
 
-// Session attachment data structure
+// Session attachment data structure (minimal - auth state stored in session)
 interface SessionAttachment {
   sessionId: string;
   bookmark: string;
   host: string;
   doName: string;
-  hasPaid?: boolean; // Cache payment status in session
-  // NIP-42 Authentication
-  authChallenge?: string; // Current auth challenge for this session
-  authChallengeCreatedAt?: number; // Timestamp when challenge was created
-  authenticatedPubkeys?: string[]; // Pubkeys that have successfully authenticated
+  hasPaid?: boolean;
 }
 
 // Cache entry interface with access tracking
@@ -524,10 +520,24 @@ export class RelayWebSocket implements DurableObject {
     const sessionId = crypto.randomUUID();
     const host = request.headers.get('host') || url.host;
 
-    // Serialize and attach minimal session data to the WebSocket
+    // Create session object with NIP-42 auth state
+    const session: WebSocketSession = {
+      id: sessionId,
+      webSocket: server,
+      subscriptions: new Map(),
+      pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
+      reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
+      bookmark: 'first-unconstrained',
+      host,
+      challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
+      authenticatedPubkeys: new Set()
+    };
+    this.sessions.set(sessionId, session);
+
+    // Serialize minimal attachment to the WebSocket
     const attachment: SessionAttachment = {
       sessionId,
-      bookmark: 'first-unconstrained',
+      bookmark: session.bookmark,
       host,
       doName: this.doName
     };
@@ -535,6 +545,11 @@ export class RelayWebSocket implements DurableObject {
 
     // Use hibernatable WebSocket accept
     this.state.acceptWebSocket(server);
+
+    // NIP-42: Send AUTH challenge immediately if required
+    if (AUTH_REQUIRED && session.challenge) {
+      this.sendAuth(server, session.challenge);
+    }
 
     // Update activity time and schedule alarm
     this.lastActivityTime = Date.now();
@@ -570,7 +585,7 @@ export class RelayWebSocket implements DurableObject {
       // Load subscriptions from storage
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
-      // Recreate session from attachment
+      // Recreate session from attachment (after hibernation)
       session = {
         id: attachment.sessionId,
         webSocket: ws,
@@ -578,22 +593,17 @@ export class RelayWebSocket implements DurableObject {
         pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
-        host: attachment.host
+        host: attachment.host,
+        // NIP-42: Generate new challenge after hibernation (old one is lost)
+        challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
+        authenticatedPubkeys: new Set()
       };
       this.sessions.set(attachment.sessionId, session);
-    }
 
-    // NIP-42: Send AUTH challenge on first message if not already sent
-    if (AUTH_REQUIRED && !attachment.authChallenge) {
-      const challenge = this.generateAuthChallenge();
-      attachment.authChallenge = challenge;
-      attachment.authChallengeCreatedAt = Date.now();
-      attachment.authenticatedPubkeys = [];
-      console.log(`NIP-42: Generated challenge ${challenge} for session ${attachment.sessionId}`);
-      this.sendAuth(ws, challenge);
-      ws.serializeAttachment(attachment);
-    } else if (AUTH_REQUIRED) {
-      console.log(`NIP-42: Session ${attachment.sessionId} already has challenge ${attachment.authChallenge}, authenticated=${JSON.stringify(attachment.authenticatedPubkeys)}`);
+      // Send new AUTH challenge after hibernation recovery
+      if (AUTH_REQUIRED && session.challenge) {
+        this.sendAuth(ws, session.challenge);
+      }
     }
 
     try {
@@ -607,18 +617,15 @@ export class RelayWebSocket implements DurableObject {
         parsedMessage = JSON.parse(text);
       }
 
-      await this.handleMessage(session, parsedMessage, attachment);
+      await this.handleMessage(session, parsedMessage);
 
-      // Update attachment with latest session state (preserving auth data)
+      // Update attachment with latest session state
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid,
-        authChallenge: attachment.authChallenge,
-        authChallengeCreatedAt: attachment.authChallengeCreatedAt,
-        authenticatedPubkeys: attachment.authenticatedPubkeys
+        hasPaid: attachment.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -696,7 +703,7 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  private async handleMessage(session: WebSocketSession, message: any[], attachment: SessionAttachment): Promise<void> {
+  private async handleMessage(session: WebSocketSession, message: any[]): Promise<void> {
     if (!Array.isArray(message)) {
       this.sendError(session.webSocket, 'Invalid message format: expected JSON array');
       return;
@@ -707,16 +714,16 @@ export class RelayWebSocket implements DurableObject {
     try {
       switch (type) {
         case 'EVENT':
-          await this.handleEvent(session, args[0], attachment);
+          await this.handleEvent(session, args[0]);
           break;
         case 'REQ':
-          await this.handleReq(session, message, attachment);
+          await this.handleReq(session, message);
           break;
         case 'CLOSE':
           await this.handleCloseSubscription(session, args[0]);
           break;
         case 'AUTH':
-          await this.handleAuth(session, args[0], attachment);
+          await this.handleAuth(session, args[0]);
           break;
         default:
           this.sendError(session.webSocket, `Unknown message type: ${type}`);
@@ -727,7 +734,7 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  private async handleEvent(session: WebSocketSession, event: NostrEvent, attachment: SessionAttachment): Promise<void> {
+  private async handleEvent(session: WebSocketSession, event: NostrEvent): Promise<void> {
     try {
       // Validate event object
       if (!event || typeof event !== 'object') {
@@ -750,7 +757,7 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // NIP-42: Check if the event's pubkey is authenticated
-      if (AUTH_REQUIRED && !this.isPubkeyAuthenticated(attachment, event.pubkey)) {
+      if (AUTH_REQUIRED && !session.authenticatedPubkeys.has(event.pubkey)) {
         this.sendOK(session.webSocket, event.id, false, 'auth-required: authenticate to publish events');
         return;
       }
@@ -849,7 +856,7 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  private async handleReq(session: WebSocketSession, message: any[], attachment: SessionAttachment): Promise<void> {
+  private async handleReq(session: WebSocketSession, message: any[]): Promise<void> {
     const [_, subscriptionId, ...filters] = message;
 
     if (!subscriptionId || typeof subscriptionId !== 'string' || subscriptionId === '' || subscriptionId.length > 64) {
@@ -858,7 +865,7 @@ export class RelayWebSocket implements DurableObject {
     }
 
     // NIP-42: Check authentication if required
-    if (AUTH_REQUIRED && !this.isAuthenticated(attachment)) {
+    if (AUTH_REQUIRED && session.authenticatedPubkeys.size === 0) {
       this.sendClosed(session.webSocket, subscriptionId, 'auth-required: authentication required to subscribe');
       return;
     }
@@ -977,9 +984,7 @@ export class RelayWebSocket implements DurableObject {
   }
 
   // NIP-42: Handle AUTH message from client
-  private async handleAuth(session: WebSocketSession, authEvent: NostrEvent, attachment: SessionAttachment): Promise<void> {
-    console.log(`NIP-42 handleAuth: session=${session.id}, challenge=${attachment.authChallenge}, authenticatedPubkeys=${JSON.stringify(attachment.authenticatedPubkeys)}`);
-
+  private async handleAuth(session: WebSocketSession, authEvent: NostrEvent): Promise<void> {
     try {
       // Validate auth event object
       if (!authEvent || typeof authEvent !== 'object') {
@@ -1004,7 +1009,6 @@ export class RelayWebSocket implements DurableObject {
       // Verify signature
       const isValidSignature = await verifyEventSignature(authEvent);
       if (!isValidSignature) {
-        console.error(`Auth signature verification failed for event ${authEvent.id}`);
         this.sendOK(session.webSocket, authEvent.id, false, 'invalid: signature verification failed');
         return;
       }
@@ -1025,20 +1029,13 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // Verify challenge matches
-      if (challengeTag[1] !== attachment.authChallenge) {
-        console.error(`NIP-42 challenge mismatch: received="${challengeTag[1]}" vs expected="${attachment.authChallenge}"`);
-        this.sendOK(session.webSocket, authEvent.id, false, 'invalid: challenge mismatch');
+      if (!session.challenge) {
+        this.sendOK(session.webSocket, authEvent.id, false, 'invalid: no challenge was issued');
         return;
       }
 
-      // Check if challenge has expired
-      if (attachment.authChallengeCreatedAt && Date.now() - attachment.authChallengeCreatedAt > AUTH_TIMEOUT_MS) {
-        // Generate new challenge
-        const newChallenge = this.generateAuthChallenge();
-        attachment.authChallenge = newChallenge;
-        attachment.authChallengeCreatedAt = Date.now();
-        this.sendAuth(session.webSocket, newChallenge);
-        this.sendOK(session.webSocket, authEvent.id, false, 'invalid: challenge expired, new challenge sent');
+      if (challengeTag[1] !== session.challenge) {
+        this.sendOK(session.webSocket, authEvent.id, false, 'invalid: challenge mismatch');
         return;
       }
 
@@ -1052,12 +1049,10 @@ export class RelayWebSocket implements DurableObject {
       // Verify relay URL matches (check domain at minimum)
       try {
         const authRelayUrl = new URL(relayTag[1]);
-        const sessionHost = session.host.toLowerCase().replace(/:\d+$/, ''); // Remove port if present
-        const authHost = authRelayUrl.host.toLowerCase().replace(/:\d+$/, ''); // Remove port if present
+        const sessionHost = session.host.toLowerCase().replace(/:\d+$/, '');
+        const authHost = authRelayUrl.host.toLowerCase().replace(/:\d+$/, '');
 
-        // Allow matching if the hostname matches (domain name check, ignoring port)
         if (authHost !== sessionHost) {
-          console.error(`NIP-42 relay URL mismatch: auth="${authHost}" vs session="${sessionHost}"`);
           this.sendOK(session.webSocket, authEvent.id, false, `invalid: relay URL mismatch (expected ${sessionHost})`);
           return;
         }
@@ -1067,30 +1062,14 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // All checks passed - add pubkey to authenticated list
-      if (!attachment.authenticatedPubkeys) {
-        attachment.authenticatedPubkeys = [];
-      }
-      if (!attachment.authenticatedPubkeys.includes(authEvent.pubkey)) {
-        attachment.authenticatedPubkeys.push(authEvent.pubkey);
-      }
+      session.authenticatedPubkeys.add(authEvent.pubkey);
 
-      console.log(`NIP-42 Auth successful for pubkey ${authEvent.pubkey} on session ${session.id}`);
       this.sendOK(session.webSocket, authEvent.id, true, '');
 
     } catch (error: any) {
       console.error('Error handling AUTH:', error);
       this.sendOK(session.webSocket, authEvent?.id || '', false, `error: ${error.message}`);
     }
-  }
-
-  // NIP-42: Check if session has any authenticated pubkey (for REQ)
-  private isAuthenticated(attachment: SessionAttachment): boolean {
-    return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.length > 0);
-  }
-
-  // NIP-42: Check if a specific pubkey is authenticated (for EVENT publishing)
-  private isPubkeyAuthenticated(attachment: SessionAttachment, pubkey: string): boolean {
-    return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.includes(pubkey));
   }
 
   private async broadcastEvent(event: NostrEvent): Promise<void> {
@@ -1125,7 +1104,9 @@ export class RelayWebSocket implements DurableObject {
           pubkeyRateLimiter: new RateLimiter(PUBKEY_RATE_LIMIT.rate, PUBKEY_RATE_LIMIT.capacity),
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
-          host: attachment.host
+          host: attachment.host,
+          challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
+          authenticatedPubkeys: new Set()
         };
         this.sessions.set(attachment.sessionId, session);
       }

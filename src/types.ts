@@ -86,6 +86,9 @@ export interface WebSocketSession {
   reqRateLimiter: RateLimiter;
   bookmark: string;
   host: string;
+  // NIP-42 Authentication
+  challenge?: string;
+  authenticatedPubkeys: Set<string>;
 }
 
 export class RateLimiter {
@@ -134,8 +137,8 @@ export type NostrMessage =
   | ["REQ", string, ...NostrFilter[]]
   | ["CLOSE", string]
   | ["CLOSED", string, string]
-  | ["AUTH", string]
-  | ["AUTH", NostrEvent];
+  | ["AUTH", string]           // Relay sends challenge string
+  | ["AUTH", NostrEvent];      // Client sends signed auth event (kind 22242)
 
 // WebSocket event types for Cloudflare Workers
 export interface WebSocketEventMap {
