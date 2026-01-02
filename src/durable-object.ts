@@ -589,8 +589,11 @@ export class RelayWebSocket implements DurableObject {
       attachment.authChallenge = challenge;
       attachment.authChallengeCreatedAt = Date.now();
       attachment.authenticatedPubkeys = [];
+      console.log(`NIP-42: Generated challenge ${challenge} for session ${attachment.sessionId}`);
       this.sendAuth(ws, challenge);
       ws.serializeAttachment(attachment);
+    } else if (AUTH_REQUIRED) {
+      console.log(`NIP-42: Session ${attachment.sessionId} already has challenge ${attachment.authChallenge}, authenticated=${JSON.stringify(attachment.authenticatedPubkeys)}`);
     }
 
     try {
@@ -740,9 +743,15 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // NIP-42: Check authentication if required
-      if (AUTH_REQUIRED && !this.isAuthenticated(attachment)) {
-        this.sendOK(session.webSocket, event.id, false, 'auth-required: authentication required to publish events');
+      // NIP-42: Reject kind 22242 events - they are for authentication only, not publishing
+      if (event.kind === 22242) {
+        this.sendOK(session.webSocket, event.id, false, 'invalid: kind 22242 events are for authentication only');
+        return;
+      }
+
+      // NIP-42: Check if the event's pubkey is authenticated
+      if (AUTH_REQUIRED && !this.isPubkeyAuthenticated(attachment, event.pubkey)) {
+        this.sendOK(session.webSocket, event.id, false, 'auth-required: authenticate to publish events');
         return;
       }
 
@@ -969,6 +978,8 @@ export class RelayWebSocket implements DurableObject {
 
   // NIP-42: Handle AUTH message from client
   private async handleAuth(session: WebSocketSession, authEvent: NostrEvent, attachment: SessionAttachment): Promise<void> {
+    console.log(`NIP-42 handleAuth: session=${session.id}, challenge=${attachment.authChallenge}, authenticatedPubkeys=${JSON.stringify(attachment.authenticatedPubkeys)}`);
+
     try {
       // Validate auth event object
       if (!authEvent || typeof authEvent !== 'object') {
@@ -1015,6 +1026,7 @@ export class RelayWebSocket implements DurableObject {
 
       // Verify challenge matches
       if (challengeTag[1] !== attachment.authChallenge) {
+        console.error(`NIP-42 challenge mismatch: received="${challengeTag[1]}" vs expected="${attachment.authChallenge}"`);
         this.sendOK(session.webSocket, authEvent.id, false, 'invalid: challenge mismatch');
         return;
       }
@@ -1040,12 +1052,13 @@ export class RelayWebSocket implements DurableObject {
       // Verify relay URL matches (check domain at minimum)
       try {
         const authRelayUrl = new URL(relayTag[1]);
-        const sessionHost = session.host.toLowerCase();
-        const authHost = authRelayUrl.host.toLowerCase();
+        const sessionHost = session.host.toLowerCase().replace(/:\d+$/, ''); // Remove port if present
+        const authHost = authRelayUrl.host.toLowerCase().replace(/:\d+$/, ''); // Remove port if present
 
-        // Allow matching if the host matches (domain name check)
+        // Allow matching if the hostname matches (domain name check, ignoring port)
         if (authHost !== sessionHost) {
-          this.sendOK(session.webSocket, authEvent.id, false, 'invalid: relay URL mismatch');
+          console.error(`NIP-42 relay URL mismatch: auth="${authHost}" vs session="${sessionHost}"`);
+          this.sendOK(session.webSocket, authEvent.id, false, `invalid: relay URL mismatch (expected ${sessionHost})`);
           return;
         }
       } catch {
@@ -1070,9 +1083,14 @@ export class RelayWebSocket implements DurableObject {
     }
   }
 
-  // NIP-42: Check if session is authenticated (has at least one authenticated pubkey)
+  // NIP-42: Check if session has any authenticated pubkey (for REQ)
   private isAuthenticated(attachment: SessionAttachment): boolean {
     return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.length > 0);
+  }
+
+  // NIP-42: Check if a specific pubkey is authenticated (for EVENT publishing)
+  private isPubkeyAuthenticated(attachment: SessionAttachment, pubkey: string): boolean {
+    return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.includes(pubkey));
   }
 
   private async broadcastEvent(event: NostrEvent): Promise<void> {

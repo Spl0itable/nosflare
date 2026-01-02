@@ -5723,8 +5723,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       attachment.authChallenge = challenge2;
       attachment.authChallengeCreatedAt = Date.now();
       attachment.authenticatedPubkeys = [];
+      console.log(`NIP-42: Generated challenge ${challenge2} for session ${attachment.sessionId}`);
       this.sendAuth(ws, challenge2);
       ws.serializeAttachment(attachment);
+    } else if (AUTH_REQUIRED) {
+      console.log(`NIP-42: Session ${attachment.sessionId} already has challenge ${attachment.authChallenge}, authenticated=${JSON.stringify(attachment.authenticatedPubkeys)}`);
     }
     try {
       let parsedMessage;
@@ -5841,8 +5844,12 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, event.id || "", false, "invalid: missing required fields");
         return;
       }
-      if (AUTH_REQUIRED && !this.isAuthenticated(attachment)) {
-        this.sendOK(session.webSocket, event.id, false, "auth-required: authentication required to publish events");
+      if (event.kind === 22242) {
+        this.sendOK(session.webSocket, event.id, false, "invalid: kind 22242 events are for authentication only");
+        return;
+      }
+      if (AUTH_REQUIRED && !this.isPubkeyAuthenticated(attachment, event.pubkey)) {
+        this.sendOK(session.webSocket, event.id, false, "auth-required: authenticate to publish events");
         return;
       }
       if (!excludedRateLimitKinds.has(event.kind)) {
@@ -6000,6 +6007,7 @@ var _RelayWebSocket = class _RelayWebSocket {
   }
   // NIP-42: Handle AUTH message from client
   async handleAuth(session, authEvent, attachment) {
+    console.log(`NIP-42 handleAuth: session=${session.id}, challenge=${attachment.authChallenge}, authenticatedPubkeys=${JSON.stringify(attachment.authenticatedPubkeys)}`);
     try {
       if (!authEvent || typeof authEvent !== "object") {
         this.sendOK(session.webSocket, "", false, "invalid: auth event object required");
@@ -6031,6 +6039,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         return;
       }
       if (challengeTag[1] !== attachment.authChallenge) {
+        console.error(`NIP-42 challenge mismatch: received="${challengeTag[1]}" vs expected="${attachment.authChallenge}"`);
         this.sendOK(session.webSocket, authEvent.id, false, "invalid: challenge mismatch");
         return;
       }
@@ -6049,10 +6058,11 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
       try {
         const authRelayUrl = new URL(relayTag[1]);
-        const sessionHost = session.host.toLowerCase();
-        const authHost = authRelayUrl.host.toLowerCase();
+        const sessionHost = session.host.toLowerCase().replace(/:\d+$/, "");
+        const authHost = authRelayUrl.host.toLowerCase().replace(/:\d+$/, "");
         if (authHost !== sessionHost) {
-          this.sendOK(session.webSocket, authEvent.id, false, "invalid: relay URL mismatch");
+          console.error(`NIP-42 relay URL mismatch: auth="${authHost}" vs session="${sessionHost}"`);
+          this.sendOK(session.webSocket, authEvent.id, false, `invalid: relay URL mismatch (expected ${sessionHost})`);
           return;
         }
       } catch {
@@ -6072,9 +6082,13 @@ var _RelayWebSocket = class _RelayWebSocket {
       this.sendOK(session.webSocket, authEvent?.id || "", false, `error: ${error.message}`);
     }
   }
-  // NIP-42: Check if session is authenticated (has at least one authenticated pubkey)
+  // NIP-42: Check if session has any authenticated pubkey (for REQ)
   isAuthenticated(attachment) {
     return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.length > 0);
+  }
+  // NIP-42: Check if a specific pubkey is authenticated (for EVENT publishing)
+  isPubkeyAuthenticated(attachment, pubkey) {
+    return !!(attachment.authenticatedPubkeys && attachment.authenticatedPubkeys.includes(pubkey));
   }
   async broadcastEvent(event) {
     await this.broadcastToLocalSessions(event);
