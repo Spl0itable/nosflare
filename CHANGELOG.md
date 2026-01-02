@@ -1,3 +1,7 @@
+## v7.9.31 - 2026-01-02
+
+Hotfix: tag insertion issue
+
 ## v7.9.30 - 2026-01-02
 
 Hotfix: removed support for Queue

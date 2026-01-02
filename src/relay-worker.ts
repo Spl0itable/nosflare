@@ -61,7 +61,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         pubkey TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         kind INTEGER NOT NULL,
-        tags TEXT,
+        tags TEXT NOT NULL,
         content TEXT NOT NULL,
         sig TEXT NOT NULL,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now')),
@@ -112,15 +112,12 @@ async function initializeDatabase(db: D1Database): Promise<void> {
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
-        tag_index INTEGER DEFAULT 0,
-        tag_rest TEXT,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_event_index ON tags(event_id, tag_index)`,
 
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event_created ON tags(tag_name, tag_value, event_id)`,
 
@@ -273,86 +270,8 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       console.log('Schema v6 migration completed');
     }
 
-    if (currentVersion < 7) {
-      console.log('Migrating to schema version 7: expanding tags table for full tag storage...');
-
-      // Add new columns to tags table for full tag storage
-      await session.prepare(`
-        ALTER TABLE tags ADD COLUMN tag_index INTEGER DEFAULT 0
-      `).run().catch(() => { /* Column may already exist */ });
-
-      await session.prepare(`
-        ALTER TABLE tags ADD COLUMN tag_rest TEXT
-      `).run().catch(() => { /* Column may already exist */ });
-
-      // Create index for reconstructing tags in order
-      await session.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_tags_event_index ON tags(event_id, tag_index)
-      `).run();
-
-      // Migrate existing events: populate tag_rest from events.tags JSON
-      // This extracts the additional values (index 2+) for each tag
-      console.log('Populating tag_rest from existing events.tags JSON...');
-
-      // Process in batches to avoid timeout
-      const batchSize = 1000;
-      let offset = 0;
-      let processed = 0;
-
-      while (true) {
-        const events = await session.prepare(`
-          SELECT id, tags FROM events
-          WHERE tags IS NOT NULL AND tags != '[]'
-          LIMIT ? OFFSET ?
-        `).bind(batchSize, offset).all();
-
-        if (!events.results || events.results.length === 0) break;
-
-        for (const event of events.results) {
-          try {
-            const tags = JSON.parse(event.tags as string) as string[][];
-            const updates: D1PreparedStatement[] = [];
-
-            for (let i = 0; i < tags.length; i++) {
-              const tag = tags[i];
-              if (tag.length > 2) {
-                // Has additional values beyond name and first value
-                const tagRest = JSON.stringify(tag.slice(2));
-                updates.push(
-                  session.prepare(`
-                    UPDATE tags SET tag_index = ?, tag_rest = ?
-                    WHERE event_id = ? AND tag_name = ? AND tag_value = ? AND tag_index = 0
-                  `).bind(i, tagRest, event.id, tag[0], tag[1] || '')
-                );
-              } else {
-                // Just update the index
-                updates.push(
-                  session.prepare(`
-                    UPDATE tags SET tag_index = ?
-                    WHERE event_id = ? AND tag_name = ? AND tag_value = ? AND tag_index = 0
-                  `).bind(i, event.id, tag[0], tag[1] || '')
-                );
-              }
-            }
-
-            if (updates.length > 0) {
-              await session.batch(updates);
-            }
-          } catch (e) {
-            console.error(`Failed to migrate tags for event ${event.id}:`, e);
-          }
-        }
-
-        processed += events.results.length;
-        offset += batchSize;
-        console.log(`Migrated ${processed} events...`);
-      }
-
-      console.log('Schema v7 migration completed');
-    }
-
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '7')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '6')"
     ).run();
 
     await session.prepare(`
@@ -441,99 +360,6 @@ function hexToBytes(hexString: string): Uint8Array {
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-// Reconstruct tags from tags table for events where tags JSON column is NULL
-async function reconstructTagsFromTable(eventIds: string[], session: D1DatabaseSession): Promise<Map<string, string[][]>> {
-  if (eventIds.length === 0) return new Map();
-
-  const tagMap = new Map<string, string[][]>();
-
-  // Initialize empty arrays for all event IDs
-  for (const id of eventIds) {
-    tagMap.set(id, []);
-  }
-
-  // Query tags in chunks to avoid parameter limits
-  for (let i = 0; i < eventIds.length; i += CHUNK_SIZE) {
-    const chunk = eventIds.slice(i, i + CHUNK_SIZE);
-    const placeholders = chunk.map(() => '?').join(',');
-
-    const result = await session.prepare(`
-      SELECT event_id, tag_name, tag_value, tag_index, tag_rest
-      FROM tags
-      WHERE event_id IN (${placeholders})
-      ORDER BY event_id, tag_index
-    `).bind(...chunk).all();
-
-    if (result.results) {
-      for (const row of result.results as any[]) {
-        const eventTags = tagMap.get(row.event_id);
-        if (eventTags) {
-          // Reconstruct the full tag array
-          const tag: string[] = [row.tag_name, row.tag_value];
-          if (row.tag_rest) {
-            try {
-              const rest = JSON.parse(row.tag_rest);
-              if (Array.isArray(rest)) {
-                tag.push(...rest);
-              }
-            } catch (e) {
-              // Ignore parse errors
-            }
-          }
-          eventTags.push(tag);
-        }
-      }
-    }
-  }
-
-  return tagMap;
-}
-
-// Parse tags from row, reconstructing from provided tagMap if necessary
-function parseTagsFromRow(row: any, tagMap?: Map<string, string[][]>): string[][] {
-  // If tags JSON exists, use it (legacy data)
-  if (row.tags != null) {
-    try {
-      return JSON.parse(row.tags as string);
-    } catch (e) {
-      console.error(`Failed to parse tags JSON for event ${row.id}:`, e);
-      return [];
-    }
-  }
-
-  // Otherwise use reconstructed tags from tagMap
-  if (tagMap && tagMap.has(row.id)) {
-    return tagMap.get(row.id) || [];
-  }
-
-  return [];
-}
-
-// Build NostrEvent objects from database rows, handling tag reconstruction for events with NULL tags
-async function buildEventsFromRows(rows: any[], session: D1DatabaseSession): Promise<NostrEvent[]> {
-  if (rows.length === 0) return [];
-
-  // Identify rows that need tag reconstruction (tags column is NULL)
-  const needsReconstruction = rows.filter(row => row.tags == null);
-  const eventIdsForReconstruction = needsReconstruction.map(row => row.id as string);
-
-  // Fetch reconstructed tags if needed
-  const tagMap = eventIdsForReconstruction.length > 0
-    ? await reconstructTagsFromTable(eventIdsForReconstruction, session)
-    : new Map<string, string[][]>();
-
-  // Build events
-  return rows.map(row => ({
-    id: row.id as string,
-    pubkey: row.pubkey as string,
-    created_at: row.created_at as number,
-    kind: row.kind as number,
-    tags: parseTagsFromRow(row, tagMap),
-    content: row.content as string,
-    sig: row.sig as string
-  }));
 }
 
 // Content hashing for anti-spam
@@ -860,7 +686,7 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     }
 
     // Process tags and extract common tag values
-    const tagInserts: Array<{ name: string; value: string; index: number; rest: string[] | null }> = [];
+    const tagInserts: Array<{ name: string; value: string }> = [];
     let tagP: string | null = null;
     let tagE: string | null = null;
     let tagA: string | null = null;
@@ -871,14 +697,11 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     let tagS: string | null = null;
     let tagU: string | null = null;
 
-    for (let i = 0; i < event.tags.length; i++) {
-      const tag = event.tags[i];
+    for (const tag of event.tags) {
       if (tag[0]) {
         tagInserts.push({
           name: tag[0],
-          value: tag[1] || '',
-          index: i,
-          rest: tag.length > 2 ? tag.slice(2) : null
+          value: tag[1] || ''
         });
 
         // Capture first occurrence of common tags
@@ -903,13 +726,14 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     // Insert the main event
     const insertResult = await session.prepare(`
       INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
-      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO NOTHING
     `).bind(
       event.id,
       event.pubkey,
       event.created_at,
       event.kind,
+      JSON.stringify(event.tags),
       event.content,
       event.sig,
       tagP,
@@ -938,9 +762,9 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
         const tagChunk = tagInserts.slice(j, j + 50);
         const tagBatch = tagChunk.map(t =>
           session.prepare(`
-            INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
-            VALUES (?, ?, ?, ?, ?)
-          `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
+            INSERT INTO tags (event_id, tag_name, tag_value)
+            VALUES (?, ?, ?)
+          `).bind(event.id, t.name, t.value)
         );
 
         if (tagBatch.length > 0) {
@@ -1675,8 +1499,16 @@ async function queryDatabaseChunked(filter: NostrFilter, bookmark: string, env: 
     }
   }
 
-  // Build events from collected rows, handling tag reconstruction
-  const events = await buildEventsFromRows(Array.from(allRows.values()), session);
+  // Build events from collected rows
+  const events = Array.from(allRows.values()).map(row => ({
+    id: row.id as string,
+    pubkey: row.pubkey as string,
+    created_at: row.created_at as number,
+    kind: row.kind as number,
+    tags: JSON.parse(row.tags as string),
+    content: row.content as string,
+    sig: row.sig as string
+  }));
   console.log(`Found ${events.length} events (chunked)`);
 
   return { events };
@@ -1797,9 +1629,17 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
             }
           }
 
-          // Build events from collected rows, handling tag reconstruction
-          const builtEvents = await buildEventsFromRows(allRows, session);
-          for (const event of builtEvents) {
+          // Build events from collected rows
+          for (const row of allRows) {
+            const event: NostrEvent = {
+              id: row.id as string,
+              pubkey: row.pubkey as string,
+              created_at: row.created_at as number,
+              kind: row.kind as number,
+              tags: JSON.parse(row.tags as string),
+              content: row.content as string,
+              sig: row.sig as string
+            };
             eventSet.set(event.id, event);
           }
         } catch (error: any) {
@@ -2472,6 +2312,8 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   return { stub, doName: fallback.name };
 }
 
+// Database pruning helper functions
+
 // Get the current database size in bytes using SQLite pragmas
 async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number> {
   try {
@@ -2489,6 +2331,7 @@ async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number>
 }
 
 // Prune old events to reduce database size
+// Returns the number of events deleted
 async function pruneOldEvents(session: D1DatabaseSession, targetSizeBytes: number): Promise<{ eventsDeleted: number; finalSizeBytes: number }> {
   let totalEventsDeleted = 0;
   let currentSize = await getDatabaseSizeBytes(session);

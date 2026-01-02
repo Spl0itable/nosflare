@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.30",
+  version: "7.9.31",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2955,7 +2955,7 @@ async function initializeDatabase(db) {
         pubkey TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         kind INTEGER NOT NULL,
-        tags TEXT,
+        tags TEXT NOT NULL,
         content TEXT NOT NULL,
         sig TEXT NOT NULL,
         created_timestamp INTEGER DEFAULT (strftime('%s', 'now')),
@@ -3002,15 +3002,12 @@ async function initializeDatabase(db) {
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
-        tag_index INTEGER DEFAULT 0,
-        tag_rest TEXT,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_event_index ON tags(event_id, tag_index)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event_created ON tags(tag_name, tag_value, event_id)`,
       `CREATE TABLE IF NOT EXISTS event_tags_cache (
         event_id TEXT NOT NULL,
@@ -3144,69 +3141,8 @@ async function initializeDatabase(db) {
       `).run();
       console.log("Schema v6 migration completed");
     }
-    if (currentVersion < 7) {
-      console.log("Migrating to schema version 7: expanding tags table for full tag storage...");
-      await session.prepare(`
-        ALTER TABLE tags ADD COLUMN tag_index INTEGER DEFAULT 0
-      `).run().catch(() => {
-      });
-      await session.prepare(`
-        ALTER TABLE tags ADD COLUMN tag_rest TEXT
-      `).run().catch(() => {
-      });
-      await session.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_tags_event_index ON tags(event_id, tag_index)
-      `).run();
-      console.log("Populating tag_rest from existing events.tags JSON...");
-      const batchSize = 1e3;
-      let offset = 0;
-      let processed = 0;
-      while (true) {
-        const events = await session.prepare(`
-          SELECT id, tags FROM events
-          WHERE tags IS NOT NULL AND tags != '[]'
-          LIMIT ? OFFSET ?
-        `).bind(batchSize, offset).all();
-        if (!events.results || events.results.length === 0)
-          break;
-        for (const event of events.results) {
-          try {
-            const tags = JSON.parse(event.tags);
-            const updates = [];
-            for (let i = 0; i < tags.length; i++) {
-              const tag = tags[i];
-              if (tag.length > 2) {
-                const tagRest = JSON.stringify(tag.slice(2));
-                updates.push(
-                  session.prepare(`
-                    UPDATE tags SET tag_index = ?, tag_rest = ?
-                    WHERE event_id = ? AND tag_name = ? AND tag_value = ? AND tag_index = 0
-                  `).bind(i, tagRest, event.id, tag[0], tag[1] || "")
-                );
-              } else {
-                updates.push(
-                  session.prepare(`
-                    UPDATE tags SET tag_index = ?
-                    WHERE event_id = ? AND tag_name = ? AND tag_value = ? AND tag_index = 0
-                  `).bind(i, event.id, tag[0], tag[1] || "")
-                );
-              }
-            }
-            if (updates.length > 0) {
-              await session.batch(updates);
-            }
-          } catch (e) {
-            console.error(`Failed to migrate tags for event ${event.id}:`, e);
-          }
-        }
-        processed += events.results.length;
-        offset += batchSize;
-        console.log(`Migrated ${processed} events...`);
-      }
-      console.log("Schema v7 migration completed");
-    }
     await session.prepare(
-      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '7')"
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '6')"
     ).run();
     await session.prepare(`
       INSERT OR IGNORE INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
@@ -3291,76 +3227,6 @@ function bytesToHex2(bytes) {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 __name(bytesToHex2, "bytesToHex");
-async function reconstructTagsFromTable(eventIds, session) {
-  if (eventIds.length === 0)
-    return /* @__PURE__ */ new Map();
-  const tagMap = /* @__PURE__ */ new Map();
-  for (const id of eventIds) {
-    tagMap.set(id, []);
-  }
-  for (let i = 0; i < eventIds.length; i += CHUNK_SIZE) {
-    const chunk = eventIds.slice(i, i + CHUNK_SIZE);
-    const placeholders = chunk.map(() => "?").join(",");
-    const result = await session.prepare(`
-      SELECT event_id, tag_name, tag_value, tag_index, tag_rest
-      FROM tags
-      WHERE event_id IN (${placeholders})
-      ORDER BY event_id, tag_index
-    `).bind(...chunk).all();
-    if (result.results) {
-      for (const row of result.results) {
-        const eventTags = tagMap.get(row.event_id);
-        if (eventTags) {
-          const tag = [row.tag_name, row.tag_value];
-          if (row.tag_rest) {
-            try {
-              const rest = JSON.parse(row.tag_rest);
-              if (Array.isArray(rest)) {
-                tag.push(...rest);
-              }
-            } catch (e) {
-            }
-          }
-          eventTags.push(tag);
-        }
-      }
-    }
-  }
-  return tagMap;
-}
-__name(reconstructTagsFromTable, "reconstructTagsFromTable");
-function parseTagsFromRow(row, tagMap) {
-  if (row.tags != null) {
-    try {
-      return JSON.parse(row.tags);
-    } catch (e) {
-      console.error(`Failed to parse tags JSON for event ${row.id}:`, e);
-      return [];
-    }
-  }
-  if (tagMap && tagMap.has(row.id)) {
-    return tagMap.get(row.id) || [];
-  }
-  return [];
-}
-__name(parseTagsFromRow, "parseTagsFromRow");
-async function buildEventsFromRows(rows, session) {
-  if (rows.length === 0)
-    return [];
-  const needsReconstruction = rows.filter((row) => row.tags == null);
-  const eventIdsForReconstruction = needsReconstruction.map((row) => row.id);
-  const tagMap = eventIdsForReconstruction.length > 0 ? await reconstructTagsFromTable(eventIdsForReconstruction, session) : /* @__PURE__ */ new Map();
-  return rows.map((row) => ({
-    id: row.id,
-    pubkey: row.pubkey,
-    created_at: row.created_at,
-    kind: row.kind,
-    tags: parseTagsFromRow(row, tagMap),
-    content: row.content,
-    sig: row.sig
-  }));
-}
-__name(buildEventsFromRows, "buildEventsFromRows");
 async function hashContent(event) {
   const contentToHash = enableGlobalDuplicateCheck2 ? JSON.stringify({ kind: event.kind, tags: event.tags, content: event.content }) : JSON.stringify({ pubkey: event.pubkey, kind: event.kind, tags: event.tags, content: event.content });
   const buffer = new TextEncoder().encode(contentToHash);
@@ -3616,14 +3482,11 @@ async function saveEventToDatabase(event, env) {
     let tagL = null;
     let tagS = null;
     let tagU = null;
-    for (let i = 0; i < event.tags.length; i++) {
-      const tag = event.tags[i];
+    for (const tag of event.tags) {
       if (tag[0]) {
         tagInserts.push({
           name: tag[0],
-          value: tag[1] || "",
-          index: i,
-          rest: tag.length > 2 ? tag.slice(2) : null
+          value: tag[1] || ""
         });
         if (tag[0] === "p" && !tagP)
           tagP = tag[1];
@@ -3651,13 +3514,14 @@ async function saveEventToDatabase(event, env) {
     const contentPreview = event.content.substring(0, 100);
     const insertResult = await session.prepare(`
       INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
-      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO NOTHING
     `).bind(
       event.id,
       event.pubkey,
       event.created_at,
       event.kind,
+      JSON.stringify(event.tags),
       event.content,
       event.sig,
       tagP,
@@ -3682,9 +3546,9 @@ async function saveEventToDatabase(event, env) {
         const tagChunk = tagInserts.slice(j, j + 50);
         const tagBatch = tagChunk.map(
           (t) => session.prepare(`
-            INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
-            VALUES (?, ?, ?, ?, ?)
-          `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
+            INSERT INTO tags (event_id, tag_name, tag_value)
+            VALUES (?, ?, ?)
+          `).bind(event.id, t.name, t.value)
         );
         if (tagBatch.length > 0) {
           await session.batch(tagBatch);
@@ -4247,7 +4111,15 @@ async function queryDatabaseChunked(filter, bookmark, env) {
       console.error(`Error in query: ${error}`);
     }
   }
-  const events = await buildEventsFromRows(Array.from(allRows.values()), session);
+  const events = Array.from(allRows.values()).map((row) => ({
+    id: row.id,
+    pubkey: row.pubkey,
+    created_at: row.created_at,
+    kind: row.kind,
+    tags: JSON.parse(row.tags),
+    content: row.content,
+    sig: row.sig
+  }));
   console.log(`Found ${events.length} events (chunked)`);
   return { events };
 }
@@ -4336,8 +4208,16 @@ async function queryEvents(filters, bookmark, env) {
               console.error(`Batch query ${i} failed:`, result.error);
             }
           }
-          const builtEvents = await buildEventsFromRows(allRows, session);
-          for (const event of builtEvents) {
+          for (const row of allRows) {
+            const event = {
+              id: row.id,
+              pubkey: row.pubkey,
+              created_at: row.created_at,
+              kind: row.kind,
+              tags: JSON.parse(row.tags),
+              content: row.content,
+              sig: row.sig
+            };
             eventSet.set(event.id, event);
           }
         } catch (error) {
