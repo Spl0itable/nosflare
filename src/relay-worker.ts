@@ -1,5 +1,5 @@
 import { schnorr } from "@noble/curves/secp256k1";
-import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response, PendingEventMetadata } from './types';
+import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';
 
@@ -816,8 +816,8 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
       return await processDeletionEvent(event, env);
     }
 
-    // Queue event for processing
-    return await queueEvent(event, env);
+    // Save event directly to database
+    return await saveEventToDatabase(event, env);
 
   } catch (error: any) {
     console.error(`Error processing event: ${error.message}`);
@@ -825,8 +825,8 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
   }
 }
 
-// Queue event for processing
-async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
+// Save event directly to D1 database
+async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ success: boolean; message: string }> {
   try {
     // Check worker cache for duplicate event ID
     const cache = caches.default;
@@ -836,16 +836,18 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
       return { success: false, message: "duplicate: event already exists" };
     }
 
-    // Check D1 for duplicate event ID
     const session = env.RELAY_DATABASE.withSession('first-primary');
+
+    // Check D1 for duplicate event ID
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists" };
     }
 
     // Check for duplicate content (only if anti-spam is enabled)
+    let contentHash: string | null = null;
     if (shouldCheckForDuplicates(event.kind)) {
-      const contentHash = await hashContent(event);
+      contentHash = await hashContent(event);
 
       // Check D1 for existing content hash
       const duplicateContent = enableGlobalDuplicateCheck
@@ -857,9 +859,17 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
       }
     }
 
-    // Process tags and extract common tag values for cache
+    // Process tags and extract common tag values
     const tagInserts: Array<{ name: string; value: string; index: number; rest: string[] | null }> = [];
-    let tagP = null, tagE = null, tagA = null;
+    let tagP: string | null = null;
+    let tagE: string | null = null;
+    let tagA: string | null = null;
+    let tagT: string | null = null;
+    let tagD: string | null = null;
+    let tagR: string | null = null;
+    let tagL: string | null = null;
+    let tagS: string | null = null;
+    let tagU: string | null = null;
 
     for (let i = 0; i < event.tags.length; i++) {
       const tag = event.tags[i];
@@ -871,31 +881,114 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
           rest: tag.length > 2 ? tag.slice(2) : null
         });
 
-        // Capture common tags for cache
+        // Capture first occurrence of common tags
         if (tag[0] === 'p' && !tagP) tagP = tag[1];
         if (tag[0] === 'e' && !tagE) tagE = tag[1];
         if (tag[0] === 'a' && !tagA) tagA = tag[1];
+        if (tag[0] === 't' && !tagT) tagT = tag[1];
+        if (tag[0] === 'd' && !tagD) tagD = tag[1];
+        if (tag[0] === 'r' && !tagR) tagR = tag[1];
+        if (tag[0] === 'L' && !tagL) tagL = tag[1];
+        if (tag[0] === 's' && !tagS) tagS = tag[1];
+        if (tag[0] === 'u' && !tagU) tagU = tag[1];
       }
     }
 
-    // Create content hash if needed
-    const contentHash = shouldCheckForDuplicates(event.kind) ? await hashContent(event) : null;
+    // Extract thread metadata
+    const eTags = tagInserts.filter(t => t.name === 'e').map(t => t.value);
+    const replyToEventId = eTags.length > 0 ? eTags[0] : null;
+    const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null;
+    const contentPreview = event.content.substring(0, 100);
 
-    // Create metadata structure
-    const metadata: PendingEventMetadata = {
-      event,
-      timestamp: Date.now(),
-      tags: tagInserts,
-      eventTagsCache: {
-        tag_p: tagP,
-        tag_e: tagE,
-        tag_a: tagA,
-      },
-      contentHash,
-    };
+    // Insert the main event
+    const insertResult = await session.prepare(`
+      INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO NOTHING
+    `).bind(
+      event.id,
+      event.pubkey,
+      event.created_at,
+      event.kind,
+      event.content,
+      event.sig,
+      tagP,
+      tagE,
+      tagA,
+      tagT,
+      tagD,
+      tagR,
+      tagL,
+      tagS,
+      tagU,
+      replyToEventId,
+      rootEventId,
+      contentPreview
+    ).run();
 
-    // Send event to queue for immediate batch processing
-    await env.EVENT_QUEUE.send(metadata);
+    // Check if the event was actually inserted (not a duplicate that slipped through)
+    if (insertResult.meta.changes === 0) {
+      console.log(`Event ${event.id} already exists in database (race condition duplicate)`);
+      return { success: false, message: "duplicate: event already exists" };
+    }
+
+    // Only insert tags if the event was successfully inserted
+    if (tagInserts.length > 0) {
+      for (let j = 0; j < tagInserts.length; j += 50) {
+        const tagChunk = tagInserts.slice(j, j + 50);
+        const tagBatch = tagChunk.map(t =>
+          session.prepare(`
+            INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
+        );
+
+        if (tagBatch.length > 0) {
+          await session.batch(tagBatch);
+        }
+      }
+    }
+
+    // Update event tags cache for common tags (legacy single-value cache)
+    if (tagP || tagE || tagA) {
+      await session.prepare(`
+        INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          tag_p = excluded.tag_p,
+          tag_e = excluded.tag_e,
+          tag_a = excluded.tag_a
+      `).bind(
+        event.id,
+        event.pubkey,
+        event.kind,
+        event.created_at,
+        tagP,
+        tagE,
+        tagA
+      ).run();
+    }
+
+    // Insert ALL p/e/a/t/d/r/L/s/u tags into multi-value cache
+    const cacheableTags = tagInserts.filter(t => ['p', 'e', 'a', 't', 'd', 'r', 'L', 's', 'u'].includes(t.name));
+    if (cacheableTags.length > 0) {
+      const cacheBatch = cacheableTags.map(t =>
+        session.prepare(`
+          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+      );
+      await session.batch(cacheBatch);
+    }
+
+    // Insert content hash if present
+    if (contentHash) {
+      await session.prepare(`
+        INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(hash) DO NOTHING
+      `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
+    }
 
     // Cache the event ID in worker cache to prevent duplicates
     await cache.put(cacheKey, new Response('cached', {
@@ -904,13 +997,13 @@ async function queueEvent(event: NostrEvent, env: Env): Promise<{ success: boole
       }
     }));
 
-    console.log(`Event ${event.id} sent to queue for processing.`);
-    return { success: true, message: "Event received successfully for processing" };
+    console.log(`Event ${event.id} saved directly to database`);
+    return { success: true, message: "Event saved successfully" };
 
   } catch (error: any) {
-    console.error(`Error queueing event: ${error.message}`);
-    console.error(`Event details: ID=${event.id}, Tags count=${event.tags.length}`);
-    return { success: false, message: "error: could not queue event for processing" };
+    console.error(`Error saving event to database: ${error.message}`);
+    console.error(`Event details: ID=${event.id}, Kind=${event.kind}, Tags count=${event.tags.length}`);
+    return { success: false, message: `error: ${error.message}` };
   }
 }
 
@@ -982,7 +1075,7 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
   }
 
   // Save the deletion event itself
-  const saveResult = await queueEvent(event, env);
+  const saveResult = await saveEventToDatabase(event, env);
 
   if (errors.length > 0) {
     return { success: false, message: errors[0] };
@@ -1733,166 +1826,6 @@ async function queryEvents(filters: NostrFilter[], bookmark: string, env: Env): 
   }
 }
 
-// Process events from queue to D1 (primary processing path)
-async function processEventsFromQueue(batch: MessageBatch<PendingEventMetadata>, env: Env): Promise<void> {
-  console.log(`Processing queue batch with ${batch.messages.length} events`);
-
-  const session = env.RELAY_DATABASE.withSession('first-primary');
-
-  // Process all events in parallel using Promise.allSettled
-  const results = await Promise.allSettled(
-    batch.messages.map(async (message) => {
-      const metadata = message.body;
-      const event = metadata.event;
-
-      try {
-        // Insert the main event
-        // Extract first value for each common tag type for direct storage
-        const tagP = metadata.tags.find(t => t.name === 'p')?.value || null;
-        const tagE = metadata.tags.find(t => t.name === 'e')?.value || null;
-        const tagA = metadata.tags.find(t => t.name === 'a')?.value || null;
-        const tagT = metadata.tags.find(t => t.name === 't')?.value || null;
-        const tagD = metadata.tags.find(t => t.name === 'd')?.value || null;
-        const tagR = metadata.tags.find(t => t.name === 'r')?.value || null;
-        const tagL = metadata.tags.find(t => t.name === 'L')?.value || null;
-        const tagS = metadata.tags.find(t => t.name === 's')?.value || null;
-        const tagU = metadata.tags.find(t => t.name === 'u')?.value || null;
-
-        // Extract thread metadata
-        const eTags = metadata.tags.filter(t => t.name === 'e').map(t => t.value);
-        const replyToEventId = eTags.length > 0 ? eTags[0] : null; // First #e is reply-to
-        const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null; // Last #e is root
-        const contentPreview = event.content.substring(0, 100);
-
-        // Insert event without the tags JSON column (tags stored in tags table)
-        await session.prepare(`
-          INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
-          VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO NOTHING
-        `).bind(
-          event.id,
-          event.pubkey,
-          event.created_at,
-          event.kind,
-          event.content,
-          event.sig,
-          tagP,
-          tagE,
-          tagA,
-          tagT,
-          tagD,
-          tagR,
-          tagL,
-          tagS,
-          tagU,
-          replyToEventId,
-          rootEventId,
-          contentPreview
-        ).run();
-
-        // Insert tags in chunks with full tag data (index and rest elements)
-        if (metadata.tags.length > 0) {
-          for (let j = 0; j < metadata.tags.length; j += 50) {
-            const tagChunk = metadata.tags.slice(j, j + 50);
-            const tagBatch = tagChunk.map(t =>
-              session.prepare(`
-                INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
-                VALUES (?, ?, ?, ?, ?)
-              `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
-            );
-
-            if (tagBatch.length > 0) {
-              await session.batch(tagBatch);
-            }
-          }
-        }
-
-        // Update event tags cache for common tags (legacy single-value cache)
-        if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
-          await session.prepare(`
-            INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(event_id) DO UPDATE SET
-              tag_p = excluded.tag_p,
-              tag_e = excluded.tag_e,
-              tag_a = excluded.tag_a
-          `).bind(
-            event.id,
-            event.pubkey,
-            event.kind,
-            event.created_at,
-            metadata.eventTagsCache.tag_p,
-            metadata.eventTagsCache.tag_e,
-            metadata.eventTagsCache.tag_a
-          ).run();
-        }
-
-        // Insert ALL p/e/a/t/d/r/L/s/u tags into multi-value cache
-        const cacheableTags = metadata.tags.filter(t => ['p', 'e', 'a', 't', 'd', 'r', 'L', 's', 'u'].includes(t.name));
-        if (cacheableTags.length > 0) {
-          const cacheBatch = cacheableTags.map(t =>
-            session.prepare(`
-              INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-              VALUES (?, ?, ?, ?, ?, ?)
-            `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-          );
-          await session.batch(cacheBatch);
-        }
-
-        // Insert content hash if present
-        if (metadata.contentHash) {
-          await session.prepare(`
-            INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(hash) DO NOTHING
-          `).bind(metadata.contentHash, event.id, event.pubkey, event.created_at).run();
-        }
-
-        console.log(`Successfully processed event ${event.id} from queue`);
-
-        // Acknowledge successful processing
-        message.ack();
-
-        return { success: true, eventId: event.id };
-
-      } catch (error: any) {
-        console.error(`Failed to process event ${event.id} from queue:`, {
-          error: error.message,
-          stack: error.stack,
-          eventKind: event.kind,
-          eventPubkey: event.pubkey,
-          tagCount: metadata.tags.length,
-          hasContentHash: !!metadata.contentHash
-        });
-
-        // Message will be retried automatically by queue
-        message.retry();
-
-        return { success: false, eventId: event.id, error: error.message };
-      }
-    })
-  );
-
-  // Collect results
-  const processedEventIds: string[] = [];
-  const failedEvents: Array<{ eventId: string; error: string }> = [];
-
-  results.forEach((result) => {
-    if (result.status === 'fulfilled' && result.value.success) {
-      processedEventIds.push(result.value.eventId);
-    } else if (result.status === 'fulfilled' && !result.value.success) {
-      failedEvents.push({ eventId: result.value.eventId, error: result.value.error });
-    } else if (result.status === 'rejected') {
-      console.error('Unexpected promise rejection in queue processing:', result.reason);
-    }
-  });
-
-  console.log(`Queue batch processed: ${processedEventIds.length} succeeded, ${failedEvents.length} failed/retrying`);
-  if (failedEvents.length > 0) {
-    console.log('Failed events:', failedEvents);
-  }
-}
-
 function handleRelayInfoRequest(request: Request): Response {
   const responseInfo = { ...relayInfo };
 
@@ -2539,8 +2472,6 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
   return { stub, doName: fallback.name };
 }
 
-// Database pruning helper functions
-
 // Get the current database size in bytes using SQLite pragmas
 async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number> {
   try {
@@ -2558,7 +2489,6 @@ async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number>
 }
 
 // Prune old events to reduce database size
-// Returns the number of events deleted
 async function pruneOldEvents(session: D1DatabaseSession, targetSizeBytes: number): Promise<{ eventsDeleted: number; finalSizeBytes: number }> {
   let totalEventsDeleted = 0;
   let currentSize = await getDatabaseSizeBytes(session);
@@ -2694,15 +2624,6 @@ export default {
     } catch (error) {
       console.error("Error in fetch handler:", error);
       return new Response("Internal Server Error", { status: 500 });
-    }
-  },
-
-  // Queue consumer for processing events to D1
-  async queue(batch: MessageBatch<PendingEventMetadata>, env: Env, ctx: ExecutionContext): Promise<void> {
-    try {
-      await processEventsFromQueue(batch, env);
-    } catch (error) {
-      console.error('Queue processing failed:', error);
     }
   },
 

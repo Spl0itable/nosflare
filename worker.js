@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.29",
+  version: "7.9.30",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3578,14 +3578,14 @@ async function processEvent(event, sessionId, env) {
     if (event.kind === 5) {
       return await processDeletionEvent(event, env);
     }
-    return await queueEvent(event, env);
+    return await saveEventToDatabase(event, env);
   } catch (error) {
     console.error(`Error processing event: ${error.message}`);
     return { success: false, message: `error: ${error.message}` };
   }
 }
 __name(processEvent, "processEvent");
-async function queueEvent(event, env) {
+async function saveEventToDatabase(event, env) {
   try {
     const cache = caches.default;
     const cacheKey = new Request(`https://event-cache/${event.id}`);
@@ -3598,15 +3598,24 @@ async function queueEvent(event, env) {
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists" };
     }
+    let contentHash = null;
     if (shouldCheckForDuplicates(event.kind)) {
-      const contentHash2 = await hashContent(event);
-      const duplicateContent = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash2).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash2, event.pubkey).first();
+      contentHash = await hashContent(event);
+      const duplicateContent = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
       if (duplicateContent) {
         return { success: false, message: "duplicate: content already exists" };
       }
     }
     const tagInserts = [];
-    let tagP = null, tagE = null, tagA = null;
+    let tagP = null;
+    let tagE = null;
+    let tagA = null;
+    let tagT = null;
+    let tagD = null;
+    let tagR = null;
+    let tagL = null;
+    let tagS = null;
+    let tagU = null;
     for (let i = 0; i < event.tags.length; i++) {
       const tag = event.tags[i];
       if (tag[0]) {
@@ -3622,35 +3631,115 @@ async function queueEvent(event, env) {
           tagE = tag[1];
         if (tag[0] === "a" && !tagA)
           tagA = tag[1];
+        if (tag[0] === "t" && !tagT)
+          tagT = tag[1];
+        if (tag[0] === "d" && !tagD)
+          tagD = tag[1];
+        if (tag[0] === "r" && !tagR)
+          tagR = tag[1];
+        if (tag[0] === "L" && !tagL)
+          tagL = tag[1];
+        if (tag[0] === "s" && !tagS)
+          tagS = tag[1];
+        if (tag[0] === "u" && !tagU)
+          tagU = tag[1];
       }
     }
-    const contentHash = shouldCheckForDuplicates(event.kind) ? await hashContent(event) : null;
-    const metadata = {
-      event,
-      timestamp: Date.now(),
-      tags: tagInserts,
-      eventTagsCache: {
-        tag_p: tagP,
-        tag_e: tagE,
-        tag_a: tagA
-      },
-      contentHash
-    };
-    await env.EVENT_QUEUE.send(metadata);
+    const eTags = tagInserts.filter((t) => t.name === "e").map((t) => t.value);
+    const replyToEventId = eTags.length > 0 ? eTags[0] : null;
+    const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null;
+    const contentPreview = event.content.substring(0, 100);
+    const insertResult = await session.prepare(`
+      INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO NOTHING
+    `).bind(
+      event.id,
+      event.pubkey,
+      event.created_at,
+      event.kind,
+      event.content,
+      event.sig,
+      tagP,
+      tagE,
+      tagA,
+      tagT,
+      tagD,
+      tagR,
+      tagL,
+      tagS,
+      tagU,
+      replyToEventId,
+      rootEventId,
+      contentPreview
+    ).run();
+    if (insertResult.meta.changes === 0) {
+      console.log(`Event ${event.id} already exists in database (race condition duplicate)`);
+      return { success: false, message: "duplicate: event already exists" };
+    }
+    if (tagInserts.length > 0) {
+      for (let j = 0; j < tagInserts.length; j += 50) {
+        const tagChunk = tagInserts.slice(j, j + 50);
+        const tagBatch = tagChunk.map(
+          (t) => session.prepare(`
+            INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
+        );
+        if (tagBatch.length > 0) {
+          await session.batch(tagBatch);
+        }
+      }
+    }
+    if (tagP || tagE || tagA) {
+      await session.prepare(`
+        INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          tag_p = excluded.tag_p,
+          tag_e = excluded.tag_e,
+          tag_a = excluded.tag_a
+      `).bind(
+        event.id,
+        event.pubkey,
+        event.kind,
+        event.created_at,
+        tagP,
+        tagE,
+        tagA
+      ).run();
+    }
+    const cacheableTags = tagInserts.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
+    if (cacheableTags.length > 0) {
+      const cacheBatch = cacheableTags.map(
+        (t) => session.prepare(`
+          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+      );
+      await session.batch(cacheBatch);
+    }
+    if (contentHash) {
+      await session.prepare(`
+        INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(hash) DO NOTHING
+      `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
+    }
     await cache.put(cacheKey, new Response("cached", {
       headers: {
         "Cache-Control": "max-age=3600"
       }
     }));
-    console.log(`Event ${event.id} sent to queue for processing.`);
-    return { success: true, message: "Event received successfully for processing" };
+    console.log(`Event ${event.id} saved directly to database`);
+    return { success: true, message: "Event saved successfully" };
   } catch (error) {
-    console.error(`Error queueing event: ${error.message}`);
-    console.error(`Event details: ID=${event.id}, Tags count=${event.tags.length}`);
-    return { success: false, message: "error: could not queue event for processing" };
+    console.error(`Error saving event to database: ${error.message}`);
+    console.error(`Event details: ID=${event.id}, Kind=${event.kind}, Tags count=${event.tags.length}`);
+    return { success: false, message: `error: ${error.message}` };
   }
 }
-__name(queueEvent, "queueEvent");
+__name(saveEventToDatabase, "saveEventToDatabase");
 async function processDeletionEvent(event, env) {
   console.log(`Processing deletion event ${event.id}`);
   const deletedEventIds = event.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
@@ -3698,7 +3787,7 @@ async function processDeletionEvent(event, env) {
       errors.push(`error deleting ${eventId}`);
     }
   }
-  const saveResult = await queueEvent(event, env);
+  const saveResult = await saveEventToDatabase(event, env);
   if (errors.length > 0) {
     return { success: false, message: errors[0] };
   }
@@ -4272,134 +4361,6 @@ async function queryEvents(filters, bookmark, env) {
   }
 }
 __name(queryEvents, "queryEvents");
-async function processEventsFromQueue(batch, env) {
-  console.log(`Processing queue batch with ${batch.messages.length} events`);
-  const session = env.RELAY_DATABASE.withSession("first-primary");
-  const results = await Promise.allSettled(
-    batch.messages.map(async (message) => {
-      const metadata = message.body;
-      const event = metadata.event;
-      try {
-        const tagP = metadata.tags.find((t) => t.name === "p")?.value || null;
-        const tagE = metadata.tags.find((t) => t.name === "e")?.value || null;
-        const tagA = metadata.tags.find((t) => t.name === "a")?.value || null;
-        const tagT = metadata.tags.find((t) => t.name === "t")?.value || null;
-        const tagD = metadata.tags.find((t) => t.name === "d")?.value || null;
-        const tagR = metadata.tags.find((t) => t.name === "r")?.value || null;
-        const tagL = metadata.tags.find((t) => t.name === "L")?.value || null;
-        const tagS = metadata.tags.find((t) => t.name === "s")?.value || null;
-        const tagU = metadata.tags.find((t) => t.name === "u")?.value || null;
-        const eTags = metadata.tags.filter((t) => t.name === "e").map((t) => t.value);
-        const replyToEventId = eTags.length > 0 ? eTags[0] : null;
-        const rootEventId = eTags.length > 1 ? eTags[eTags.length - 1] : null;
-        const contentPreview = event.content.substring(0, 100);
-        await session.prepare(`
-          INSERT INTO events (id, pubkey, created_at, kind, tags, content, sig, tag_p, tag_e, tag_a, tag_t, tag_d, tag_r, tag_L, tag_s, tag_u, reply_to_event_id, root_event_id, content_preview)
-          VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO NOTHING
-        `).bind(
-          event.id,
-          event.pubkey,
-          event.created_at,
-          event.kind,
-          event.content,
-          event.sig,
-          tagP,
-          tagE,
-          tagA,
-          tagT,
-          tagD,
-          tagR,
-          tagL,
-          tagS,
-          tagU,
-          replyToEventId,
-          rootEventId,
-          contentPreview
-        ).run();
-        if (metadata.tags.length > 0) {
-          for (let j = 0; j < metadata.tags.length; j += 50) {
-            const tagChunk = metadata.tags.slice(j, j + 50);
-            const tagBatch = tagChunk.map(
-              (t) => session.prepare(`
-                INSERT INTO tags (event_id, tag_name, tag_value, tag_index, tag_rest)
-                VALUES (?, ?, ?, ?, ?)
-              `).bind(event.id, t.name, t.value, t.index, t.rest ? JSON.stringify(t.rest) : null)
-            );
-            if (tagBatch.length > 0) {
-              await session.batch(tagBatch);
-            }
-          }
-        }
-        if (metadata.eventTagsCache.tag_p || metadata.eventTagsCache.tag_e || metadata.eventTagsCache.tag_a) {
-          await session.prepare(`
-            INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(event_id) DO UPDATE SET
-              tag_p = excluded.tag_p,
-              tag_e = excluded.tag_e,
-              tag_a = excluded.tag_a
-          `).bind(
-            event.id,
-            event.pubkey,
-            event.kind,
-            event.created_at,
-            metadata.eventTagsCache.tag_p,
-            metadata.eventTagsCache.tag_e,
-            metadata.eventTagsCache.tag_a
-          ).run();
-        }
-        const cacheableTags = metadata.tags.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
-        if (cacheableTags.length > 0) {
-          const cacheBatch = cacheableTags.map(
-            (t) => session.prepare(`
-              INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-              VALUES (?, ?, ?, ?, ?, ?)
-            `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-          );
-          await session.batch(cacheBatch);
-        }
-        if (metadata.contentHash) {
-          await session.prepare(`
-            INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(hash) DO NOTHING
-          `).bind(metadata.contentHash, event.id, event.pubkey, event.created_at).run();
-        }
-        console.log(`Successfully processed event ${event.id} from queue`);
-        message.ack();
-        return { success: true, eventId: event.id };
-      } catch (error) {
-        console.error(`Failed to process event ${event.id} from queue:`, {
-          error: error.message,
-          stack: error.stack,
-          eventKind: event.kind,
-          eventPubkey: event.pubkey,
-          tagCount: metadata.tags.length,
-          hasContentHash: !!metadata.contentHash
-        });
-        message.retry();
-        return { success: false, eventId: event.id, error: error.message };
-      }
-    })
-  );
-  const processedEventIds = [];
-  const failedEvents = [];
-  results.forEach((result) => {
-    if (result.status === "fulfilled" && result.value.success) {
-      processedEventIds.push(result.value.eventId);
-    } else if (result.status === "fulfilled" && !result.value.success) {
-      failedEvents.push({ eventId: result.value.eventId, error: result.value.error });
-    } else if (result.status === "rejected") {
-      console.error("Unexpected promise rejection in queue processing:", result.reason);
-    }
-  });
-  console.log(`Queue batch processed: ${processedEventIds.length} succeeded, ${failedEvents.length} failed/retrying`);
-  if (failedEvents.length > 0) {
-    console.log("Failed events:", failedEvents);
-  }
-}
-__name(processEventsFromQueue, "processEventsFromQueue");
 function handleRelayInfoRequest(request) {
   const responseInfo = { ...relayInfo2 };
   if (PAY_TO_RELAY_ENABLED2) {
@@ -5294,14 +5255,6 @@ var relay_worker_default = {
       return new Response("Internal Server Error", { status: 500 });
     }
   },
-  // Queue consumer for processing events to D1
-  async queue(batch, env, ctx) {
-    try {
-      await processEventsFromQueue(batch, env);
-    } catch (error) {
-      console.error("Queue processing failed:", error);
-    }
-  },
   // Scheduled handler for 24hr database maintenance (runs daily at 00:00 UTC)
   async scheduled(event, env, ctx) {
     console.log("Running scheduled 24hr database maintenance...");
@@ -6034,7 +5987,8 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
       const now = Math.floor(Date.now() / 1e3);
       const timeDiff = Math.abs(now - authEvent.created_at);
-      if (timeDiff > 600) {
+      const timeoutSeconds = AUTH_TIMEOUT_MS / 1e3;
+      if (timeDiff > timeoutSeconds) {
         this.sendOK(session.webSocket, authEvent.id, false, "invalid: auth event created_at is too far from current time");
         return;
       }

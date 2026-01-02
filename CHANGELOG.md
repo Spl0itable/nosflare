@@ -1,3 +1,7 @@
+## v7.9.30 - 2026-01-02
+
+Hotfix: removed support for Queue
+
 ## v7.9.29 - 2026-01-02
 
 New: NIP-42 support

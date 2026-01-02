@@ -1013,10 +1013,11 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Check created_at is within ~10 minutes of current time
+      // Check created_at is within timeout of current time
       const now = Math.floor(Date.now() / 1000);
       const timeDiff = Math.abs(now - authEvent.created_at);
-      if (timeDiff > 600) { // 10 minutes
+      const timeoutSeconds = AUTH_TIMEOUT_MS / 1000;
+      if (timeDiff > timeoutSeconds) {
         this.sendOK(session.webSocket, authEvent.id, false, 'invalid: auth event created_at is too far from current time');
         return;
       }

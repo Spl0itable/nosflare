@@ -16,19 +16,6 @@ database_name = "nostr-relay"
 database_id = "ba4f97db-cc23-4ea0-b7da-cf8ddc3d84ef"
 read_replicas = ["auto"]
 
-# Queue binding for event processing
-[[queues.producers]]
-binding = "EVENT_QUEUE"
-queue = "event-processing-queue"
-
-[[queues.consumers]]
-queue = "event-processing-queue"
-max_batch_size = 100
-max_batch_timeout = 5
-max_retries = 3
-dead_letter_queue = "event-dlq"
-max_concurrency = 250
-
 # Cron trigger for 24hr database maintenance
 [triggers]
 crons = ["0 0 * * *"]
