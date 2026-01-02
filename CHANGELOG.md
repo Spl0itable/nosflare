@@ -1,3 +1,7 @@
+## v7.9.32 - 2026-01-03
+
+Hotfix: tag handling in queries
+
 ## v7.9.31 - 2026-01-02
 
 Hotfix: tag insertion issue

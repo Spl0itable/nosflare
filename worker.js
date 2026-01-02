@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.31",
+  version: "7.9.32",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3685,35 +3685,59 @@ function buildCountQuery(filter) {
     }
   }
   if (directTags.length > 0 && otherTags.length === 0) {
-    const tagConditions = [];
-    for (const tagFilter of directTags) {
-      const columnName = `tag_${tagFilter.name}`;
-      if (tagFilter.values.length === 1) {
-        tagConditions.push(`${columnName} = ?`);
-        params.push(tagFilter.values[0]);
-      } else {
-        tagConditions.push(`${columnName} IN (${tagFilter.values.map(() => "?").join(",")})`);
-        params.push(...tagFilter.values);
+    if (directTags.length === 1) {
+      const tagFilter = directTags[0];
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        INNER JOIN event_tags_cache_multi m ON e.id = m.event_id
+        WHERE m.tag_type = ? AND m.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
       }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql: sql2, params };
+    } else {
+      const tagJoins = directTags.map((t, i) => {
+        const alias = `m${i}`;
+        const placeholders = t.values.map(() => "?").join(",");
+        return `INNER JOIN event_tags_cache_multi ${alias} ON e.id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
+      }).join("\n        ");
+      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
+        ${tagJoins}
+        WHERE 1=1`;
+      for (const tagFilter of directTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
+      }
+      if (filter.authors && filter.authors.length > 0) {
+        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        params.push(...filter.authors);
+      }
+      if (filter.kinds && filter.kinds.length > 0) {
+        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+        params.push(...filter.kinds);
+      }
+      if (filter.since) {
+        sql2 += " AND e.created_at >= ?";
+        params.push(filter.since);
+      }
+      if (filter.until) {
+        sql2 += " AND e.created_at <= ?";
+        params.push(filter.until);
+      }
+      return { sql: sql2, params };
     }
-    let sql2 = `SELECT COUNT(*) as count FROM events WHERE ${tagConditions.join(" AND ")}`;
-    if (filter.authors && filter.authors.length > 0) {
-      sql2 += ` AND pubkey IN (${filter.authors.map(() => "?").join(",")})`;
-      params.push(...filter.authors);
-    }
-    if (filter.kinds && filter.kinds.length > 0) {
-      sql2 += ` AND kind IN (${filter.kinds.map(() => "?").join(",")})`;
-      params.push(...filter.kinds);
-    }
-    if (filter.since) {
-      sql2 += " AND created_at >= ?";
-      params.push(filter.since);
-    }
-    if (filter.until) {
-      sql2 += " AND created_at <= ?";
-      params.push(filter.until);
-    }
-    return { sql: sql2, params };
   }
   if (directTags.length > 0 || otherTags.length > 0) {
     const allTags = [...directTags, ...otherTags];
@@ -3820,57 +3844,61 @@ function buildQuery(filter) {
   if (directTags.length > 0 && otherTags.length === 0) {
     let sql2;
     const whereConditions = [];
-    const tagConditions = [];
-    for (const tagFilter of directTags) {
-      const columnName = `tag_${tagFilter.name}`;
-      if (tagFilter.values.length === 1) {
-        tagConditions.push(`${columnName} = ?`);
-        params.push(tagFilter.values[0]);
-      } else {
-        tagConditions.push(`${columnName} IN (${tagFilter.values.map(() => "?").join(",")})`);
-        params.push(...tagFilter.values);
-      }
-    }
-    let indexHint2 = "";
     if (directTags.length === 1) {
-      const tagName = directTags[0].name;
+      const tagFilter = directTags[0];
       const hasKinds2 = filter.kinds && filter.kinds.length > 0;
+      let indexHint2 = "";
       if (hasKinds2 && filter.kinds.length <= 10) {
-        indexHint2 = ` INDEXED BY idx_events_kind_tag_${tagName}`;
+        indexHint2 = " INDEXED BY idx_cache_multi_kind_type_value";
       } else {
-        indexHint2 = ` INDEXED BY idx_events_tag_${tagName}_created_at`;
+        indexHint2 = " INDEXED BY idx_cache_multi_type_value_time";
+      }
+      sql2 = `SELECT DISTINCT e.* FROM events e
+        INNER JOIN event_tags_cache_multi m${indexHint2} ON e.id = m.event_id
+        WHERE m.tag_type = ? AND m.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
+      params.push(tagFilter.name, ...tagFilter.values);
+    } else {
+      const tagConditions = directTags.map((t, i) => {
+        const alias = `m${i}`;
+        const placeholders = t.values.map(() => "?").join(",");
+        return `INNER JOIN event_tags_cache_multi ${alias} ON e.id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
+      }).join("\n        ");
+      sql2 = `SELECT DISTINCT e.* FROM events e
+        ${tagConditions}
+        WHERE 1=1`;
+      for (const tagFilter of directTags) {
+        params.push(tagFilter.name, ...tagFilter.values);
       }
     }
-    sql2 = `SELECT * FROM events${indexHint2} WHERE ${tagConditions.join(" AND ")}`;
     if (filter.ids && filter.ids.length > 0) {
-      whereConditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
+      whereConditions.push(`e.id IN (${filter.ids.map(() => "?").join(",")})`);
       params.push(...filter.ids);
     }
     if (filter.authors && filter.authors.length > 0) {
-      whereConditions.push(`pubkey IN (${filter.authors.map(() => "?").join(",")})`);
+      whereConditions.push(`e.pubkey IN (${filter.authors.map(() => "?").join(",")})`);
       params.push(...filter.authors);
     }
     if (filter.kinds && filter.kinds.length > 0) {
-      whereConditions.push(`kind IN (${filter.kinds.map(() => "?").join(",")})`);
+      whereConditions.push(`e.kind IN (${filter.kinds.map(() => "?").join(",")})`);
       params.push(...filter.kinds);
     }
     if (filter.since) {
-      whereConditions.push("created_at >= ?");
+      whereConditions.push("e.created_at >= ?");
       params.push(filter.since);
     }
     if (filter.until) {
-      whereConditions.push("created_at <= ?");
+      whereConditions.push("e.created_at <= ?");
       params.push(filter.until);
     }
     if (filter.cursor) {
       const [timestamp, lastId] = filter.cursor.split(":");
-      whereConditions.push("(created_at < ? OR (created_at = ? AND id > ?))");
+      whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
       params.push(parseInt(timestamp), parseInt(timestamp), lastId);
     }
     if (whereConditions.length > 0) {
       sql2 += " AND " + whereConditions.join(" AND ");
     }
-    sql2 += " ORDER BY created_at DESC LIMIT ?";
+    sql2 += " ORDER BY e.created_at DESC LIMIT ?";
     params.push(Math.min(filter.limit || 500, 500));
     return { sql: sql2, params };
   }
