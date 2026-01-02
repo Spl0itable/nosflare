@@ -3429,10 +3429,11 @@ function calculateQueryComplexity(filter) {
 __name(calculateQueryComplexity, "calculateQueryComplexity");
 async function processEvent(event, sessionId, env) {
   try {
-    const existingEvent = await env.RELAY_DATABASE.withSession("first-unconstrained").prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
+    const session = env.RELAY_DATABASE.withSession("first-primary");
+    const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       console.log(`Duplicate event detected: ${event.id}`);
-      return { success: false, message: "duplicate: already have this event" };
+      return { success: false, message: "duplicate: already have this event", bookmark: session.getBookmark() ?? void 0 };
     }
     if (event.kind !== 1059 && checkValidNip052 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
@@ -3462,14 +3463,14 @@ async function saveEventToDatabase(event, env) {
     const session = env.RELAY_DATABASE.withSession("first-primary");
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
-      return { success: false, message: "duplicate: event already exists" };
+      return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? void 0 };
     }
     let contentHash = null;
     if (shouldCheckForDuplicates(event.kind)) {
       contentHash = await hashContent(event);
       const duplicateContent = enableGlobalDuplicateCheck2 ? await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? LIMIT 1").bind(contentHash).first() : await session.prepare("SELECT event_id FROM content_hashes WHERE hash = ? AND pubkey = ? LIMIT 1").bind(contentHash, event.pubkey).first();
       if (duplicateContent) {
-        return { success: false, message: "duplicate: content already exists" };
+        return { success: false, message: "duplicate: content already exists", bookmark: session.getBookmark() ?? void 0 };
       }
     }
     const tagInserts = [];
@@ -3539,7 +3540,7 @@ async function saveEventToDatabase(event, env) {
     ).run();
     if (insertResult.meta.changes === 0) {
       console.log(`Event ${event.id} already exists in database (race condition duplicate)`);
-      return { success: false, message: "duplicate: event already exists" };
+      return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? void 0 };
     }
     if (tagInserts.length > 0) {
       for (let j = 0; j < tagInserts.length; j += 50) {
@@ -3599,7 +3600,7 @@ async function saveEventToDatabase(event, env) {
       }
     }));
     console.log(`Event ${event.id} saved directly to database`);
-    return { success: true, message: "Event saved successfully" };
+    return { success: true, message: "Event saved successfully", bookmark: session.getBookmark() ?? void 0 };
   } catch (error) {
     console.error(`Error saving event to database: ${error.message}`);
     console.error(`Event details: ID=${event.id}, Kind=${event.kind}, Tags count=${event.tags.length}`);
@@ -3610,10 +3611,10 @@ __name(saveEventToDatabase, "saveEventToDatabase");
 async function processDeletionEvent(event, env) {
   console.log(`Processing deletion event ${event.id}`);
   const deletedEventIds = event.tags.filter((tag) => tag[0] === "e").map((tag) => tag[1]);
-  if (deletedEventIds.length === 0) {
-    return { success: true, message: "No events to delete" };
-  }
   const session = env.RELAY_DATABASE.withSession("first-primary");
+  if (deletedEventIds.length === 0) {
+    return { success: true, message: "No events to delete", bookmark: session.getBookmark() ?? void 0 };
+  }
   let deletedCount = 0;
   const errors = [];
   for (const eventId of deletedEventIds) {
@@ -3656,11 +3657,12 @@ async function processDeletionEvent(event, env) {
   }
   const saveResult = await saveEventToDatabase(event, env);
   if (errors.length > 0) {
-    return { success: false, message: errors[0] };
+    return { success: false, message: errors[0], bookmark: saveResult.bookmark ?? (session.getBookmark() ?? void 0) };
   }
   return {
     success: true,
-    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete"
+    message: deletedCount > 0 ? `Successfully deleted ${deletedCount} event(s)` : "No matching events found to delete",
+    bookmark: saveResult.bookmark ?? (session.getBookmark() ?? void 0)
   };
 }
 __name(processDeletionEvent, "processDeletionEvent");
@@ -5773,6 +5775,9 @@ var _RelayWebSocket = class _RelayWebSocket {
         }
       }
       const result = await processEvent(event, session.id, this.env);
+      if (result.bookmark) {
+        session.bookmark = result.bookmark;
+      }
       if (result.success) {
         this.sendOK(session.webSocket, event.id, true, result.message);
         this.processedEvents.set(event.id, Date.now());

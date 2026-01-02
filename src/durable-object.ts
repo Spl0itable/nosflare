@@ -833,6 +833,11 @@ export class RelayWebSocket implements DurableObject {
       // Process the event (save to database)
       const result = await processEvent(event, session.id, this.env);
 
+      // Update session bookmark for read-after-write consistency
+      if (result.bookmark) {
+        session.bookmark = result.bookmark;
+      }
+
       if (result.success) {
         // Send OK to the sender
         this.sendOK(session.webSocket, event.id, true, result.message);
