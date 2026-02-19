@@ -2073,7 +2073,6 @@ async function fetchRelays() {
       "wss://relaypag.es",
       "wss://monitorlizard.nostr1.com",
       "wss://relay.damus.io",
-      "wss://relay.nostr.band", 
       "wss://relay.primal.net",
     ];
     
@@ -2135,7 +2134,6 @@ async function discoverMonitors() {
       "wss://relaypag.es",
       "wss://monitorlizard.nostr1.com",
       "wss://relay.damus.io",
-      "wss://relay.nostr.band",
       "wss://relay.primal.net"
     ];
     
@@ -2215,7 +2213,6 @@ async function queryRelay(relayUrl, filters) {
 function getFallbackRelays() {
   return [
     "wss://relay.damus.io",
-    "wss://relay.nostr.band",
     "wss://nos.lol",
     "wss://relay.primal.net",
     "wss://relay.coinos.io",

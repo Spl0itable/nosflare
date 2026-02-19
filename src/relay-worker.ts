@@ -413,7 +413,7 @@ async function savePaidPubkey(pubkey: string, env: Env): Promise<boolean> {
 // Fetches kind 0 event from fallback relay
 function fetchEventFromFallbackRelay(pubkey: string): Promise<NostrEvent | null> {
   return new Promise((resolve, reject) => {
-    const fallbackRelayUrl = 'wss://relay.nostr.band';
+    const fallbackRelayUrl = 'wss://relay.primal.net';
     const ws = new WebSocket(fallbackRelayUrl);
     let hasClosed = false;
 
@@ -500,7 +500,7 @@ async function fetchKind0EventForPubkey(pubkey: string, env: Env): Promise<Nostr
     }
 
     // If no event found from local database, use fallback relay
-    console.log(`No kind 0 event found locally, trying fallback relay: wss://relay.nostr.band`);
+    console.log(`No kind 0 event found locally, trying fallback relay: wss://relay.primal.net`);
     const fallbackEvent = await fetchEventFromFallbackRelay(pubkey);
     if (fallbackEvent) {
       return fallbackEvent;
