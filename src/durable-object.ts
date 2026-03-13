@@ -279,19 +279,26 @@ export class RelayWebSocket implements DurableObject {
       const globalCached = await globalCache.match(globalCacheKey);
 
       if (globalCached) {
-        console.log('Returning globally cached query result');
-        const result = await globalCached.json() as QueryResult;
+        // Check if the cached response has expired (max-age not enforced by Cache API internally)
+        const cachedDate = globalCached.headers.get('X-Cache-Time');
+        if (cachedDate && Date.now() - parseInt(cachedDate) > 300000) {
+          console.log('Global cache entry expired, deleting');
+          await globalCache.delete(globalCacheKey);
+        } else {
+          console.log('Returning globally cached query result');
+          const result = await globalCached.json() as QueryResult;
 
-        // Also update local cache for faster subsequent access
-        this.queryCache.set(cacheKey, {
-          result,
-          timestamp: Date.now(),
-          accessCount: 1,
-          lastAccessed: Date.now()
-        });
-        this.addToCacheIndex(cacheKey, filters);
+          // Also update local cache for faster subsequent access
+          this.queryCache.set(cacheKey, {
+            result,
+            timestamp: Date.now(),
+            accessCount: 1,
+            lastAccessed: Date.now()
+          });
+          this.addToCacheIndex(cacheKey, filters);
 
-        return result;
+          return result;
+        }
       }
     } catch (error) {
       console.error('Error checking global cache:', error);
@@ -338,7 +345,8 @@ export class RelayWebSocket implements DurableObject {
         const response = new Response(JSON.stringify(result), {
           headers: {
             'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=300' // 5 minute TTL
+            'Cache-Control': 'public, max-age=300',
+            'X-Cache-Time': Date.now().toString()
           }
         });
         await globalCache.put(globalCacheKey, response);

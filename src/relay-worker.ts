@@ -1,4 +1,4 @@
-import { schnorr } from "@noble/curves/secp256k1";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { Env, NostrEvent, NostrFilter, QueryResult, NostrMessage, Nip05Response } from './types';
 import * as config from './config';
 import { RelayWebSocket } from './durable-object';

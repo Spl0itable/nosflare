@@ -1,3 +1,7 @@
+## v7.9.34 - 2026-03-13
+
+Hotfix: cache header change
+
 ## v7.9.33 - 2026-01-03
 
 Hotfix: session/bookmark storage improvement
