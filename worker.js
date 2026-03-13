@@ -72,8 +72,8 @@ __export(config_exports, {
 });
 var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
 var PAY_TO_RELAY_ENABLED = true;
-var RELAY_ACCESS_PRICE_SATS = 2121;
-var AUTH_REQUIRED = true;
+var RELAY_ACCESS_PRICE_SATS = 212121;
+var AUTH_REQUIRED = false;
 var AUTH_TIMEOUT_MS = 6e5;
 var relayInfo = {
   name: "Nosflare",
