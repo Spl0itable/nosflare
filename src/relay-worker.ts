@@ -378,7 +378,7 @@ function shouldCheckForDuplicates(kind: number): boolean {
 }
 
 // Payment handling
-async function hasPaidForRelay(pubkey: string, env: Env): Promise<boolean> {
+async function hasPaidForRelay(pubkey: string, env: Env): Promise<boolean | null> {
   if (!PAY_TO_RELAY_ENABLED) return true;
 
   try {
@@ -389,7 +389,7 @@ async function hasPaidForRelay(pubkey: string, env: Env): Promise<boolean> {
     return result !== null;
   } catch (error) {
     console.error(`Error checking paid status for ${pubkey}:`, error);
-    return false;
+    return null; // null = unknown (DB error), don't cache this
   }
 }
 
@@ -2129,6 +2129,13 @@ async function handleCheckPayment(request: Request, env: Env): Promise<Response>
   }
 
   const paid = await hasPaidForRelay(pubkey, env);
+
+  if (paid === null) {
+    return new Response(JSON.stringify({ error: 'Unable to verify payment status' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  }
 
   return new Response(JSON.stringify({ paid }), {
     status: 200,

@@ -82,7 +82,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.34",
+  version: "7.9.35",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2492,7 +2492,7 @@ async function hasPaidForRelay(pubkey, env) {
     return result !== null;
   } catch (error) {
     console.error(`Error checking paid status for ${pubkey}:`, error);
-    return false;
+    return null;
   }
 }
 __name(hasPaidForRelay, "hasPaidForRelay");
@@ -3925,6 +3925,12 @@ async function handleCheckPayment(request, env) {
     });
   }
   const paid = await hasPaidForRelay(pubkey, env);
+  if (paid === null) {
+    return new Response(JSON.stringify({ error: "Unable to verify payment status" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+    });
+  }
   return new Response(JSON.stringify({ paid }), {
     status: 200,
     headers: {
@@ -4980,9 +4986,11 @@ var _RelayWebSocket = class _RelayWebSocket {
         let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
         if (hasPaid === null) {
           hasPaid = await hasPaidForRelay(event.pubkey, this.env);
-          this.setCachedPaymentStatus(event.pubkey, hasPaid);
+          if (hasPaid !== null) {
+            this.setCachedPaymentStatus(event.pubkey, hasPaid);
+          }
         }
-        if (!hasPaid) {
+        if (hasPaid === false) {
           const protocol = "https:";
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);

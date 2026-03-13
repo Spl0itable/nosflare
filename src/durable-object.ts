@@ -795,11 +795,16 @@ export class RelayWebSocket implements DurableObject {
         if (hasPaid === null) {
           // Not in cache, check database
           hasPaid = await hasPaidForRelay(event.pubkey, this.env);
-          // Cache the result
-          this.setCachedPaymentStatus(event.pubkey, hasPaid);
+          // Only cache definitive results, not DB errors (null)
+          if (hasPaid !== null) {
+            this.setCachedPaymentStatus(event.pubkey, hasPaid);
+          }
         }
 
-        if (!hasPaid) {
+        // Block only when we know for certain they haven't paid (false).
+        // On DB errors (null) allow the event through to avoid dropping
+        // events from paid users due to transient failures.
+        if (hasPaid === false) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);

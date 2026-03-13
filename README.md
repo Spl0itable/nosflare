@@ -141,4 +141,4 @@ For inquiries related to Nosflare, you can start a discussion on the GitHub repo
 
 ## Changelog
 
-See the `CHANGELOG.md` file for versioning [here](/CHANGELOG.md).
+See the `releases` page for versioning [here](https://github.com/Spl0itable/nosflare/releases).
