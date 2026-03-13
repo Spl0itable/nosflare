@@ -73,7 +73,7 @@ __export(config_exports, {
 var relayNpub = "npub16jdfqgazrkapk0yrqm9rdxlnys7ck39c7zmdzxtxqlmmpxg04r0sd733sv";
 var PAY_TO_RELAY_ENABLED = true;
 var RELAY_ACCESS_PRICE_SATS = 212121;
-var AUTH_REQUIRED = false;
+var AUTH_REQUIRED = true;
 var AUTH_TIMEOUT_MS = 6e5;
 var relayInfo = {
   name: "Nosflare",
@@ -82,7 +82,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.37",
+  version: "7.9.38",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4974,9 +4974,15 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, event.id, false, "invalid: kind 22242 events are for authentication only");
         return;
       }
-      if (AUTH_REQUIRED && !session.authenticatedPubkeys.has(event.pubkey)) {
-        this.sendOK(session.webSocket, event.id, false, "auth-required: authenticate to publish events");
-        return;
+      if (AUTH_REQUIRED) {
+        if (session.authenticatedPubkeys.size === 0) {
+          this.sendOK(session.webSocket, event.id, false, "auth-required: authenticate to publish events");
+          return;
+        }
+        if (event.kind !== 1059 && !session.authenticatedPubkeys.has(event.pubkey)) {
+          this.sendOK(session.webSocket, event.id, false, "restricted: event pubkey does not match authenticated pubkey");
+          return;
+        }
       }
       if (!excludedRateLimitKinds.has(event.kind)) {
         if (!session.pubkeyRateLimiter.removeToken()) {
@@ -4991,7 +4997,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.sendOK(session.webSocket, event.id, false, "invalid: signature verification failed");
         return;
       }
-      if (PAY_TO_RELAY_ENABLED) {
+      if (PAY_TO_RELAY_ENABLED && event.kind !== 1059) {
         if (session.hasPaid === false) {
           const protocol = "https:";
           const relayUrl = `${protocol}//${session.host}`;

@@ -778,10 +778,21 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // NIP-42: Check if the event's pubkey is authenticated
-      if (AUTH_REQUIRED && !session.authenticatedPubkeys.has(event.pubkey)) {
-        this.sendOK(session.webSocket, event.id, false, 'auth-required: authenticate to publish events');
-        return;
+      // NIP-42: Check authentication
+      if (AUTH_REQUIRED) {
+        if (session.authenticatedPubkeys.size === 0) {
+          // Not authenticated at all
+          this.sendOK(session.webSocket, event.id, false, 'auth-required: authenticate to publish events');
+          return;
+        }
+        // Kind 1059 (gift wrap / NIP-59) uses throwaway pubkeys, so only require
+        // connection-level auth, not per-pubkey auth
+        if (event.kind !== 1059 && !session.authenticatedPubkeys.has(event.pubkey)) {
+          // Authenticated but event pubkey doesn't match - use "restricted:" per NIP-42
+          // so the client knows not to retry auth
+          this.sendOK(session.webSocket, event.id, false, 'restricted: event pubkey does not match authenticated pubkey');
+          return;
+        }
       }
 
       // Rate limiting (skip for excluded kinds)
@@ -802,7 +813,8 @@ export class RelayWebSocket implements DurableObject {
       }
 
       // Check if pay to relay is enabled (payment status cached on session at AUTH time)
-      if (PAY_TO_RELAY_ENABLED) {
+      // Skip for kind 1059 (gift wrap) since the pubkey is a throwaway key with no payment record
+      if (PAY_TO_RELAY_ENABLED && event.kind !== 1059) {
         if (session.hasPaid === false) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;

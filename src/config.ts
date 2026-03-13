@@ -12,7 +12,7 @@ export const PAY_TO_RELAY_ENABLED = true; // Set to false to disable pay to rela
 export const RELAY_ACCESS_PRICE_SATS = 212121; // Price in SATS for relay access
 
 // NIP-42 Authentication
-export const AUTH_REQUIRED = false; // Set to false to disable NIP-42 authentication requirement
+export const AUTH_REQUIRED = true; // Set to false to disable NIP-42 authentication requirement
 export const AUTH_TIMEOUT_MS = 600000; // 10 minutes - how long the challenge is valid
 
 // Relay info
@@ -23,7 +23,7 @@ export const relayInfo: RelayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.37",
+  version: "7.9.38",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
 
   // Optional fields (uncomment as needed):
