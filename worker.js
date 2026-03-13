@@ -82,7 +82,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.36",
+  version: "7.9.37",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4802,7 +4802,10 @@ var _RelayWebSocket = class _RelayWebSocket {
       sessionId,
       bookmark: session.bookmark,
       host,
-      doName: this.doName
+      doName: this.doName,
+      // NIP-42: Persist auth state for hibernation survival
+      authenticatedPubkeys: [],
+      challenge: session.challenge
     };
     server.serializeAttachment(attachment);
     this.state.acceptWebSocket(server);
@@ -4832,6 +4835,8 @@ var _RelayWebSocket = class _RelayWebSocket {
         this.doName = attachment.doName;
       }
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
+      const restoredPubkeys = new Set(attachment.authenticatedPubkeys || []);
+      const isAuthenticated = restoredPubkeys.size > 0;
       session = {
         id: attachment.sessionId,
         webSocket: ws,
@@ -4840,14 +4845,14 @@ var _RelayWebSocket = class _RelayWebSocket {
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
         host: attachment.host,
-        // NIP-42: Generate new challenge after hibernation (old one is lost)
-        challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : void 0,
-        authenticatedPubkeys: /* @__PURE__ */ new Set(),
+        // NIP-42: Restore challenge from attachment, or generate new one if not present
+        challenge: attachment.challenge || (AUTH_REQUIRED ? this.generateAuthChallenge() : void 0),
+        authenticatedPubkeys: restoredPubkeys,
         // Restore payment status from attachment (survives hibernation)
         hasPaid: attachment.hasPaid
       };
       this.sessions.set(attachment.sessionId, session);
-      if (AUTH_REQUIRED && session.challenge) {
+      if (AUTH_REQUIRED && !isAuthenticated && session.challenge) {
         this.sendAuth(ws, session.challenge);
       }
     }
@@ -4866,7 +4871,9 @@ var _RelayWebSocket = class _RelayWebSocket {
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: session.hasPaid
+        hasPaid: session.hasPaid,
+        authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
+        challenge: session.challenge
       };
       ws.serializeAttachment(updatedAttachment);
     } catch (error) {
@@ -5214,8 +5221,8 @@ var _RelayWebSocket = class _RelayWebSocket {
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
           host: attachment.host,
-          challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : void 0,
-          authenticatedPubkeys: /* @__PURE__ */ new Set(),
+          challenge: attachment.challenge || (AUTH_REQUIRED ? this.generateAuthChallenge() : void 0),
+          authenticatedPubkeys: new Set(attachment.authenticatedPubkeys || []),
           hasPaid: attachment.hasPaid
         };
         this.sessions.set(attachment.sessionId, session);

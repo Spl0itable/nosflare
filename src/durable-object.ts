@@ -20,6 +20,9 @@ interface SessionAttachment {
   host: string;
   doName: string;
   hasPaid?: boolean;
+  // NIP-42: Persist auth state across hibernation
+  authenticatedPubkeys?: string[];
+  challenge?: string;
 }
 
 // Cache entry interface with access tracking
@@ -547,7 +550,10 @@ export class RelayWebSocket implements DurableObject {
       sessionId,
       bookmark: session.bookmark,
       host,
-      doName: this.doName
+      doName: this.doName,
+      // NIP-42: Persist auth state for hibernation survival
+      authenticatedPubkeys: [],
+      challenge: session.challenge
     };
     server.serializeAttachment(attachment);
 
@@ -594,6 +600,10 @@ export class RelayWebSocket implements DurableObject {
       const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
       // Recreate session from attachment (after hibernation)
+      // NIP-42: Restore auth state from attachment - auth persists for connection lifetime per spec
+      const restoredPubkeys = new Set(attachment.authenticatedPubkeys || []);
+      const isAuthenticated = restoredPubkeys.size > 0;
+
       session = {
         id: attachment.sessionId,
         webSocket: ws,
@@ -602,16 +612,16 @@ export class RelayWebSocket implements DurableObject {
         reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
         bookmark: attachment.bookmark,
         host: attachment.host,
-        // NIP-42: Generate new challenge after hibernation (old one is lost)
-        challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
-        authenticatedPubkeys: new Set(),
+        // NIP-42: Restore challenge from attachment, or generate new one if not present
+        challenge: attachment.challenge || (AUTH_REQUIRED ? this.generateAuthChallenge() : undefined),
+        authenticatedPubkeys: restoredPubkeys,
         // Restore payment status from attachment (survives hibernation)
         hasPaid: attachment.hasPaid
       };
       this.sessions.set(attachment.sessionId, session);
 
-      // Send new AUTH challenge after hibernation recovery
-      if (AUTH_REQUIRED && session.challenge) {
+      // Only send AUTH challenge after hibernation if client is NOT already authenticated
+      if (AUTH_REQUIRED && !isAuthenticated && session.challenge) {
         this.sendAuth(ws, session.challenge);
       }
     }
@@ -629,13 +639,15 @@ export class RelayWebSocket implements DurableObject {
 
       await this.handleMessage(session, parsedMessage);
 
-      // Update attachment with latest session state
+      // Update attachment with latest session state (including NIP-42 auth)
       const updatedAttachment: SessionAttachment = {
         sessionId: session.id,
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: session.hasPaid
+        hasPaid: session.hasPaid,
+        authenticatedPubkeys: Array.from(session.authenticatedPubkeys),
+        challenge: session.challenge
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -1111,7 +1123,7 @@ export class RelayWebSocket implements DurableObject {
         // Load subscriptions from storage
         const subscriptions = await this.loadSubscriptions(attachment.sessionId);
 
-        // Recreate minimal session for broadcast
+        // Recreate minimal session for broadcast (restore NIP-42 auth state from attachment)
         session = {
           id: attachment.sessionId,
           webSocket: ws,
@@ -1120,8 +1132,8 @@ export class RelayWebSocket implements DurableObject {
           reqRateLimiter: new RateLimiter(REQ_RATE_LIMIT.rate, REQ_RATE_LIMIT.capacity),
           bookmark: attachment.bookmark,
           host: attachment.host,
-          challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
-          authenticatedPubkeys: new Set(),
+          challenge: attachment.challenge || (AUTH_REQUIRED ? this.generateAuthChallenge() : undefined),
+          authenticatedPubkeys: new Set(attachment.authenticatedPubkeys || []),
           hasPaid: attachment.hasPaid
         };
         this.sessions.set(attachment.sessionId, session);
