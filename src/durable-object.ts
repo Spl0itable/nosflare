@@ -604,7 +604,9 @@ export class RelayWebSocket implements DurableObject {
         host: attachment.host,
         // NIP-42: Generate new challenge after hibernation (old one is lost)
         challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
-        authenticatedPubkeys: new Set()
+        authenticatedPubkeys: new Set(),
+        // Restore payment status from attachment (survives hibernation)
+        hasPaid: attachment.hasPaid
       };
       this.sessions.set(attachment.sessionId, session);
 
@@ -633,7 +635,7 @@ export class RelayWebSocket implements DurableObject {
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid
+        hasPaid: session.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
 
@@ -787,24 +789,9 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Check if pay to relay is enabled
+      // Check if pay to relay is enabled (payment status cached on session at AUTH time)
       if (PAY_TO_RELAY_ENABLED) {
-        // Check cache first
-        let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
-
-        if (hasPaid === null) {
-          // Not in cache, check database
-          hasPaid = await hasPaidForRelay(event.pubkey, this.env);
-          // Only cache definitive results, not DB errors (null)
-          if (hasPaid !== null) {
-            this.setCachedPaymentStatus(event.pubkey, hasPaid);
-          }
-        }
-
-        // Block only when we know for certain they haven't paid (false).
-        // On DB errors (null) allow the event through to avoid dropping
-        // events from paid users due to transient failures.
-        if (hasPaid === false) {
+        if (session.hasPaid === false) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
@@ -1083,6 +1070,15 @@ export class RelayWebSocket implements DurableObject {
       // All checks passed - add pubkey to authenticated list
       session.authenticatedPubkeys.add(authEvent.pubkey);
 
+      // Check payment status at auth time so we don't hit D1 on every EVENT
+      if (PAY_TO_RELAY_ENABLED) {
+        const paid = await hasPaidForRelay(authEvent.pubkey, this.env);
+        if (paid !== null) {
+          session.hasPaid = paid;
+          this.setCachedPaymentStatus(authEvent.pubkey, paid);
+        }
+      }
+
       this.sendOK(session.webSocket, authEvent.id, true, '');
 
     } catch (error: any) {
@@ -1125,7 +1121,8 @@ export class RelayWebSocket implements DurableObject {
           bookmark: attachment.bookmark,
           host: attachment.host,
           challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : undefined,
-          authenticatedPubkeys: new Set()
+          authenticatedPubkeys: new Set(),
+          hasPaid: attachment.hasPaid
         };
         this.sessions.set(attachment.sessionId, session);
       }

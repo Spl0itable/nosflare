@@ -75,6 +75,8 @@ export interface WebSocketSession {
   // NIP-42 Authentication
   challenge?: string;
   authenticatedPubkeys: Set<string>;
+  // Pay-to-relay: cached per-session, checked at AUTH time
+  hasPaid?: boolean;
 }
 
 export class RateLimiter {

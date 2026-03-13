@@ -82,7 +82,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.35",
+  version: "7.9.36",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -4842,7 +4842,9 @@ var _RelayWebSocket = class _RelayWebSocket {
         host: attachment.host,
         // NIP-42: Generate new challenge after hibernation (old one is lost)
         challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : void 0,
-        authenticatedPubkeys: /* @__PURE__ */ new Set()
+        authenticatedPubkeys: /* @__PURE__ */ new Set(),
+        // Restore payment status from attachment (survives hibernation)
+        hasPaid: attachment.hasPaid
       };
       this.sessions.set(attachment.sessionId, session);
       if (AUTH_REQUIRED && session.challenge) {
@@ -4864,7 +4866,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         bookmark: session.bookmark,
         host: session.host,
         doName: this.doName,
-        hasPaid: attachment.hasPaid
+        hasPaid: session.hasPaid
       };
       ws.serializeAttachment(updatedAttachment);
     } catch (error) {
@@ -4983,14 +4985,7 @@ var _RelayWebSocket = class _RelayWebSocket {
         return;
       }
       if (PAY_TO_RELAY_ENABLED) {
-        let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
-        if (hasPaid === null) {
-          hasPaid = await hasPaidForRelay(event.pubkey, this.env);
-          if (hasPaid !== null) {
-            this.setCachedPaymentStatus(event.pubkey, hasPaid);
-          }
-        }
-        if (hasPaid === false) {
+        if (session.hasPaid === false) {
           const protocol = "https:";
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
@@ -5185,6 +5180,13 @@ var _RelayWebSocket = class _RelayWebSocket {
         return;
       }
       session.authenticatedPubkeys.add(authEvent.pubkey);
+      if (PAY_TO_RELAY_ENABLED) {
+        const paid = await hasPaidForRelay(authEvent.pubkey, this.env);
+        if (paid !== null) {
+          session.hasPaid = paid;
+          this.setCachedPaymentStatus(authEvent.pubkey, paid);
+        }
+      }
       this.sendOK(session.webSocket, authEvent.id, true, "");
     } catch (error) {
       console.error("Error handling AUTH:", error);
@@ -5213,7 +5215,8 @@ var _RelayWebSocket = class _RelayWebSocket {
           bookmark: attachment.bookmark,
           host: attachment.host,
           challenge: AUTH_REQUIRED ? this.generateAuthChallenge() : void 0,
-          authenticatedPubkeys: /* @__PURE__ */ new Set()
+          authenticatedPubkeys: /* @__PURE__ */ new Set(),
+          hasPaid: attachment.hasPaid
         };
         this.sessions.set(attachment.sessionId, session);
       }
