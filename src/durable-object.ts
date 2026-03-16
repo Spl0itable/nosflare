@@ -812,10 +812,23 @@ export class RelayWebSocket implements DurableObject {
         return;
       }
 
-      // Check if pay to relay is enabled (payment status cached on session at AUTH time)
+      // Check if pay to relay is enabled
       // Skip for kind 1059 (gift wrap) since the pubkey is a throwaway key with no payment record
       if (PAY_TO_RELAY_ENABLED && event.kind !== 1059) {
-        if (session.hasPaid === false) {
+        // Check per-pubkey cache first, then fall back to D1
+        let hasPaid = await this.getCachedPaymentStatus(event.pubkey);
+
+        if (hasPaid === null) {
+          // Not in cache, check database
+          hasPaid = await hasPaidForRelay(event.pubkey, this.env);
+          if (hasPaid !== null) {
+            this.setCachedPaymentStatus(event.pubkey, hasPaid);
+          }
+        }
+
+        // Block unless we know for certain they've paid.
+        // On DB errors (null), deny the event to prevent unpaid access.
+        if (hasPaid !== true) {
           const protocol = 'https:';
           const relayUrl = `${protocol}//${session.host}`;
           console.error(`Event denied. Pubkey ${event.pubkey} has not paid for relay access.`);
