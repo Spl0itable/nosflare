@@ -2458,7 +2458,7 @@ async function closeSubscription(subscriptionId, server) {
   }
 }
 
-var MAX_BLAST_WORKERS = 30;
+var RELAYS_PER_WORKER = 50;
 var BLAST_AUTH_TOKEN = "nosflare-blast-internal";
 
 function chunkArray(array, chunkSize) {
@@ -2484,13 +2484,11 @@ async function blastEventToRelays(event, server, relays, requestUrl) {
   }
 
   const startTime = Date.now();
-  const workerCount = Math.min(MAX_BLAST_WORKERS, relays.length);
-  const chunkSize = Math.ceil(relays.length / workerCount);
-  const chunks = chunkArray(relays, chunkSize);
+  const chunks = chunkArray(relays, RELAYS_PER_WORKER);
   const baseUrl = new URL(requestUrl);
   const blastUrl = `${baseUrl.protocol}//${baseUrl.host}/api/blast`;
 
-  console.log(`Dispatching event ${event.id} across ${chunks.length} blast workers (${relays.length} relays, ${chunkSize} per worker)`);
+  console.log(`Dispatching event ${event.id} across ${chunks.length} blast workers (${relays.length} relays, ${RELAYS_PER_WORKER} per worker)`);
 
   let totalSuccess = 0;
   let totalFailure = 0;

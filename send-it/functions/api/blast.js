@@ -23,7 +23,7 @@ function blastToSingleRelay(event, relayUrl) {
         }
         resolve(false);
       }
-    }, 1500);
+    }, 3000);
 
     try {
       socket = new WebSocket(relayUrl);
@@ -31,10 +31,14 @@ function blastToSingleRelay(event, relayUrl) {
       socket.addEventListener("open", () => {
         try {
           socket.send(JSON.stringify(["EVENT", event]));
-          isResolved = true;
-          clearTimeout(timeout);
-          socket.close();
-          resolve(true);
+          setTimeout(() => {
+            if (!isResolved) {
+              isResolved = true;
+              clearTimeout(timeout);
+              socket.close();
+              resolve(true);
+            }
+          }, 100);
         } catch {
           if (!isResolved) {
             isResolved = true;
@@ -95,30 +99,26 @@ export async function onRequest(context) {
 
     let successCount = 0;
     let failureCount = 0;
-    const BATCH_SIZE = 8;
 
-    const blastAll = async () => {
-      for (let i = 0; i < relays.length; i += BATCH_SIZE) {
-        const batch = relays.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map((url) => blastToSingleRelay(event, url))
-        );
-        for (const success of results) {
-          if (success) {
-            successCount++;
-          } else {
-            failureCount++;
-          }
+    const blastPromises = relays.map(async (relayUrl) => {
+      try {
+        const success = await blastToSingleRelay(event, relayUrl);
+        if (success) {
+          successCount++;
+        } else {
+          failureCount++;
         }
+      } catch {
+        failureCount++;
       }
-    };
+    });
 
     const timeoutPromise = new Promise((resolve) =>
       setTimeout(() => resolve("timeout"), 25000)
     );
 
     const result = await Promise.race([
-      blastAll().then(() => "done"),
+      Promise.all(blastPromises).then(() => "done"),
       timeoutPromise,
     ]);
 
