@@ -2066,6 +2066,9 @@ function containsBlockedContent(event) {
 }
 
 async function fetchRelays() {
+  const cached = relayCache.get("relay_list");
+  if (cached) return cached;
+
   try {
     const monitorPubkeys = await discoverMonitors();
     const bootstrapRelays = [
@@ -2116,6 +2119,7 @@ async function fetchRelays() {
     }
     
     console.log(`Found ${relayList.length} total relays for blasting`);
+    relayCache.set("relay_list", relayList, 600000); // Cache for 10 minutes
     return relayList;
     
   } catch (error) {
