@@ -2458,7 +2458,8 @@ async function closeSubscription(subscriptionId, server) {
   }
 }
 
-var MAX_BLAST_WORKERS = 30;
+var RELAYS_PER_WORKER = 250;
+var WORKERS_PER_WAVE = 6;
 var BLAST_AUTH_TOKEN = "nosflare-blast-internal";
 
 function chunkArray(array, chunkSize) {
@@ -2484,54 +2485,56 @@ async function blastEventToRelays(event, server, relays, requestUrl) {
   }
 
   const startTime = Date.now();
-  const workerCount = Math.min(MAX_BLAST_WORKERS, relays.length);
-  const chunkSize = Math.ceil(relays.length / workerCount);
-  const chunks = chunkArray(relays, chunkSize);
+  const chunks = chunkArray(relays, RELAYS_PER_WORKER);
   const baseUrl = new URL(requestUrl);
   const blastUrl = `${baseUrl.protocol}//${baseUrl.host}/api/blast`;
 
-  console.log(`Dispatching event ${event.id} across ${chunks.length} blast workers (${relays.length} relays, ${chunkSize} per worker)`);
+  console.log(`Dispatching event ${event.id} across ${chunks.length} blast workers (${relays.length} relays, ${RELAYS_PER_WORKER} per worker)`);
 
   let totalSuccess = 0;
   let totalFailure = 0;
   let anyTimedOut = false;
 
-  const workerPromises = chunks.map(async (chunk, index) => {
-    try {
-      const response = await fetch(blastUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ event, relays: chunk, authToken: BLAST_AUTH_TOKEN }),
-      });
+  // Dispatch in waves to avoid Cloudflare throttling concurrent invocations
+  const waves = chunkArray(chunks, WORKERS_PER_WAVE);
+  let workerIndex = 0;
 
-      if (response.ok) {
-        const result = await response.json();
-        totalSuccess += result.success || 0;
-        totalFailure += result.failure || 0;
-        if (result.timedOut) anyTimedOut = true;
-        console.log(`Blast worker ${index + 1}/${chunks.length}: ${result.success}/${chunk.length} relays`);
-      } else {
-        totalFailure += chunk.length;
-        console.error(`Blast worker ${index + 1}/${chunks.length} returned status ${response.status}`);
-      }
-    } catch (error) {
-      totalFailure += chunk.length;
-      console.error(`Blast worker ${index + 1}/${chunks.length} failed:`, error);
+  for (const wave of waves) {
+    // Check if we're running out of time (leave 3s buffer)
+    if (Date.now() - startTime > 25000) {
+      anyTimedOut = true;
+      const remaining = chunks.slice(workerIndex).reduce((sum, c) => sum + c.length, 0);
+      totalFailure += remaining;
+      console.log(`Blast timed out, skipping ${remaining} remaining relays`);
+      break;
     }
-  });
 
-  const overallTimeout = new Promise((resolve) =>
-    setTimeout(() => resolve("timeout"), 28000)
-  );
+    const wavePromises = wave.map(async (chunk) => {
+      const idx = ++workerIndex;
+      try {
+        const response = await fetch(blastUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event, relays: chunk, authToken: BLAST_AUTH_TOKEN }),
+        });
 
-  const result = await Promise.race([
-    Promise.all(workerPromises).then(() => "done"),
-    overallTimeout,
-  ]);
+        if (response.ok) {
+          const result = await response.json();
+          totalSuccess += result.success || 0;
+          totalFailure += result.failure || 0;
+          if (result.timedOut) anyTimedOut = true;
+          console.log(`Blast worker ${idx}/${chunks.length}: ${result.success}/${chunk.length} relays`);
+        } else {
+          totalFailure += chunk.length;
+          console.error(`Blast worker ${idx}/${chunks.length} returned status ${response.status}`);
+        }
+      } catch (error) {
+        totalFailure += chunk.length;
+        console.error(`Blast worker ${idx}/${chunks.length} failed:`, error);
+      }
+    });
 
-  if (result === "timeout") {
-    anyTimedOut = true;
-    console.log("Blast coordination timed out after 28 seconds");
+    await Promise.all(wavePromises);
   }
 
   const duration = Date.now() - startTime;

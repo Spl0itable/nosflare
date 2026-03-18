@@ -93,34 +93,23 @@ export async function onRequest(context) {
       });
     }
 
-    let successCount = 0;
-    let failureCount = 0;
-    const BATCH_SIZE = 8;
-
-    const blastAll = async () => {
-      for (let i = 0; i < relays.length; i += BATCH_SIZE) {
-        const batch = relays.slice(i, i + BATCH_SIZE);
-        const results = await Promise.all(
-          batch.map((url) => blastToSingleRelay(event, url))
-        );
-        for (const success of results) {
-          if (success) {
-            successCount++;
-          } else {
-            failureCount++;
-          }
-        }
-      }
-    };
-
-    const timeoutPromise = new Promise((resolve) =>
-      setTimeout(() => resolve("timeout"), 25000)
+    // Fire all relays in parallel — successful ones resolve instantly (open+send+close),
+    // failed/unreachable ones hit the 1.5s individual timeout. No sequential batching needed.
+    const results = await Promise.allSettled(
+      relays.map((url) => blastToSingleRelay(event, url))
     );
 
-    const result = await Promise.race([
-      blastAll().then(() => "done"),
-      timeoutPromise,
-    ]);
+    let successCount = 0;
+    let failureCount = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value === true) {
+        successCount++;
+      } else {
+        failureCount++;
+      }
+    }
+
+    const result = "done";
 
     return new Response(
       JSON.stringify({
