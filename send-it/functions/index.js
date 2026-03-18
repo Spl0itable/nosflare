@@ -2365,10 +2365,241 @@ var rateLimiter = class {
 var pubkeyRateLimiter = new rateLimiter(10 / 6e4, 10);
 var excludedRateLimitKinds = [];
 
+var RELAYS_PER_WORKER = 25;
+var BLAST_AUTH_TOKEN = "nosflare-blast-internal";
+
+function chunkArray(array, chunkSize) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += chunkSize) {
+    chunks.push(array.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+// Persistent relay pool state per client WebSocket connection
+function createRelayPool(context, server, requestUrl) {
+  const pool = {
+    workers: [],       // { id, ws, relays, connectedCount, status }
+    relaysReady: false,
+    totalConnected: 0,
+    server,
+    requestUrl,
+  };
+
+  // Connect a single pool worker for a chunk of relays
+  function connectPoolWorker(shard) {
+    return new Promise((resolve, reject) => {
+      const baseUrl = new URL(requestUrl);
+      const poolUrl = `${baseUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${baseUrl.host}/api/relay-pool?auth=${BLAST_AUTH_TOKEN}`;
+
+      let ws;
+      try {
+        ws = new WebSocket(poolUrl);
+      } catch (err) {
+        console.error(`Failed to create WebSocket for pool worker ${shard.id}:`, err);
+        reject(err);
+        return;
+      }
+
+      const entry = {
+        id: shard.id,
+        ws,
+        relays: shard.relays,
+        connectedCount: 0,
+        status: 'connecting',
+      };
+
+      // Replace or add to workers array
+      const existingIdx = pool.workers.findIndex(w => w.id === shard.id);
+      if (existingIdx >= 0) {
+        const old = pool.workers[existingIdx];
+        try { if (old.ws) old.ws.close(); } catch { /* noop */ }
+        pool.workers[existingIdx] = entry;
+      } else {
+        pool.workers.push(entry);
+      }
+
+      const timeout = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          ws.close();
+          entry.status = 'failed';
+          reject(new Error(`Pool worker ${shard.id} connection timeout`));
+        }
+      }, 10000);
+
+      ws.addEventListener('open', () => {
+        clearTimeout(timeout);
+        entry.status = 'connected';
+
+        // Send relay config to this pool worker
+        ws.send(JSON.stringify(['RELAYS', shard.relays]));
+        resolve();
+      });
+
+      ws.addEventListener('message', (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (!Array.isArray(msg)) return;
+
+          const msgType = msg[0];
+
+          if (msgType === 'POOL:STATUS') {
+            const status = msg[1];
+            entry.connectedCount = status.count || 0;
+
+            // Recalculate total connected across all workers
+            pool.totalConnected = pool.workers.reduce((sum, w) => sum + w.connectedCount, 0);
+          } else if (msgType === 'POOL:PING') {
+            // Keepalive — no action needed
+          } else if (msgType === 'OK') {
+            // Forward OK responses to client
+            try {
+              if (server.readyState === 1) {
+                server.send(JSON.stringify(msg));
+              }
+            } catch { /* client gone */ }
+          }
+        } catch { /* parse error */ }
+      });
+
+      ws.addEventListener('close', () => {
+        clearTimeout(timeout);
+        entry.status = 'closed';
+        entry.connectedCount = 0;
+
+        // Attempt reconnect after delay
+        if (pool.server) {
+          setTimeout(() => {
+            if (pool.server && entry.status === 'closed') {
+              console.log(`Reconnecting pool worker ${shard.id}...`);
+              connectPoolWorker(shard).catch(() => {});
+            }
+          }, 5000);
+        }
+      });
+
+      ws.addEventListener('error', () => {
+        clearTimeout(timeout);
+        entry.status = 'failed';
+        entry.connectedCount = 0;
+      });
+    });
+  }
+
+  // Initialize pool with relay list
+  async function initPool(relays) {
+    const chunks = chunkArray(relays, RELAYS_PER_WORKER);
+    console.log(`Initializing relay pool: ${relays.length} relays across ${chunks.length} workers (${RELAYS_PER_WORKER} per worker)`);
+
+    const shards = chunks.map((chunk, i) => ({
+      id: `pool-${i}`,
+      relays: chunk,
+    }));
+
+    // Connect all workers in parallel, resolve when at least one opens
+    const workerPromises = shards.map(shard => connectPoolWorker(shard));
+
+    await new Promise((resolve, reject) => {
+      let resolved = false;
+      let failures = 0;
+
+      for (const p of workerPromises) {
+        p.then(() => {
+          if (!resolved) {
+            resolved = true;
+            pool.relaysReady = true;
+            resolve();
+          }
+        }).catch(() => {
+          failures++;
+          if (failures === workerPromises.length && !resolved) {
+            reject(new Error('All relay pool workers failed to connect'));
+          }
+        });
+      }
+    });
+
+    console.log(`Relay pool initialized: ${pool.workers.filter(w => w.status === 'connected').length}/${chunks.length} workers connected`);
+  }
+
+  // Update pool with new relay list (add/remove workers as needed)
+  function updatePool(relays) {
+    const chunks = chunkArray(relays, RELAYS_PER_WORKER);
+    const newShardIds = new Set(chunks.map((_, i) => `pool-${i}`));
+
+    // Update existing workers or create new ones
+    chunks.forEach((chunk, i) => {
+      const shardId = `pool-${i}`;
+      const existing = pool.workers.find(w => w.id === shardId);
+
+      if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+        // Update relay list on existing worker
+        existing.relays = chunk;
+        existing.ws.send(JSON.stringify(['RELAYS', chunk]));
+      } else if (!existing || existing.status !== 'connecting') {
+        // New or failed shard — connect
+        connectPoolWorker({ id: shardId, relays: chunk }).catch(() => {});
+      }
+    });
+
+    // Close workers for removed shards
+    for (const w of pool.workers) {
+      if (!newShardIds.has(w.id)) {
+        try { if (w.ws) w.ws.close(); } catch { /* noop */ }
+      }
+    }
+    pool.workers = pool.workers.filter(w => newShardIds.has(w.id));
+  }
+
+  // Broadcast an event to all pool workers
+  function broadcastEvent(event) {
+    const msg = JSON.stringify(['EVENT', event]);
+    let sentTo = 0;
+    for (const w of pool.workers) {
+      if (w.status === 'connected' && w.ws && w.ws.readyState === WebSocket.OPEN) {
+        try { w.ws.send(msg); sentTo++; } catch { /* noop */ }
+      }
+    }
+    console.log(`Event ${event.id} sent to ${sentTo}/${pool.workers.length} pool workers (${pool.totalConnected} relays connected)`);
+    return sentTo;
+  }
+
+  // Cleanup all pool workers
+  function destroy() {
+    pool.server = null;
+    for (const w of pool.workers) {
+      try { if (w.ws) w.ws.close(); } catch { /* noop */ }
+    }
+    pool.workers = [];
+  }
+
+  return { pool, initPool, updatePool, broadcastEvent, destroy };
+}
+
 async function handleWebSocket(context, request) {
   const { 0: client, 1: server } = new WebSocketPair();
   const requestUrl = request.url;
   server.accept();
+
+  const { pool, initPool, broadcastEvent, destroy } = createRelayPool(context, server, requestUrl);
+
+  // Initialize relay pool on connection (don't block WebSocket setup)
+  context.waitUntil(
+    (async () => {
+      try {
+        const relays = await fetchRelays();
+        if (relays.length > 0) {
+          await initPool(relays);
+          console.log(`Relay pool ready: ${pool.totalConnected} relays connected via ${pool.workers.length} workers`);
+        } else {
+          console.error("No relays available for pool initialization");
+        }
+      } catch (err) {
+        console.error("Failed to initialize relay pool:", err);
+      }
+    })()
+  );
+
   server.addEventListener("message", async (messageEvent) => {
     context.waitUntil(
       (async () => {
@@ -2377,7 +2608,7 @@ async function handleWebSocket(context, request) {
           const messageType = message[0];
           switch (messageType) {
             case "EVENT":
-              await processEvent(message[1], server, requestUrl);
+              await processEvent(message[1], server, pool, broadcastEvent);
               break;
             case "REQ":
               await processReq(message, server);
@@ -2393,11 +2624,13 @@ async function handleWebSocket(context, request) {
       })()
     );
   });
-  server.addEventListener("close", (event2) => {
-    console.log("WebSocket closed", event2.code, event2.reason);
+  server.addEventListener("close", () => {
+    console.log("WebSocket closed, destroying relay pool");
+    destroy();
   });
   server.addEventListener("error", (error) => {
     console.error("WebSocket error:", error);
+    destroy();
   });
   return new Response(null, {
     status: 101,
@@ -2405,7 +2638,7 @@ async function handleWebSocket(context, request) {
   });
 }
 
-async function processEvent(event, server, requestUrl) {
+async function processEvent(event, server, pool, broadcastEvent) {
   try {
     if (!excludedRateLimitKinds.includes(event.kind)) {
       if (!pubkeyRateLimiter.removeToken()) {
@@ -2419,16 +2652,29 @@ async function processEvent(event, server, requestUrl) {
       sendOK(server, event.id, false, "Duplicate. Event dropped.");
       return;
     }
+    if (!isPubkeyAllowed(event.pubkey)) {
+      sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
+      return;
+    }
+    if (!isEventKindAllowed(event.kind)) {
+      sendOK(server, event.id, false, `Denied. Event kind ${event.kind} is not allowed.`);
+      return;
+    }
+    if (containsBlockedContent(event)) {
+      sendOK(server, event.id, false, "Denied. The event contains blocked content.");
+      return;
+    }
     const isValidSignature = await verifyEventSignature(event);
     if (isValidSignature) {
       relayCache.set(cacheKey, event);
-      sendOK(server, event.id, true, "Event received successfully for processing.");
-      const relays = await fetchRelays();
-      if (relays.length > 0) {
-        await blastEventToRelays(event, server, relays, requestUrl);
-      } else {
-        sendError(server, "No relays available.");
+
+      if (!pool.relaysReady) {
+        sendOK(server, event.id, false, "Relay pool is still initializing. Please try again.");
+        return;
       }
+
+      const sentTo = broadcastEvent(event);
+      sendOK(server, event.id, true, `Event sent to ${sentTo} pool workers (${pool.totalConnected} relays connected).`);
     } else {
       sendOK(server, event.id, false, "Invalid: signature verification failed.");
     }
@@ -2456,94 +2702,6 @@ async function closeSubscription(subscriptionId, server) {
     console.error("Error closing subscription:", error);
     sendError(server, `error: failed to close subscription ${subscriptionId}`);
   }
-}
-
-var RELAYS_PER_WORKER = 250;
-var WORKERS_PER_WAVE = 6;
-var BLAST_AUTH_TOKEN = "nosflare-blast-internal";
-
-function chunkArray(array, chunkSize) {
-  const chunks = [];
-  for (let i = 0; i < array.length; i += chunkSize) {
-    chunks.push(array.slice(i, i + chunkSize));
-  }
-  return chunks;
-}
-
-async function blastEventToRelays(event, server, relays, requestUrl) {
-  if (!isPubkeyAllowed(event.pubkey)) {
-    sendOK(server, event.id, false, "Denied. The pubkey is not allowed.");
-    return;
-  }
-  if (!isEventKindAllowed(event.kind)) {
-    sendOK(server, event.id, false, `Denied. Event kind ${event.kind} is not allowed.`);
-    return;
-  }
-  if (containsBlockedContent(event)) {
-    sendOK(server, event.id, false, "Denied. The event contains blocked content.");
-    return;
-  }
-
-  const startTime = Date.now();
-  const chunks = chunkArray(relays, RELAYS_PER_WORKER);
-  const baseUrl = new URL(requestUrl);
-  const blastUrl = `${baseUrl.protocol}//${baseUrl.host}/api/blast`;
-
-  console.log(`Dispatching event ${event.id} across ${chunks.length} blast workers (${relays.length} relays, ${RELAYS_PER_WORKER} per worker)`);
-
-  let totalSuccess = 0;
-  let totalFailure = 0;
-  let anyTimedOut = false;
-
-  // Dispatch in waves to avoid Cloudflare throttling concurrent invocations
-  const waves = chunkArray(chunks, WORKERS_PER_WAVE);
-  let workerIndex = 0;
-
-  for (const wave of waves) {
-    // Check if we're running out of time (leave 3s buffer)
-    if (Date.now() - startTime > 25000) {
-      anyTimedOut = true;
-      const remaining = chunks.slice(workerIndex).reduce((sum, c) => sum + c.length, 0);
-      totalFailure += remaining;
-      console.log(`Blast timed out, skipping ${remaining} remaining relays`);
-      break;
-    }
-
-    const wavePromises = wave.map(async (chunk) => {
-      const idx = ++workerIndex;
-      try {
-        const response = await fetch(blastUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ event, relays: chunk, authToken: BLAST_AUTH_TOKEN }),
-        });
-
-        if (response.ok) {
-          const result = await response.json();
-          totalSuccess += result.success || 0;
-          totalFailure += result.failure || 0;
-          if (result.timedOut) anyTimedOut = true;
-          console.log(`Blast worker ${idx}/${chunks.length}: ${result.success}/${chunk.length} relays`);
-        } else {
-          totalFailure += chunk.length;
-          console.error(`Blast worker ${idx}/${chunks.length} returned status ${response.status}`);
-        }
-      } catch (error) {
-        totalFailure += chunk.length;
-        console.error(`Blast worker ${idx}/${chunks.length} failed:`, error);
-      }
-    });
-
-    await Promise.all(wavePromises);
-  }
-
-  const duration = Date.now() - startTime;
-  const message = anyTimedOut
-    ? `Event blast timed out. Sent to ${totalSuccess}/${relays.length} relays across ${chunks.length} workers`
-    : `Event blasted to ${totalSuccess}/${relays.length} relays across ${chunks.length} workers in ${duration}ms`;
-
-  console.log(`Blast complete: ${totalSuccess} success, ${totalFailure} failures across ${chunks.length} workers in ${duration}ms`);
-  sendOK(server, event.id, true, message);
 }
 
 async function verifyEventSignature(event) {
