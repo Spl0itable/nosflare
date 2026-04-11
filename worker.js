@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.39",
+  version: "7.9.40",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -3445,6 +3445,9 @@ async function processEvent(event, sessionId, env) {
     if (event.kind === 5) {
       return await processDeletionEvent(event, env);
     }
+    if (event.kind >= 2e4 && event.kind < 3e4) {
+      return { success: true, message: "Ephemeral event broadcast" };
+    }
     return await saveEventToDatabase(event, env);
   } catch (error) {
     console.error(`Error processing event: ${error.message}`);
@@ -3464,6 +3467,47 @@ async function saveEventToDatabase(event, env) {
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? void 0 };
+    }
+    const isReplaceable = event.kind === 0 || event.kind === 3 || event.kind >= 1e4 && event.kind < 2e4;
+    if (isReplaceable) {
+      const existing = await session.prepare(
+        "SELECT id, created_at FROM events WHERE kind = ? AND pubkey = ? LIMIT 1"
+      ).bind(event.kind, event.pubkey).first();
+      if (existing) {
+        if (event.created_at <= existing.created_at) {
+          return { success: false, message: "duplicate: a newer or equal replaceable event already exists", bookmark: session.getBookmark() ?? void 0 };
+        }
+        const oldId = existing.id;
+        await session.batch([
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(oldId)
+        ]);
+        console.log(`Replaced older event ${oldId} with newer event ${event.id} (kind ${event.kind})`);
+      }
+    }
+    const isParameterizedReplaceable = event.kind >= 3e4 && event.kind < 4e4;
+    if (isParameterizedReplaceable) {
+      const dTag = event.tags.find((t) => t[0] === "d")?.[1] || "";
+      const existing = await session.prepare(
+        "SELECT id, created_at FROM events WHERE kind = ? AND pubkey = ? AND tag_d = ? LIMIT 1"
+      ).bind(event.kind, event.pubkey, dTag).first();
+      if (existing) {
+        if (event.created_at <= existing.created_at) {
+          return { success: false, message: "duplicate: a newer or equal parameterized replaceable event already exists", bookmark: session.getBookmark() ?? void 0 };
+        }
+        const oldId = existing.id;
+        await session.batch([
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(oldId)
+        ]);
+        console.log(`Replaced older parameterized event ${oldId} with newer event ${event.id} (kind ${event.kind}, d=${dTag})`);
+      }
     }
     let contentHash = null;
     if (shouldCheckForDuplicates(event.kind)) {

@@ -643,6 +643,11 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
       return await processDeletionEvent(event, env);
     }
 
+    // NIP-16: Ephemeral events (kinds 20000-29999) are broadcast but never stored
+    if (event.kind >= 20000 && event.kind < 30000) {
+      return { success: true, message: "Ephemeral event broadcast" };
+    }
+
     // Save event directly to database
     return await saveEventToDatabase(event, env);
 
@@ -669,6 +674,57 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
     const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
     if (existingEvent) {
       return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? undefined };
+    }
+
+    // NIP-16: Replaceable events (kinds 0, 3, 10000-19999)
+    // Only the latest event (by created_at) for a given (kind, pubkey) should be stored
+    const isReplaceable = event.kind === 0 || event.kind === 3 || (event.kind >= 10000 && event.kind < 20000);
+    if (isReplaceable) {
+      const existing = await session.prepare(
+        "SELECT id, created_at FROM events WHERE kind = ? AND pubkey = ? LIMIT 1"
+      ).bind(event.kind, event.pubkey).first();
+
+      if (existing) {
+        if (event.created_at <= (existing.created_at as number)) {
+          return { success: false, message: "duplicate: a newer or equal replaceable event already exists", bookmark: session.getBookmark() ?? undefined };
+        }
+        // Delete the older event and its associated data
+        const oldId = existing.id as string;
+        await session.batch([
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(oldId),
+        ]);
+        console.log(`Replaced older event ${oldId} with newer event ${event.id} (kind ${event.kind})`);
+      }
+    }
+
+    // NIP-33: Parameterized replaceable events (kinds 30000-39999)
+    // Only the latest event for a given (kind, pubkey, d-tag) should be stored
+    const isParameterizedReplaceable = event.kind >= 30000 && event.kind < 40000;
+    if (isParameterizedReplaceable) {
+      const dTag = event.tags.find(t => t[0] === 'd')?.[1] || '';
+      const existing = await session.prepare(
+        "SELECT id, created_at FROM events WHERE kind = ? AND pubkey = ? AND tag_d = ? LIMIT 1"
+      ).bind(event.kind, event.pubkey, dTag).first();
+
+      if (existing) {
+        if (event.created_at <= (existing.created_at as number)) {
+          return { success: false, message: "duplicate: a newer or equal parameterized replaceable event already exists", bookmark: session.getBookmark() ?? undefined };
+        }
+        // Delete the older event and its associated data
+        const oldId = existing.id as string;
+        await session.batch([
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(oldId),
+        ]);
+        console.log(`Replaced older parameterized event ${oldId} with newer event ${event.id} (kind ${event.kind}, d=${dTag})`);
+      }
     }
 
     // Check for duplicate content (only if anti-spam is enabled)
