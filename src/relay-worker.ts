@@ -87,7 +87,7 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 42, 1984, 9735, 10002)`,
 
       `CREATE INDEX IF NOT EXISTS idx_events_tag_p_created_at ON events(tag_p, created_at DESC) WHERE tag_p IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_events_tag_e_created_at ON events(tag_e, created_at DESC) WHERE tag_e IS NOT NULL`,
@@ -218,7 +218,18 @@ async function initializeDatabase(db: D1Database): Promise<void> {
     const currentVersion = versionResult ? parseInt(versionResult.value) : 0;
 
     if (currentVersion < 5) {
-      console.log('Migrating to schema version 5: populating tag columns in events table...');
+      console.log('Migrating to schema version 5: adding and populating tag columns in events table...');
+
+      // Add tag columns if they don't exist (for databases created before these columns were in CREATE TABLE)
+      const v5Columns = ['tag_p', 'tag_e', 'tag_a', 'tag_t', 'tag_d', 'tag_r'];
+      for (const col of v5Columns) {
+        try {
+          await session.prepare(`ALTER TABLE events ADD COLUMN ${col} TEXT`).run();
+        } catch (e: any) {
+          // Column already exists — safe to ignore
+          if (!e.message?.includes('duplicate column')) throw e;
+        }
+      }
 
       await session.prepare(`
         UPDATE events
@@ -241,6 +252,17 @@ async function initializeDatabase(db: D1Database): Promise<void> {
 
     if (currentVersion < 6) {
       console.log('Migrating to schema version 6: adding L/s/u tags and thread metadata...');
+
+      // Add columns if they don't exist (for databases created before these columns were in CREATE TABLE)
+      const v6Columns = ['tag_L', 'tag_s', 'tag_u', 'reply_to_event_id', 'root_event_id', 'content_preview'];
+      for (const col of v6Columns) {
+        try {
+          await session.prepare(`ALTER TABLE events ADD COLUMN ${col} TEXT`).run();
+        } catch (e: any) {
+          // Column already exists — safe to ignore
+          if (!e.message?.includes('duplicate column')) throw e;
+        }
+      }
 
       await session.prepare(`
         UPDATE events

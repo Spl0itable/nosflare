@@ -78,9 +78,9 @@ var relayInfo = {
   description: "A serverless Nostr relay through Cloudflare Worker and D1 database",
   pubkey: "d49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df",
   contact: "lux@fed.wtf",
-  supported_nips: [1, 2, 4, 5, 9, 11, 12, 15, 16, 17, 20, 22, 33, 40, 42],
+  supported_nips: [1, 2, 4, 5, 9, 11, 12, 13, 15, 16, 17, 20, 22, 25, 28, 33, 40, 42, 57],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.40",
+  version: "7.9.41",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2980,7 +2980,7 @@ async function initializeDatabase(db) {
       `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 1984, 9735, 10002)`,
+      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 42, 1984, 9735, 10002)`,
       `CREATE INDEX IF NOT EXISTS idx_events_tag_p_created_at ON events(tag_p, created_at DESC) WHERE tag_p IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_events_tag_e_created_at ON events(tag_e, created_at DESC) WHERE tag_e IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_events_tag_a_created_at ON events(tag_a, created_at DESC) WHERE tag_a IS NOT NULL`,
@@ -3095,7 +3095,16 @@ async function initializeDatabase(db) {
     ).first();
     const currentVersion = versionResult ? parseInt(versionResult.value) : 0;
     if (currentVersion < 5) {
-      console.log("Migrating to schema version 5: populating tag columns in events table...");
+      console.log("Migrating to schema version 5: adding and populating tag columns in events table...");
+      const v5Columns = ["tag_p", "tag_e", "tag_a", "tag_t", "tag_d", "tag_r"];
+      for (const col of v5Columns) {
+        try {
+          await session.prepare(`ALTER TABLE events ADD COLUMN ${col} TEXT`).run();
+        } catch (e) {
+          if (!e.message?.includes("duplicate column"))
+            throw e;
+        }
+      }
       await session.prepare(`
         UPDATE events
         SET
@@ -3115,6 +3124,15 @@ async function initializeDatabase(db) {
     }
     if (currentVersion < 6) {
       console.log("Migrating to schema version 6: adding L/s/u tags and thread metadata...");
+      const v6Columns = ["tag_L", "tag_s", "tag_u", "reply_to_event_id", "root_event_id", "content_preview"];
+      for (const col of v6Columns) {
+        try {
+          await session.prepare(`ALTER TABLE events ADD COLUMN ${col} TEXT`).run();
+        } catch (e) {
+          if (!e.message?.includes("duplicate column"))
+            throw e;
+        }
+      }
       await session.prepare(`
         UPDATE events
         SET
