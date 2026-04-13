@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 13, 15, 16, 17, 20, 22, 25, 28, 33, 40, 42, 57],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.42",
+  version: "7.9.43",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2972,59 +2972,20 @@ async function initializeDatabase(db) {
         root_event_id TEXT,
         content_preview TEXT
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_events_pubkey ON events(pubkey)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_created_at ON events(kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_created_at ON events(pubkey, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_created_at_kind ON events(created_at DESC, kind)`,
       `CREATE INDEX IF NOT EXISTS idx_events_pubkey_kind_created_at ON events(pubkey, kind, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_events_kind_pubkey_created_at ON events(kind, pubkey, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_authors_kinds ON events(pubkey, kind) WHERE kind IN (0, 1, 3, 4, 6, 7, 42, 1984, 9735, 10002)`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_p_created_at ON events(tag_p, created_at DESC) WHERE tag_p IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_e_created_at ON events(tag_e, created_at DESC) WHERE tag_e IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_a_created_at ON events(tag_a, created_at DESC) WHERE tag_a IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_t_created_at ON events(tag_t, created_at DESC) WHERE tag_t IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_d_created_at ON events(tag_d, created_at DESC) WHERE tag_d IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_r_created_at ON events(tag_r, created_at DESC) WHERE tag_r IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_L_created_at ON events(tag_L, created_at DESC) WHERE tag_L IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_s_created_at ON events(tag_s, created_at DESC) WHERE tag_s IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_tag_u_created_at ON events(tag_u, created_at DESC) WHERE tag_u IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_p ON events(kind, tag_p, created_at DESC) WHERE tag_p IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_e ON events(kind, tag_e, created_at DESC) WHERE tag_e IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_a ON events(kind, tag_a, created_at DESC) WHERE tag_a IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_t ON events(kind, tag_t, created_at DESC) WHERE tag_t IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_L ON events(kind, tag_L, created_at DESC) WHERE tag_L IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_kind_tag_s ON events(kind, tag_s, created_at DESC) WHERE tag_s IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_reply_to ON events(reply_to_event_id, created_at DESC) WHERE reply_to_event_id IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_events_root_thread ON events(root_event_id, created_at DESC) WHERE root_event_id IS NOT NULL`,
       `CREATE TABLE IF NOT EXISTS tags (
         event_id TEXT NOT NULL,
         tag_name TEXT NOT NULL,
         tag_value TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_name_value ON tags(tag_name, tag_value)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_value ON tags(tag_value)`,
-      `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event_created ON tags(tag_name, tag_value, event_id)`,
-      `CREATE TABLE IF NOT EXISTS event_tags_cache (
-        event_id TEXT NOT NULL,
-        pubkey TEXT NOT NULL,
-        kind INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        tag_p TEXT,
-        tag_e TEXT,
-        tag_a TEXT,
-        PRIMARY KEY (event_id)
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p ON event_tags_cache(tag_p, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_e ON event_tags_cache(tag_e, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_p ON event_tags_cache(kind, tag_p)`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_p_e ON event_tags_cache(tag_p, tag_e) WHERE tag_p IS NOT NULL AND tag_e IS NOT NULL`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_kind_created_at ON event_tags_cache(kind, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_event_tags_cache_pubkey_kind_created_at ON event_tags_cache(pubkey, kind, created_at DESC)`,
+      `DROP TABLE IF EXISTS event_tags_cache`,
       `CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
         event_id TEXT NOT NULL,
         pubkey TEXT NOT NULL,
@@ -3054,37 +3015,53 @@ async function initializeDatabase(db) {
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_created_at ON content_hashes(created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey_created ON content_hashes(pubkey, created_at DESC)`,
-      `CREATE TABLE IF NOT EXISTS mv_recent_notes (
-        id TEXT PRIMARY KEY,
-        pubkey TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        kind INTEGER NOT NULL,
-        tags TEXT NOT NULL,
-        content TEXT NOT NULL,
-        sig TEXT NOT NULL
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_recent_notes_created_at ON mv_recent_notes(created_at DESC)`,
-      `CREATE TABLE IF NOT EXISTS mv_follow_graph (
-        follower_pubkey TEXT NOT NULL,
-        followed_pubkey TEXT NOT NULL,
-        last_updated INTEGER NOT NULL,
-        PRIMARY KEY (follower_pubkey, followed_pubkey)
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_follower ON mv_follow_graph(follower_pubkey)`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_follow_graph_followed ON mv_follow_graph(followed_pubkey)`,
-      `CREATE TABLE IF NOT EXISTS mv_timeline_cache (
-        follower_pubkey TEXT NOT NULL,
-        event_id TEXT NOT NULL,
-        event_pubkey TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        kind INTEGER NOT NULL,
-        PRIMARY KEY (follower_pubkey, event_id)
-      )`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_timeline_follower_time ON mv_timeline_cache(follower_pubkey, created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_mv_timeline_event ON mv_timeline_cache(event_id)`
+      `DROP TABLE IF EXISTS mv_follow_graph`,
+      `DROP TABLE IF EXISTS mv_recent_notes`,
+      `DROP TABLE IF EXISTS mv_timeline_cache`
     ];
     for (const statement of statements) {
       await session.prepare(statement).run();
+    }
+    const dropIndexes = [
+      // Redundant single-column prefixes (covered by composite indexes)
+      "idx_events_pubkey",
+      "idx_events_kind",
+      "idx_events_created_at_kind",
+      // Unused partial index
+      "idx_events_authors_kinds",
+      // Denormalized tag column indexes (never queried, superseded by event_tags_cache_multi)
+      "idx_events_tag_p_created_at",
+      "idx_events_tag_e_created_at",
+      "idx_events_tag_a_created_at",
+      "idx_events_tag_t_created_at",
+      "idx_events_tag_d_created_at",
+      "idx_events_tag_r_created_at",
+      "idx_events_tag_L_created_at",
+      "idx_events_tag_s_created_at",
+      "idx_events_tag_u_created_at",
+      "idx_events_kind_tag_p",
+      "idx_events_kind_tag_e",
+      "idx_events_kind_tag_a",
+      "idx_events_kind_tag_t",
+      "idx_events_kind_tag_L",
+      "idx_events_kind_tag_s",
+      // Thread indexes (written but never queried)
+      "idx_events_reply_to",
+      "idx_events_root_thread",
+      // Covering indexes (huge storage cost, never referenced by query planner hints)
+      "idx_events_kind_created_at_covering",
+      "idx_events_pubkey_kind_created_at_covering",
+      "idx_events_created_at_covering",
+      "idx_events_kind_pubkey_created_at_covering",
+      // Redundant tags indexes
+      "idx_tags_name_value",
+      "idx_tags_value",
+      "idx_tags_name_value_event_created"
+      // (event_tags_cache indexes removed by DROP TABLE above)
+      // (mv_follow_graph indexes removed by DROP TABLE above)
+    ];
+    for (const idx of dropIndexes) {
+      await session.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
     }
     await session.prepare("PRAGMA foreign_keys = ON").run();
     await session.prepare(
@@ -3163,23 +3140,6 @@ async function initializeDatabase(db) {
       "INSERT OR REPLACE INTO system_config (key, value) VALUES ('schema_version', '6')"
     ).run();
     await session.prepare(`
-      INSERT OR IGNORE INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-      SELECT
-        e.id,
-        e.pubkey,
-        e.kind,
-        e.created_at,
-        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'p' LIMIT 1) as tag_p,
-        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'e' LIMIT 1) as tag_e,
-        (SELECT tag_value FROM tags WHERE event_id = e.id AND tag_name = 'a' LIMIT 1) as tag_a
-      FROM events e
-      WHERE EXISTS (
-        SELECT 1 FROM tags t
-        WHERE t.event_id = e.id
-        AND t.tag_name IN ('p', 'e', 'a')
-      )
-    `).run();
-    await session.prepare(`
       INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
       SELECT
         e.id,
@@ -3194,7 +3154,6 @@ async function initializeDatabase(db) {
     `).run();
     await session.prepare("ANALYZE events").run();
     await session.prepare("ANALYZE tags").run();
-    await session.prepare("ANALYZE event_tags_cache").run();
     await session.prepare("ANALYZE event_tags_cache_multi").run();
     console.log("Database initialization completed!");
   } catch (error) {
@@ -3447,12 +3406,6 @@ function calculateQueryComplexity(filter) {
 __name(calculateQueryComplexity, "calculateQueryComplexity");
 async function processEvent(event, sessionId, env) {
   try {
-    const session = env.RELAY_DATABASE.withSession("first-primary");
-    const existingEvent = await session.prepare("SELECT id FROM events WHERE id = ? LIMIT 1").bind(event.id).first();
-    if (existingEvent) {
-      console.log(`Duplicate event detected: ${event.id}`);
-      return { success: false, message: "duplicate: already have this event", bookmark: session.getBookmark() ?? void 0 };
-    }
     if (event.kind !== 1059 && checkValidNip052 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
       if (!isValidNIP05) {
@@ -3499,7 +3452,6 @@ async function saveEventToDatabase(event, env) {
         await session.batch([
           session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
-          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM events WHERE id = ?").bind(oldId)
         ]);
@@ -3520,7 +3472,6 @@ async function saveEventToDatabase(event, env) {
         await session.batch([
           session.prepare("DELETE FROM tags WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(oldId),
-          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(oldId),
           session.prepare("DELETE FROM events WHERE id = ?").bind(oldId)
         ]);
@@ -3604,57 +3555,32 @@ async function saveEventToDatabase(event, env) {
       console.log(`Event ${event.id} already exists in database (race condition duplicate)`);
       return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? void 0 };
     }
-    if (tagInserts.length > 0) {
-      for (let j = 0; j < tagInserts.length; j += 50) {
-        const tagChunk = tagInserts.slice(j, j + 50);
-        const tagBatch = tagChunk.map(
-          (t) => session.prepare(`
-            INSERT INTO tags (event_id, tag_name, tag_value)
-            VALUES (?, ?, ?)
-          `).bind(event.id, t.name, t.value)
-        );
-        if (tagBatch.length > 0) {
-          await session.batch(tagBatch);
-        }
-      }
-    }
-    if (tagP || tagE || tagA) {
-      await session.prepare(`
-        INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(event_id) DO UPDATE SET
-          tag_p = excluded.tag_p,
-          tag_e = excluded.tag_e,
-          tag_a = excluded.tag_a
-      `).bind(
-        event.id,
-        event.pubkey,
-        event.kind,
-        event.created_at,
-        tagP,
-        tagE,
-        tagA
-      ).run();
+    const postInsertBatch = [];
+    for (const t of tagInserts) {
+      postInsertBatch.push(
+        session.prepare("INSERT INTO tags (event_id, tag_name, tag_value) VALUES (?, ?, ?)").bind(event.id, t.name, t.value)
+      );
     }
     const cacheableTags = tagInserts.filter((t) => ["p", "e", "a", "t", "d", "r", "L", "s", "u"].includes(t.name));
-    if (cacheableTags.length > 0) {
-      for (let j = 0; j < cacheableTags.length; j += 50) {
-        const cacheChunk = cacheableTags.slice(j, j + 50);
-        const cacheBatch = cacheChunk.map(
-          (t) => session.prepare(`
-            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-        );
-        await session.batch(cacheBatch);
-      }
+    for (const t of cacheableTags) {
+      postInsertBatch.push(
+        session.prepare(`
+          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+      );
     }
     if (contentHash) {
-      await session.prepare(`
-        INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(hash) DO NOTHING
-      `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
+      postInsertBatch.push(
+        session.prepare(`
+          INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(hash) DO NOTHING
+        `).bind(contentHash, event.id, event.pubkey, event.created_at)
+      );
+    }
+    for (let i = 0; i < postInsertBatch.length; i += 100) {
+      await session.batch(postInsertBatch.slice(i, i + 100));
     }
     await cache.put(cacheKey, new Response("cached", {
       headers: {
@@ -3679,42 +3605,54 @@ async function processDeletionEvent(event, env) {
   }
   let deletedCount = 0;
   const errors = [];
-  for (const eventId of deletedEventIds) {
+  const idsToDelete = [];
+  if (deletedEventIds.length > 0) {
     try {
-      const existing = await session.prepare(
-        "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
-      ).bind(eventId).first();
-      if (!existing) {
-        console.warn(`Event ${eventId} not found in D1. Nothing to delete (may be in queue).`);
-        continue;
+      const ownerPlaceholders = deletedEventIds.map(() => "?").join(",");
+      const ownerResult = await session.prepare(
+        `SELECT id, pubkey FROM events WHERE id IN (${ownerPlaceholders})`
+      ).bind(...deletedEventIds).all();
+      const eventOwners = /* @__PURE__ */ new Map();
+      for (const row of ownerResult.results) {
+        eventOwners.set(row.id, row.pubkey);
       }
-      if (existing.pubkey !== event.pubkey) {
-        console.warn(`Event ${eventId} does not belong to pubkey ${event.pubkey}. Skipping deletion.`);
-        errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
-        continue;
-      }
-      await session.prepare(
-        "DELETE FROM tags WHERE event_id = ?"
-      ).bind(eventId).run();
-      await session.prepare(
-        "DELETE FROM content_hashes WHERE event_id = ?"
-      ).bind(eventId).run();
-      await session.prepare(
-        "DELETE FROM event_tags_cache WHERE event_id = ?"
-      ).bind(eventId).run();
-      await session.prepare(
-        "DELETE FROM event_tags_cache_multi WHERE event_id = ?"
-      ).bind(eventId).run();
-      const result = await session.prepare(
-        "DELETE FROM events WHERE id = ?"
-      ).bind(eventId).run();
-      if (result.meta.changes > 0) {
-        console.log(`Event ${eventId} deleted from D1.`);
-        deletedCount++;
+      for (const eventId of deletedEventIds) {
+        const ownerPubkey = eventOwners.get(eventId);
+        if (!ownerPubkey) {
+          console.warn(`Event ${eventId} not found in D1. Nothing to delete (may be in queue).`);
+          continue;
+        }
+        if (ownerPubkey !== event.pubkey) {
+          console.warn(`Event ${eventId} does not belong to pubkey ${event.pubkey}. Skipping deletion.`);
+          errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
+          continue;
+        }
+        idsToDelete.push(eventId);
       }
     } catch (error) {
-      console.error(`Error deleting event ${eventId}:`, error);
-      errors.push(`error deleting ${eventId}`);
+      console.error("Error checking event ownership:", error);
+      errors.push("error checking event ownership");
+    }
+  }
+  if (idsToDelete.length > 0) {
+    try {
+      const deleteStatements = [];
+      for (const eventId of idsToDelete) {
+        deleteStatements.push(
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(eventId)
+        );
+      }
+      for (let i = 0; i < deleteStatements.length; i += 100) {
+        await session.batch(deleteStatements.slice(i, i + 100));
+      }
+      deletedCount = idsToDelete.length;
+      console.log(`Batch deleted ${deletedCount} events from D1.`);
+    } catch (error) {
+      console.error("Error batch deleting events:", error);
+      errors.push("error batch deleting events");
     }
   }
   const saveResult = await saveEventToDatabase(event, env);
@@ -3736,6 +3674,8 @@ function chunkArray(array, chunkSize) {
   return chunks;
 }
 __name(chunkArray, "chunkArray");
+var EVENT_COLS = "e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig";
+var EVENT_COLS_BARE = "id, pubkey, created_at, kind, tags, content, sig";
 function buildCountQuery(filter) {
   const params = [];
   const conditions = [];
@@ -3752,55 +3692,61 @@ function buildCountQuery(filter) {
     }
   }
   if (directTags.length > 0 && otherTags.length === 0) {
+    const cacheAlias = directTags.length === 1 ? "m" : "m0";
     if (directTags.length === 1) {
       const tagFilter = directTags[0];
-      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
-        INNER JOIN event_tags_cache_multi m ON e.id = m.event_id
+      const hasKinds = filter.kinds && filter.kinds.length > 0;
+      const indexHint = hasKinds && filter.kinds.length <= 10 ? " INDEXED BY idx_cache_multi_kind_type_value" : " INDEXED BY idx_cache_multi_type_value_time";
+      let sql2 = `SELECT COUNT(DISTINCT m.event_id) as count FROM event_tags_cache_multi m${indexHint}
         WHERE m.tag_type = ? AND m.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
       params.push(tagFilter.name, ...tagFilter.values);
       if (filter.authors && filter.authors.length > 0) {
-        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        sql2 += ` AND m.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
         params.push(...filter.authors);
       }
-      if (filter.kinds && filter.kinds.length > 0) {
-        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+      if (hasKinds) {
+        sql2 += ` AND m.kind IN (${filter.kinds.map(() => "?").join(",")})`;
         params.push(...filter.kinds);
       }
       if (filter.since) {
-        sql2 += " AND e.created_at >= ?";
+        sql2 += " AND m.created_at >= ?";
         params.push(filter.since);
       }
       if (filter.until) {
-        sql2 += " AND e.created_at <= ?";
+        sql2 += " AND m.created_at <= ?";
         params.push(filter.until);
       }
       return { sql: sql2, params };
     } else {
-      const tagJoins = directTags.map((t, i) => {
-        const alias = `m${i}`;
+      const hasKindsMulti = filter.kinds && filter.kinds.length > 0;
+      const firstTag = directTags[0];
+      const firstHint = hasKindsMulti && filter.kinds.length <= 10 ? " INDEXED BY idx_cache_multi_kind_type_value" : " INDEXED BY idx_cache_multi_type_value_time";
+      const additionalJoins = directTags.slice(1).map((t, i) => {
+        const alias = `m${i + 1}`;
         const placeholders = t.values.map(() => "?").join(",");
-        return `INNER JOIN event_tags_cache_multi ${alias} ON e.id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
+        return `INNER JOIN event_tags_cache_multi ${alias} ON m0.event_id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
       }).join("\n        ");
-      let sql2 = `SELECT COUNT(DISTINCT e.id) as count FROM events e
-        ${tagJoins}
-        WHERE 1=1`;
-      for (const tagFilter of directTags) {
+      let sql2 = `SELECT COUNT(DISTINCT m0.event_id) as count FROM event_tags_cache_multi m0${firstHint}
+        ${additionalJoins}
+        WHERE m0.tag_type = ? AND m0.tag_value IN (${firstTag.values.map(() => "?").join(",")})`;
+      params.push(firstTag.name, ...firstTag.values);
+      for (const tagFilter of directTags.slice(1)) {
         params.push(tagFilter.name, ...tagFilter.values);
       }
       if (filter.authors && filter.authors.length > 0) {
-        sql2 += ` AND e.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
+        sql2 += ` AND m0.pubkey IN (${filter.authors.map(() => "?").join(",")})`;
         params.push(...filter.authors);
       }
-      if (filter.kinds && filter.kinds.length > 0) {
-        sql2 += ` AND e.kind IN (${filter.kinds.map(() => "?").join(",")})`;
+      if (hasKindsMulti) {
+        sql2 += ` AND m0.kind IN (${filter.kinds.map(() => "?").join(",")})`;
         params.push(...filter.kinds);
       }
       if (filter.since) {
-        sql2 += " AND e.created_at >= ?";
+        sql2 += " AND m0.created_at >= ?";
         params.push(filter.since);
       }
       if (filter.until) {
-        sql2 += " AND e.created_at <= ?";
+        sql2 += " AND m0.created_at <= ?";
         params.push(filter.until);
       }
       return { sql: sql2, params };
@@ -3911,6 +3857,7 @@ function buildQuery(filter) {
   if (directTags.length > 0 && otherTags.length === 0) {
     let sql2;
     const whereConditions = [];
+    const cacheAlias = directTags.length === 1 ? "m" : "m0";
     if (directTags.length === 1) {
       const tagFilter = directTags[0];
       const hasKinds2 = filter.kinds && filter.kinds.length > 0;
@@ -3920,17 +3867,19 @@ function buildQuery(filter) {
       } else {
         indexHint2 = " INDEXED BY idx_cache_multi_type_value_time";
       }
-      sql2 = `SELECT DISTINCT e.* FROM events e
+      sql2 = `SELECT DISTINCT ${EVENT_COLS} FROM events e
         INNER JOIN event_tags_cache_multi m${indexHint2} ON e.id = m.event_id
         WHERE m.tag_type = ? AND m.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
       params.push(tagFilter.name, ...tagFilter.values);
     } else {
+      const hasKindsMulti = filter.kinds && filter.kinds.length > 0;
       const tagConditions = directTags.map((t, i) => {
         const alias = `m${i}`;
         const placeholders = t.values.map(() => "?").join(",");
-        return `INNER JOIN event_tags_cache_multi ${alias} ON e.id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
+        const hint = i === 0 ? hasKindsMulti && filter.kinds.length <= 10 ? " INDEXED BY idx_cache_multi_kind_type_value" : " INDEXED BY idx_cache_multi_type_value_time" : "";
+        return `INNER JOIN event_tags_cache_multi ${alias}${hint} ON e.id = ${alias}.event_id AND ${alias}.tag_type = ? AND ${alias}.tag_value IN (${placeholders})`;
       }).join("\n        ");
-      sql2 = `SELECT DISTINCT e.* FROM events e
+      sql2 = `SELECT DISTINCT ${EVENT_COLS} FROM events e
         ${tagConditions}
         WHERE 1=1`;
       for (const tagFilter of directTags) {
@@ -3946,26 +3895,26 @@ function buildQuery(filter) {
       params.push(...filter.authors);
     }
     if (filter.kinds && filter.kinds.length > 0) {
-      whereConditions.push(`e.kind IN (${filter.kinds.map(() => "?").join(",")})`);
+      whereConditions.push(`${cacheAlias}.kind IN (${filter.kinds.map(() => "?").join(",")})`);
       params.push(...filter.kinds);
     }
     if (filter.since) {
-      whereConditions.push("e.created_at >= ?");
+      whereConditions.push(`${cacheAlias}.created_at >= ?`);
       params.push(filter.since);
     }
     if (filter.until) {
-      whereConditions.push("e.created_at <= ?");
+      whereConditions.push(`${cacheAlias}.created_at <= ?`);
       params.push(filter.until);
     }
     if (filter.cursor) {
       const [timestamp, lastId] = filter.cursor.split(":");
-      whereConditions.push("(e.created_at < ? OR (e.created_at = ? AND e.id > ?))");
+      whereConditions.push(`(${cacheAlias}.created_at < ? OR (${cacheAlias}.created_at = ? AND e.id > ?))`);
       params.push(parseInt(timestamp), parseInt(timestamp), lastId);
     }
     if (whereConditions.length > 0) {
       sql2 += " AND " + whereConditions.join(" AND ");
     }
-    sql2 += " ORDER BY e.created_at DESC LIMIT ?";
+    sql2 += ` ORDER BY ${cacheAlias}.created_at DESC LIMIT ?`;
     params.push(Math.min(filter.limit || 500, 500));
     return { sql: sql2, params };
   }
@@ -3973,7 +3922,7 @@ function buildQuery(filter) {
     const allTags = [...directTags, ...otherTags];
     if (allTags.length === 1) {
       const tagFilter = allTags[0];
-      let sql3 = `SELECT e.* FROM events e
+      let sql3 = `SELECT ${EVENT_COLS} FROM events e
         INNER JOIN tags t ON e.id = t.event_id
         WHERE t.tag_name = ? AND t.tag_value IN (${tagFilter.values.map(() => "?").join(",")})`;
       params.push(tagFilter.name, ...tagFilter.values);
@@ -4018,7 +3967,7 @@ function buildQuery(filter) {
     for (const tagFilter of allTags) {
       params.push(tagFilter.name, ...tagFilter.values);
     }
-    let sql2 = `SELECT e.* FROM events e
+    let sql2 = `SELECT ${EVENT_COLS} FROM events e
       INNER JOIN tags t ON e.id = t.event_id
       WHERE ${tagConditions}`;
     const whereConditions = [];
@@ -4079,7 +4028,7 @@ function buildQuery(filter) {
   } else if (!hasAuthors && !hasKinds && hasTimeRange) {
     indexHint = " INDEXED BY idx_events_created_at";
   }
-  let sql = `SELECT * FROM events${indexHint}`;
+  let sql = `SELECT ${EVENT_COLS_BARE} FROM events${indexHint}`;
   if (filter.ids && filter.ids.length > 0) {
     conditions.push(`id IN (${filter.ids.map(() => "?").join(",")})`);
     params.push(...filter.ids);
@@ -5167,23 +5116,12 @@ async function pruneOldEvents(session, targetSizeBytes) {
     }
     const eventIds = oldestEvents.results.map((row) => row.id);
     const placeholders = eventIds.map(() => "?").join(",");
-    const deleteResult = await session.prepare(`
-      DELETE FROM events WHERE id IN (${placeholders})
-    `).bind(...eventIds).run();
-    const deletedCount = deleteResult.meta?.changes || eventIds.length;
+    const pruneResults = await session.batch([
+      session.prepare(`DELETE FROM event_tags_cache_multi WHERE event_id IN (${placeholders})`).bind(...eventIds),
+      session.prepare(`DELETE FROM events WHERE id IN (${placeholders})`).bind(...eventIds)
+    ]);
+    const deletedCount = pruneResults[1]?.meta?.changes || eventIds.length;
     totalEventsDeleted += deletedCount;
-    await session.prepare(`
-      DELETE FROM event_tags_cache WHERE event_id IN (${placeholders})
-    `).bind(...eventIds).run();
-    await session.prepare(`
-      DELETE FROM event_tags_cache_multi WHERE event_id IN (${placeholders})
-    `).bind(...eventIds).run();
-    await session.prepare(`
-      DELETE FROM mv_recent_notes WHERE id IN (${placeholders})
-    `).bind(...eventIds).run();
-    await session.prepare(`
-      DELETE FROM mv_timeline_cache WHERE event_id IN (${placeholders})
-    `).bind(...eventIds).run();
     console.log(`Pruned ${deletedCount} events (total: ${totalEventsDeleted})`);
     currentSize = await getDatabaseSizeBytes(session);
     console.log(`Current database size: ${(currentSize / (1024 * 1024 * 1024)).toFixed(2)} GB`);
@@ -5262,7 +5200,6 @@ var relay_worker_default = {
       console.log("Running ANALYZE on all tables...");
       await session.prepare("ANALYZE events").run();
       await session.prepare("ANALYZE tags").run();
-      await session.prepare("ANALYZE event_tags_cache").run();
       await session.prepare("ANALYZE event_tags_cache_multi").run();
       await session.prepare("ANALYZE content_hashes").run();
       console.log("ANALYZE completed - query planner statistics updated");
@@ -5744,6 +5681,7 @@ var _RelayWebSocket = class _RelayWebSocket {
       }
       this.processedEvents.set(event.id, Date.now());
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
+      this.invalidateRelevantCaches(event);
       await this.broadcastToLocalSessions(event);
       const fiveMinutesAgo = Date.now() - 3e5;
       let cleaned = 0;
