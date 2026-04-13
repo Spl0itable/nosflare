@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 13, 15, 16, 17, 20, 22, 25, 28, 33, 40, 42, 57],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.43",
+  version: "7.9.44",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2928,9 +2928,56 @@ var GLOBAL_MAX_EVENTS = 500;
 var MAX_QUERY_COMPLEXITY = 1e3;
 var CHUNK_SIZE = 500;
 async function initializeDatabase(db) {
+  const dropSession = db.withSession("first-primary");
   try {
-    const session2 = db.withSession("first-unconstrained");
-    const initCheck = await session2.prepare(
+    await dropSession.prepare(`
+      CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
+      )
+    `).run();
+  } catch (_) {
+  }
+  const dropIndexes = [
+    "idx_events_pubkey",
+    "idx_events_kind",
+    "idx_events_created_at_kind",
+    "idx_events_authors_kinds",
+    "idx_events_tag_p_created_at",
+    "idx_events_tag_e_created_at",
+    "idx_events_tag_a_created_at",
+    "idx_events_tag_t_created_at",
+    "idx_events_tag_d_created_at",
+    "idx_events_tag_r_created_at",
+    "idx_events_tag_L_created_at",
+    "idx_events_tag_s_created_at",
+    "idx_events_tag_u_created_at",
+    "idx_events_kind_tag_p",
+    "idx_events_kind_tag_e",
+    "idx_events_kind_tag_a",
+    "idx_events_kind_tag_t",
+    "idx_events_kind_tag_L",
+    "idx_events_kind_tag_s",
+    "idx_events_reply_to",
+    "idx_events_root_thread",
+    "idx_events_kind_created_at_covering",
+    "idx_events_pubkey_kind_created_at_covering",
+    "idx_events_created_at_covering",
+    "idx_events_kind_pubkey_created_at_covering",
+    "idx_tags_name_value",
+    "idx_tags_value",
+    "idx_tags_name_value_event_created"
+  ];
+  for (const idx of dropIndexes) {
+    await dropSession.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
+  }
+  const dropTables = ["event_tags_cache", "mv_follow_graph", "mv_recent_notes", "mv_timeline_cache"];
+  for (const tbl of dropTables) {
+    await dropSession.prepare(`DROP TABLE IF EXISTS ${tbl}`).run();
+  }
+  try {
+    const initCheck = await dropSession.prepare(
       "SELECT value FROM system_config WHERE key = 'db_initialized' LIMIT 1"
     ).first().catch(() => null);
     if (initCheck && initCheck.value === "1") {
@@ -2985,7 +3032,6 @@ async function initializeDatabase(db) {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
-      `DROP TABLE IF EXISTS event_tags_cache`,
       `CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
         event_id TEXT NOT NULL,
         pubkey TEXT NOT NULL,
@@ -3014,54 +3060,10 @@ async function initializeDatabase(db) {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_created_at ON content_hashes(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey_created ON content_hashes(pubkey, created_at DESC)`,
-      `DROP TABLE IF EXISTS mv_follow_graph`,
-      `DROP TABLE IF EXISTS mv_recent_notes`,
-      `DROP TABLE IF EXISTS mv_timeline_cache`
+      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey_created ON content_hashes(pubkey, created_at DESC)`
     ];
     for (const statement of statements) {
       await session.prepare(statement).run();
-    }
-    const dropIndexes = [
-      // Redundant single-column prefixes (covered by composite indexes)
-      "idx_events_pubkey",
-      "idx_events_kind",
-      "idx_events_created_at_kind",
-      // Unused partial index
-      "idx_events_authors_kinds",
-      // Denormalized tag column indexes (never queried, superseded by event_tags_cache_multi)
-      "idx_events_tag_p_created_at",
-      "idx_events_tag_e_created_at",
-      "idx_events_tag_a_created_at",
-      "idx_events_tag_t_created_at",
-      "idx_events_tag_d_created_at",
-      "idx_events_tag_r_created_at",
-      "idx_events_tag_L_created_at",
-      "idx_events_tag_s_created_at",
-      "idx_events_tag_u_created_at",
-      "idx_events_kind_tag_p",
-      "idx_events_kind_tag_e",
-      "idx_events_kind_tag_a",
-      "idx_events_kind_tag_t",
-      "idx_events_kind_tag_L",
-      "idx_events_kind_tag_s",
-      // Thread indexes (written but never queried)
-      "idx_events_reply_to",
-      "idx_events_root_thread",
-      // Covering indexes (huge storage cost, never referenced by query planner hints)
-      "idx_events_kind_created_at_covering",
-      "idx_events_pubkey_kind_created_at_covering",
-      "idx_events_created_at_covering",
-      "idx_events_kind_pubkey_created_at_covering",
-      // Redundant tags indexes
-      "idx_tags_name_value",
-      "idx_tags_value",
-      "idx_tags_name_value_event_created"
-      // (event_tags_cache indexes removed by DROP TABLE above)
-      // (mv_follow_graph indexes removed by DROP TABLE above)
-    ];
-    for (const idx of dropIndexes) {
-      await session.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
     }
     await session.prepare("PRAGMA foreign_keys = ON").run();
     await session.prepare(

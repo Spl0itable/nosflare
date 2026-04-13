@@ -30,9 +30,69 @@ const CHUNK_SIZE = 500;
 
 // Database initialization
 async function initializeDatabase(db: D1Database): Promise<void> {
+  const dropSession = db.withSession('first-primary');
+
   try {
-    const session = db.withSession('first-unconstrained');
-    const initCheck = await session.prepare(
+    await dropSession.prepare(`
+      CREATE TABLE IF NOT EXISTS system_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
+      )
+    `).run();
+  } catch (_) {}
+
+  const cleanupDone = await dropSession.prepare(
+    "SELECT value FROM system_config WHERE key = 'cleanup_v1' LIMIT 1"
+  ).first().catch(() => null);
+
+  if (!cleanupDone || cleanupDone.value !== '1') {
+    const dropIndexes = [
+      'idx_events_pubkey',
+      'idx_events_kind',
+      'idx_events_created_at_kind',
+      'idx_events_authors_kinds',
+      'idx_events_tag_p_created_at',
+      'idx_events_tag_e_created_at',
+      'idx_events_tag_a_created_at',
+      'idx_events_tag_t_created_at',
+      'idx_events_tag_d_created_at',
+      'idx_events_tag_r_created_at',
+      'idx_events_tag_L_created_at',
+      'idx_events_tag_s_created_at',
+      'idx_events_tag_u_created_at',
+      'idx_events_kind_tag_p',
+      'idx_events_kind_tag_e',
+      'idx_events_kind_tag_a',
+      'idx_events_kind_tag_t',
+      'idx_events_kind_tag_L',
+      'idx_events_kind_tag_s',
+      'idx_events_reply_to',
+      'idx_events_root_thread',
+      'idx_events_kind_created_at_covering',
+      'idx_events_pubkey_kind_created_at_covering',
+      'idx_events_created_at_covering',
+      'idx_events_kind_pubkey_created_at_covering',
+      'idx_tags_name_value',
+      'idx_tags_value',
+      'idx_tags_name_value_event_created',
+    ];
+    for (const idx of dropIndexes) {
+      await dropSession.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
+    }
+
+    const dropTables = ['event_tags_cache', 'mv_follow_graph', 'mv_recent_notes', 'mv_timeline_cache'];
+    for (const tbl of dropTables) {
+      await dropSession.prepare(`DROP TABLE IF EXISTS ${tbl}`).run();
+    }
+
+    await dropSession.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('cleanup_v1', '1')"
+    ).run();
+  }
+
+  try {
+    const initCheck = await dropSession.prepare(
       "SELECT value FROM system_config WHERE key = 'db_initialized' LIMIT 1"
     ).first().catch(() => null);
 
@@ -94,8 +154,6 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_tags_name_value_event ON tags(tag_name, tag_value, event_id)`,
       `CREATE INDEX IF NOT EXISTS idx_tags_event_id ON tags(event_id)`,
 
-      `DROP TABLE IF EXISTS event_tags_cache`,
-
       `CREATE TABLE IF NOT EXISTS event_tags_cache_multi (
         event_id TEXT NOT NULL,
         pubkey TEXT NOT NULL,
@@ -126,50 +184,11 @@ async function initializeDatabase(db: D1Database): Promise<void> {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey ON content_hashes(pubkey)`,
       `CREATE INDEX IF NOT EXISTS idx_content_hashes_created_at ON content_hashes(created_at DESC)`,
-      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey_created ON content_hashes(pubkey, created_at DESC)`,
-
-      `DROP TABLE IF EXISTS mv_follow_graph`,
-      `DROP TABLE IF EXISTS mv_recent_notes`,
-      `DROP TABLE IF EXISTS mv_timeline_cache`
+      `CREATE INDEX IF NOT EXISTS idx_content_hashes_pubkey_created ON content_hashes(pubkey, created_at DESC)`
     ];
 
     for (const statement of statements) {
       await session.prepare(statement).run();
-    }
-
-    // Drop unused indexes from existing database
-    const dropIndexes = [
-      'idx_events_pubkey',
-      'idx_events_kind',
-      'idx_events_created_at_kind',
-      'idx_events_authors_kinds',
-      'idx_events_tag_p_created_at',
-      'idx_events_tag_e_created_at',
-      'idx_events_tag_a_created_at',
-      'idx_events_tag_t_created_at',
-      'idx_events_tag_d_created_at',
-      'idx_events_tag_r_created_at',
-      'idx_events_tag_L_created_at',
-      'idx_events_tag_s_created_at',
-      'idx_events_tag_u_created_at',
-      'idx_events_kind_tag_p',
-      'idx_events_kind_tag_e',
-      'idx_events_kind_tag_a',
-      'idx_events_kind_tag_t',
-      'idx_events_kind_tag_L',
-      'idx_events_kind_tag_s',
-      'idx_events_reply_to',
-      'idx_events_root_thread',
-      'idx_events_kind_created_at_covering',
-      'idx_events_pubkey_kind_created_at_covering',
-      'idx_events_created_at_covering',
-      'idx_events_kind_pubkey_created_at_covering',
-      'idx_tags_name_value',
-      'idx_tags_value',
-      'idx_tags_name_value_event_created',
-    ];
-    for (const idx of dropIndexes) {
-      await session.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
     }
 
     await session.prepare("PRAGMA foreign_keys = ON").run();
@@ -1148,7 +1167,6 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
       const tagFilter = directTags[0];
       const hasKinds = filter.kinds && filter.kinds.length > 0;
 
-      // Choose optimal index based on query pattern
       let indexHint = "";
       if (hasKinds && filter.kinds!.length <= 10) {
         indexHint = " INDEXED BY idx_cache_multi_kind_type_value";
@@ -1161,12 +1179,10 @@ function buildQuery(filter: NostrFilter): { sql: string; params: any[] } {
         WHERE m.tag_type = ? AND m.tag_value IN (${tagFilter.values.map(() => '?').join(',')})`;
       params.push(tagFilter.name, ...tagFilter.values);
     } else {
-      // Multiple tag types - need to match ALL tag conditions
       const hasKindsMulti = filter.kinds && filter.kinds.length > 0;
       const tagConditions = directTags.map((t, i) => {
         const alias = `m${i}`;
         const placeholders = t.values.map(() => '?').join(',');
-        // Add index hint to first alias for better query planning
         const hint = i === 0
           ? (hasKindsMulti && filter.kinds!.length <= 10
             ? " INDEXED BY idx_cache_multi_kind_type_value"
