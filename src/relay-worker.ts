@@ -639,18 +639,6 @@ function calculateQueryComplexity(filter: NostrFilter): number {
 // Event processing
 async function processEvent(event: NostrEvent, sessionId: string, env: Env): Promise<{ success: boolean; message: string; bookmark?: string }> {
   try {
-    // Check cache for duplicate event ID using primary for consistency
-    const session = env.RELAY_DATABASE.withSession('first-primary');
-    const existingEvent = await session
-      .prepare("SELECT id FROM events WHERE id = ? LIMIT 1")
-      .bind(event.id)
-      .first();
-
-    if (existingEvent) {
-      console.log(`Duplicate event detected: ${event.id}`);
-      return { success: false, message: "duplicate: already have this event", bookmark: session.getBookmark() ?? undefined };
-    }
-
     // NIP-05 validation if enabled (bypassed for kind 1059)
     if (event.kind !== 1059 && checkValidNip05 && event.kind !== 0) {
       const isValidNIP05 = await validateNIP05FromKind0(event.pubkey, env);
@@ -670,7 +658,7 @@ async function processEvent(event: NostrEvent, sessionId: string, env: Env): Pro
       return { success: true, message: "Ephemeral event broadcast" };
     }
 
-    // Save event directly to database
+    // Save event directly to database (duplicate check happens inside saveEventToDatabase)
     return await saveEventToDatabase(event, env);
 
   } catch (error: any) {
@@ -835,66 +823,54 @@ async function saveEventToDatabase(event: NostrEvent, env: Env): Promise<{ succe
       return { success: false, message: "duplicate: event already exists", bookmark: session.getBookmark() ?? undefined };
     }
 
-    // Only insert tags if the event was successfully inserted
-    if (tagInserts.length > 0) {
-      for (let j = 0; j < tagInserts.length; j += 50) {
-        const tagChunk = tagInserts.slice(j, j + 50);
-        const tagBatch = tagChunk.map(t =>
-          session.prepare(`
-            INSERT INTO tags (event_id, tag_name, tag_value)
-            VALUES (?, ?, ?)
-          `).bind(event.id, t.name, t.value)
-        );
+    // Consolidate all post-insert writes (tags, caches, content hash) into a single batch
+    // to minimize D1 round-trips to the primary
+    const postInsertBatch: ReturnType<typeof session.prepare>[] = [];
 
-        if (tagBatch.length > 0) {
-          await session.batch(tagBatch);
-        }
-      }
+    // Tag inserts
+    for (const t of tagInserts) {
+      postInsertBatch.push(
+        session.prepare('INSERT INTO tags (event_id, tag_name, tag_value) VALUES (?, ?, ?)').bind(event.id, t.name, t.value)
+      );
     }
 
-    // Update event tags cache for common tags (legacy single-value cache)
+    // Event tags cache (legacy single-value cache)
     if (tagP || tagE || tagA) {
-      await session.prepare(`
-        INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(event_id) DO UPDATE SET
-          tag_p = excluded.tag_p,
-          tag_e = excluded.tag_e,
-          tag_a = excluded.tag_a
-      `).bind(
-        event.id,
-        event.pubkey,
-        event.kind,
-        event.created_at,
-        tagP,
-        tagE,
-        tagA
-      ).run();
+      postInsertBatch.push(
+        session.prepare(`
+          INSERT INTO event_tags_cache (event_id, pubkey, kind, created_at, tag_p, tag_e, tag_a)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(event_id) DO UPDATE SET
+            tag_p = excluded.tag_p, tag_e = excluded.tag_e, tag_a = excluded.tag_a
+        `).bind(event.id, event.pubkey, event.kind, event.created_at, tagP, tagE, tagA)
+      );
     }
 
-    // Insert ALL p/e/a/t/d/r/L/s/u tags into multi-value cache
-    // Chunk in batches of 50 to stay well under D1's 100 statement batch limit
+    // Multi-value tag cache for p/e/a/t/d/r/L/s/u tags
     const cacheableTags = tagInserts.filter(t => ['p', 'e', 'a', 't', 'd', 'r', 'L', 's', 'u'].includes(t.name));
-    if (cacheableTags.length > 0) {
-      for (let j = 0; j < cacheableTags.length; j += 50) {
-        const cacheChunk = cacheableTags.slice(j, j + 50);
-        const cacheBatch = cacheChunk.map(t =>
-          session.prepare(`
-            INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
-        );
-        await session.batch(cacheBatch);
-      }
+    for (const t of cacheableTags) {
+      postInsertBatch.push(
+        session.prepare(`
+          INSERT OR IGNORE INTO event_tags_cache_multi (event_id, pubkey, kind, created_at, tag_type, tag_value)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(event.id, event.pubkey, event.kind, event.created_at, t.name, t.value)
+      );
     }
 
-    // Insert content hash if present
+    // Content hash
     if (contentHash) {
-      await session.prepare(`
-        INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(hash) DO NOTHING
-      `).bind(contentHash, event.id, event.pubkey, event.created_at).run();
+      postInsertBatch.push(
+        session.prepare(`
+          INSERT INTO content_hashes (hash, event_id, pubkey, created_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(hash) DO NOTHING
+        `).bind(contentHash, event.id, event.pubkey, event.created_at)
+      );
+    }
+
+    // Execute all post-insert writes in chunks of 50 (D1 batch limit is 100)
+    for (let i = 0; i < postInsertBatch.length; i += 50) {
+      await session.batch(postInsertBatch.slice(i, i + 50));
     }
 
     // Cache the event ID in worker cache to prevent duplicates
@@ -927,58 +903,57 @@ async function processDeletionEvent(event: NostrEvent, env: Env): Promise<{ succ
 
   let deletedCount = 0;
   const errors: string[] = [];
+  const idsToDelete: string[] = [];
 
+  // First pass: verify ownership for all events (reads only)
   for (const eventId of deletedEventIds) {
     try {
-      // Check if the event exists in D1
       const existing = await session.prepare(
         "SELECT pubkey FROM events WHERE id = ? LIMIT 1"
       ).bind(eventId).first();
 
-      // If event doesn't exist in D1, skip (events in queue will be processed later)
       if (!existing) {
         console.warn(`Event ${eventId} not found in D1. Nothing to delete (may be in queue).`);
         continue;
       }
 
-      // Check ownership
       if (existing.pubkey !== event.pubkey) {
         console.warn(`Event ${eventId} does not belong to pubkey ${event.pubkey}. Skipping deletion.`);
         errors.push(`unauthorized: cannot delete event ${eventId} - wrong pubkey`);
         continue;
       }
 
-      // Delete from D1
-      // Delete associated tags first (due to foreign key constraint)
-      await session.prepare(
-        "DELETE FROM tags WHERE event_id = ?"
-      ).bind(eventId).run();
-
-      // Delete from content_hashes if exists
-      await session.prepare(
-        "DELETE FROM content_hashes WHERE event_id = ?"
-      ).bind(eventId).run();
-
-      // Delete from event_tags_cache (both old and new)
-      await session.prepare(
-        "DELETE FROM event_tags_cache WHERE event_id = ?"
-      ).bind(eventId).run();
-      await session.prepare(
-        "DELETE FROM event_tags_cache_multi WHERE event_id = ?"
-      ).bind(eventId).run();
-
-      // Now delete the event
-      const result = await session.prepare(
-        "DELETE FROM events WHERE id = ?"
-      ).bind(eventId).run();
-
-      if (result.meta.changes > 0) {
-        console.log(`Event ${eventId} deleted from D1.`);
-        deletedCount++;
-      }
+      idsToDelete.push(eventId);
     } catch (error) {
-      console.error(`Error deleting event ${eventId}:`, error);
-      errors.push(`error deleting ${eventId}`);
+      console.error(`Error checking event ${eventId}:`, error);
+      errors.push(`error checking ${eventId}`);
+    }
+  }
+
+  // Second pass: batch delete all verified events in one D1 call
+  if (idsToDelete.length > 0) {
+    try {
+      const deleteStatements: ReturnType<typeof session.prepare>[] = [];
+      for (const eventId of idsToDelete) {
+        deleteStatements.push(
+          session.prepare("DELETE FROM tags WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM content_hashes WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM event_tags_cache WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM event_tags_cache_multi WHERE event_id = ?").bind(eventId),
+          session.prepare("DELETE FROM events WHERE id = ?").bind(eventId),
+        );
+      }
+
+      // Execute in chunks of 50 to stay under D1's 100 statement batch limit
+      for (let i = 0; i < deleteStatements.length; i += 50) {
+        await session.batch(deleteStatements.slice(i, i + 50));
+      }
+
+      deletedCount = idsToDelete.length;
+      console.log(`Batch deleted ${deletedCount} events from D1.`);
+    } catch (error) {
+      console.error('Error batch deleting events:', error);
+      errors.push('error batch deleting events');
     }
   }
 

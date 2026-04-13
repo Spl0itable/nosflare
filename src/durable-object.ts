@@ -701,6 +701,9 @@ export class RelayWebSocket implements DurableObject {
 
       console.log(`DO ${this.doName} received event ${event.id} from ${sourceDoId}`);
 
+      // Invalidate local query caches that match this event so stale results aren't served
+      this.invalidateRelevantCaches(event);
+
       // Broadcast to local sessions
       await this.broadcastToLocalSessions(event);
 
