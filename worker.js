@@ -80,7 +80,7 @@ var relayInfo = {
   contact: "lux@fed.wtf",
   supported_nips: [1, 2, 4, 5, 9, 11, 12, 13, 15, 16, 17, 20, 22, 25, 28, 33, 40, 42, 57],
   software: "https://github.com/Spl0itable/nosflare",
-  version: "7.9.44",
+  version: "7.9.45",
   icon: "https://raw.githubusercontent.com/Spl0itable/nosflare/main/images/flare.png",
   // Optional fields (uncomment as needed):
   // banner: "https://example.com/banner.jpg",
@@ -2939,42 +2939,50 @@ async function initializeDatabase(db) {
     `).run();
   } catch (_) {
   }
-  const dropIndexes = [
-    "idx_events_pubkey",
-    "idx_events_kind",
-    "idx_events_created_at_kind",
-    "idx_events_authors_kinds",
-    "idx_events_tag_p_created_at",
-    "idx_events_tag_e_created_at",
-    "idx_events_tag_a_created_at",
-    "idx_events_tag_t_created_at",
-    "idx_events_tag_d_created_at",
-    "idx_events_tag_r_created_at",
-    "idx_events_tag_L_created_at",
-    "idx_events_tag_s_created_at",
-    "idx_events_tag_u_created_at",
-    "idx_events_kind_tag_p",
-    "idx_events_kind_tag_e",
-    "idx_events_kind_tag_a",
-    "idx_events_kind_tag_t",
-    "idx_events_kind_tag_L",
-    "idx_events_kind_tag_s",
-    "idx_events_reply_to",
-    "idx_events_root_thread",
-    "idx_events_kind_created_at_covering",
-    "idx_events_pubkey_kind_created_at_covering",
-    "idx_events_created_at_covering",
-    "idx_events_kind_pubkey_created_at_covering",
-    "idx_tags_name_value",
-    "idx_tags_value",
-    "idx_tags_name_value_event_created"
-  ];
-  for (const idx of dropIndexes) {
-    await dropSession.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
-  }
-  const dropTables = ["event_tags_cache", "mv_follow_graph", "mv_recent_notes", "mv_timeline_cache"];
-  for (const tbl of dropTables) {
-    await dropSession.prepare(`DROP TABLE IF EXISTS ${tbl}`).run();
+  const cleanupDone = await dropSession.prepare(
+    "SELECT value FROM system_config WHERE key = 'cleanup_v1' LIMIT 1"
+  ).first().catch(() => null);
+  if (!cleanupDone || cleanupDone.value !== "1") {
+    const dropIndexes = [
+      "idx_events_pubkey",
+      "idx_events_kind",
+      "idx_events_created_at_kind",
+      "idx_events_authors_kinds",
+      "idx_events_tag_p_created_at",
+      "idx_events_tag_e_created_at",
+      "idx_events_tag_a_created_at",
+      "idx_events_tag_t_created_at",
+      "idx_events_tag_d_created_at",
+      "idx_events_tag_r_created_at",
+      "idx_events_tag_L_created_at",
+      "idx_events_tag_s_created_at",
+      "idx_events_tag_u_created_at",
+      "idx_events_kind_tag_p",
+      "idx_events_kind_tag_e",
+      "idx_events_kind_tag_a",
+      "idx_events_kind_tag_t",
+      "idx_events_kind_tag_L",
+      "idx_events_kind_tag_s",
+      "idx_events_reply_to",
+      "idx_events_root_thread",
+      "idx_events_kind_created_at_covering",
+      "idx_events_pubkey_kind_created_at_covering",
+      "idx_events_created_at_covering",
+      "idx_events_kind_pubkey_created_at_covering",
+      "idx_tags_name_value",
+      "idx_tags_value",
+      "idx_tags_name_value_event_created"
+    ];
+    for (const idx of dropIndexes) {
+      await dropSession.prepare(`DROP INDEX IF EXISTS ${idx}`).run();
+    }
+    const dropTables = ["event_tags_cache", "mv_follow_graph", "mv_recent_notes", "mv_timeline_cache"];
+    for (const tbl of dropTables) {
+      await dropSession.prepare(`DROP TABLE IF EXISTS ${tbl}`).run();
+    }
+    await dropSession.prepare(
+      "INSERT OR REPLACE INTO system_config (key, value) VALUES ('cleanup_v1', '1')"
+    ).run();
   }
   try {
     const initCheck = await dropSession.prepare(
@@ -5087,10 +5095,10 @@ async function getOptimalDO(cf, env, url) {
 __name(getOptimalDO, "getOptimalDO");
 async function getDatabaseSizeBytes(session) {
   try {
-    const pageCountResult = await session.prepare("PRAGMA page_count").first();
-    const pageSizeResult = await session.prepare("PRAGMA page_size").first();
-    if (pageCountResult && pageSizeResult) {
-      return pageCountResult.page_count * pageSizeResult.page_size;
+    const result = await session.prepare("SELECT 1").run();
+    const sizeAfter = result.meta?.size_after;
+    if (typeof sizeAfter === "number" && sizeAfter > 0) {
+      return sizeAfter;
     }
     return 0;
   } catch (error) {

@@ -2387,14 +2387,14 @@ async function getOptimalDO(cf: any, env: Env, url: URL): Promise<{ stub: Durabl
 
 // Database pruning helper functions
 
-// Get the current database size in bytes using SQLite pragmas
+// Get the current database size in bytes
 async function getDatabaseSizeBytes(session: D1DatabaseSession): Promise<number> {
   try {
-    const pageCountResult = await session.prepare('PRAGMA page_count').first() as { page_count: number } | null;
-    const pageSizeResult = await session.prepare('PRAGMA page_size').first() as { page_size: number } | null;
+    const result = await session.prepare('SELECT 1').run();
+    const sizeAfter = (result.meta as { size_after?: number } | undefined)?.size_after;
 
-    if (pageCountResult && pageSizeResult) {
-      return pageCountResult.page_count * pageSizeResult.page_size;
+    if (typeof sizeAfter === 'number' && sizeAfter > 0) {
+      return sizeAfter;
     }
     return 0;
   } catch (error) {
